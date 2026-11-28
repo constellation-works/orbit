@@ -22,6 +22,9 @@ currently denied implementer tool is either mutating or conservatively treated
 as mutating by grant classification: grants authorize reviewed proposals,
 never live mutations. See the shipped
 [operator runbook](../../../crates/orbit-core/assets/skills/orbit/references/task-fields-tools.md#operator-runbook-granting-tools).
+
+## 1. Motivation
+
 Bearing: tasks already carry `required_tools`
 ([`artifacts.rs`](../../../crates/orbit-types/src/task/artifacts.rs));
 `agent_implement` is a deny-list activity
@@ -33,7 +36,7 @@ field-level operator authorization already exists in
 (follower) implementers already refuse coordination requirements in
 [`serve/admission.rs`](../../../crates/orbit-core/src/application/distributed/serve/admission.rs).
 
-## Problem
+### The gap
 
 An operator wants a task whose implementing agent can call a tool the
 activity normally denies — the motivating example is `orbit.auto_task` action `update`,
@@ -58,7 +61,7 @@ So the mechanism needed is not a stronger `required_tools`. It is a grant
 whose *authority* is different from the requirement's, and whose effect is
 narrower than "the agent may now do this."
 
-## Goal
+### Intended outcome
 
 A task may carry operator-granted tools that the implementing activity —
 and only that activity — may use despite its deny list, while every other
@@ -67,7 +70,7 @@ placement, and the review gate for side effects) keeps applying exactly as
 it does today. An agent can request tools; only an operator can grant the
 denied ones.
 
-## Non-goals
+### Out of scope
 
 - **No capability grants.** A grant never confers `Operator` or `Runner`,
   satisfies an inner field-level gate, or makes an always-operator-only
@@ -81,7 +84,7 @@ denied ones.
   for granted mutations ([2_design.md §4](./2_design.md#4-side-effects-outside-the-diff--mutations-travel-as-artifacts-central-question)); mid-run operator operations remain
   operator work.
 
-## Acceptance (feature level)
+### Acceptance (feature level)
 
 - An agent-capability `orbit.task.add` / `orbit.task.update` carrying
   `granted_tools` is refused naming the missing operator authority; the
@@ -106,6 +109,26 @@ denied ones.
   attempt; the change takes effect only on a new attempt.
 
 The mechanisms are in [2_design.md](./2_design.md); decisions that qualify are kept in [4_decisions.md](./4_decisions.md).
+
+## 2. Core Concepts
+
+- **Granted tool.** A tool an operator lets one task's implementing activity call despite the activity's deny list; the task carries it in `granted_tools`, and an agent can request but never grant one.
+- **`required_tools`.** What a task asks for; it never overrides a deny list, and granting does not replace it.
+- **Frozen at dispatch.** Grants are operator-only, owner-host-only and fixed for a dispatched attempt; a change takes effect only on a new attempt.
+- **Placement pin.** A granted task is never claimed by a follower; the hold names the grant.
+- **Proposal artifact.** The route for a granted mutation: the agent attaches a proposal, and after review approval the change is applied once and a receipt artifact is written.
+
+## 3. At a Glance
+
+| Concern | File | Task |
+|---------|------|------|
+| Who can grant: operator only, frozen at dispatch | [2_design.md §1](./2_design.md#1-who-can-grant--operator-only-frozen-at-dispatch) | [ORB-18317] |
+| What a grant means: list membership, never capability | [2_design.md §2](./2_design.md#2-what-a-grant-means--list-membership-only-never-capability) | [ORB-18317] |
+| Placement on the owner host | [2_design.md §3](./2_design.md#3-placement--a-grant-pins-the-task-to-the-owner-host) | [ORB-18317] |
+| Mutations travel as artifacts | [2_design.md §4](./2_design.md#4-side-effects-outside-the-diff--mutations-travel-as-artifacts-central-question) | [ORB-18317] |
+| Relation to `required_tools` | [2_design.md §5](./2_design.md#5-relation-to-required_tools--keep-both) | [ORB-15162] |
+| Deny-list admission | [activity_tools.rs](../../../crates/orbit-core/src/adapter/engine_host/runtime_host/activity_tools.rs) | [ORB-15162] |
+| Standing rules | [4_decisions.md](./4_decisions.md) | — |
 
 ## Task References
 

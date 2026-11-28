@@ -19,6 +19,9 @@ tags: [claude-code-mod, plugin, dashboard, host-registry]
 Status: design approved by Daniel on 2026-11-26. Phases 1 to 4 have landed ([ORB-28913],
 [ORB-28914], [ORB-28915], [ORB-28916], [ORB-28917]); phase 5 remains, so the stage is
 `building`.
+
+## 1. Motivation
+
 Bearing: the Orbit plugin's hooks module ([`plugin/hooks/mod`](../../../plugin/hooks/mod/README.md),
 built by [ORB-13862]) draws a band, a status line, toasts and a Board / Ship pane in Claude
 Code, adds a task card to prompts and a trailer to commits. The
@@ -29,7 +32,7 @@ personal mod that links task ids "improves quality of life", and the existing dr
 to go "as I don't find them useful". He then asked for run ids as well
 (`jrun-20261126-0531-c3`).
 
-## Problem
+### The gap
 
 The mod is 1,741 lines with 685 lines of tests, nine hooks, four settings and three
 commands. What it costs and what it returns:
@@ -70,7 +73,7 @@ Codex loads the plugin's skills and MCP server only. It has no hooks module, and
 of this proposal found no documented Codex equivalent of Claude Code's `ui.render` for
 redrawing a transcript row. In Codex a link can exist only where the model writes one.
 
-## Goal
+### Intended outcome
 
 In Claude Code, a task id or a run id in the transcript is a link to its page on the
 dashboard, with no plugin setting and no background work. In Codex Desktop, a reply that
@@ -78,7 +81,7 @@ reports a task or a run links it, if a trial shows the link works there. Everyth
 the mod draws or injects is removed. The plugin's skills, MCP server and the session-start
 workspace check are unchanged.
 
-## Non-goals
+### Out of scope
 
 - **Task data in the session.** No hover title, status badge or count. Each needs the read
   this feature removes; the link opens the page that has them.
@@ -90,7 +93,7 @@ workspace check are unchanged.
 - **A link on every list row.** A list result carries no `url`.
 - **Rewriting what the model reads.** The link exists in the drawing only.
 
-## Acceptance (feature level)
+### Acceptance (feature level)
 
 - Given a reply that names `ORB-12` in a sentence and in a fenced command, Claude Code
   draws the first as a link to `<address>/t/ORB-12` and leaves the second as text.
@@ -116,6 +119,27 @@ workspace check are unchanged.
   slash command or setting.
 
 The mechanisms are in [2_design.md](./2_design.md); decisions that qualify are kept in [4_decisions.md](./4_decisions.md).
+
+## 2. Core Concepts
+
+- **Mod.** The Orbit plugin's Claude Code hooks module, which this feature cuts down to drawing task and run ids as links.
+- **Permalink.** A short dashboard address: `/t/<id>` for a task and `/r/<id>` for a run, with `?machine=…&workspace=…` naming another host's record.
+- **Host registry.** The record of each machine's `task_prefix`, which decides which host serves a task id; a prefix that is not registered is not linked.
+- **Link address.** The dashboard's public URL, read once at session start (`machine.web.public_url`) rather than from a plugin setting.
+- **Exact URL.** The `url` that task and run results carry, so a Codex Desktop reply can link a record without redrawing the transcript.
+
+## 3. At a Glance
+
+| Concern | File | Task |
+|---------|------|------|
+| The mod being replaced | [plugin/hooks/mod](../../../plugin/hooks/mod/README.md) | [ORB-13862] |
+| Host registry and task prefixes | [host-registry](../host-registry/1_overview.md) | [ORB-14448] |
+| What stays and what goes | [2_design.md](./2_design.md#what-stays-and-what-goes) | [ORB-28916] |
+| Public address setting | [2_design.md](./2_design.md#configuration) | [ORB-28914] |
+| Task and run permalinks | [2_design.md](./2_design.md#where-a-link-goes) | [ORB-28915] |
+| Codex Desktop links and exact URLs | [2_design.md](./2_design.md#codex-desktop) | [ORB-28913], [ORB-28917] |
+| Which words are ids | [2_design.md](./2_design.md#which-words-are-ids) | [ORB-28916] |
+| Standing rules | [4_decisions.md](./4_decisions.md) | — |
 
 ## Task References
 

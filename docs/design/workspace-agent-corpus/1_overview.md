@@ -24,13 +24,13 @@ qualify are kept in [4_decisions.md](./4_decisions.md).
 
 ## 1. Motivation
 
-### Problem
+### The gap
 
 Agent activities otherwise start without the workspace's reviewed issue mechanisms,
 decision precedent and standing guidelines. Raw task history alone cannot serve as
 trusted guidance or authorize a new decision.
 
-### Goal
+### Intended outcome
 
 Deliver reviewed, activity-specific corpus guidance at a pinned revision and preserve
 structured observations for later reviewed publication, with human curation of rules.
@@ -38,7 +38,7 @@ structured observations for later reviewed publication, with human curation of r
 Activity dispatch already pins repository guidance to a run's base revision, and task
 history supplies the durable append outbox. This feature joins those existing seams.
 
-### Non-goals
+### Out of scope
 
 - Reintroducing the retired project-learnings inference store.
 - Treating raw decision history or agent narrative as trusted rules or automatic appends.

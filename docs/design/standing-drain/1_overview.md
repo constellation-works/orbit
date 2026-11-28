@@ -17,6 +17,10 @@ related_features: [distributed-drain, routines, resident-orchestrator]
 
 # Standing Drain — Overview
 
+The standing drain is an opt-in keeper that submits a new owner drain whenever one has ended while admissible or pilotable work still exists and nobody has paused it. It adds no admission logic: a keeper-started drain behaves exactly like `orbit run auto` with the same flags.
+
+## 1. Motivation
+
 Bearing: owner-side work reaches the task pipeline by two routes. The owner drain is the
 `workspace_auto_pipeline` run that an operator starts with `orbit run auto --for <window>` from the
 CLI or the dashboard (at most 24 h, `MAX_DRAIN_WINDOW_SECONDS` in
@@ -42,7 +46,7 @@ decisions on my behalf." (chief's chat, 2026-11-19). Daniel has not reviewed thi
 and its status stays Draft. Enabling the keeper, its flags and its window remain his decisions. Phase 3
 is filed but not built this shift.
 
-## Problem
+### The gap
 
 These figures cover dk-server-2, ws_orbit (`orbit-5c61b3`), from 2026-11-13 06:00Z to 2026-11-20 06:00Z. They come from a read-only
 pass over `job_runs`, `job_run_states` and `v2_audit_events`; the per-drain table is in the
@@ -78,7 +82,7 @@ The 35.4 h gap is the expensive one. During the 11-18 deploy series, two drains 
 16:16Z, and nobody started a drain until 11-20 01:33Z. The queue grew from 1 to 21 tasks, and
 that one gap accounts for about 370 task-hours.
 
-## What exists today, and why it did not cover these restarts (b)
+### What exists today, and why it did not cover these restarts (b)
 
 | Mechanism | Exists? | Would cover | Why it was not in use |
 |---|---|---|---|
@@ -96,7 +100,7 @@ so turning the resident on does not restart one. The gap that remains is
 that **nothing re-submits a drain after it ends, and nothing records whether a stop meant "pause" or
 "restart soon"**.
 
-## Goal
+### Intended outcome
 
 When Daniel opts in, ws_orbit on the owner keeps a drain open whenever admissible or pilotable
 work exists and nobody has paused it. That includes after a window ends, a crash and an RB-15 deploy.
@@ -104,7 +108,7 @@ A deliberate pause still works, and it stays in force until someone lifts it. Un
 work and how (the admission ladder), the 24 h window cap, follower drains, and every default
 (the feature is off).
 
-## Non-goals
+### Out of scope
 
 - **Followers.** Pull drains on dk-server-1 and the Mac keep their operator-started windows. The
   owner approves and lands their work.
@@ -114,7 +118,7 @@ work and how (the admission ladder), the 24 h window cap, follower drains, and e
   enables nothing and creates no routine.
 - **Waking a powered-off host.**
 
-## Acceptance (feature level)
+### Acceptance (feature level)
 
 - With the keeper enabled and the intent `on`, after a drain's window ends or it crashes, and
   admissible or pilotable work exists, a new drain is submitted within one clock tick plus
@@ -132,6 +136,26 @@ work and how (the admission ladder), the 24 h window cap, follower drains, and e
   and a hand-started drain with the same flags make the same admission decisions.
 
 The mechanisms are in [2_design.md](./2_design.md); decisions that qualify are kept in [4_decisions.md](./4_decisions.md).
+
+## 2. Core Concepts
+
+- **Owner drain.** The `workspace_auto_pipeline` run an operator starts with `orbit run auto --for <window>`, at most 24 h; the keeper restarts one after it ends.
+- **Keeper.** The check on the existing clock tick that submits a drain through the same path as `orbit run auto` when work exists, the intent is `on` and no deploy hold or open crash breaker applies. It is off by default.
+- **Drain intent.** The durable per-workspace state `off`, `on` or `paused { by, at, reason }`; a stop pauses it and a hand start sets it back to `on`, so a window ending or a crash never pauses.
+- **Deploy hold.** The hold a deploy sets before its admission stop and the updater clears when the install finishes, so the next tick starts a drain on the new binary; a hold past the deploy budget expires and raises an attention item.
+- **Admission ladder.** The unchanged pilot, approval, concurrency, budget and crew-health checks; the keeper never admits a task outside it.
+
+## 3. At a Glance
+
+| Concern | File | Task |
+|---------|------|------|
+| Measured idle hours and why each restart was needed | [1_overview.md §1](#the-gap) | [ORB-25951] |
+| Drain intent | [2_design.md](./2_design.md#drain-intent) | [ORB-25951] |
+| Re-submission by the keeper | [2_design.md](./2_design.md#re-submission) | [ORB-25951] |
+| Pause, restart and deploy hold | [2_design.md](./2_design.md#pause-restart-and-deploy-hold) | [ORB-19698] |
+| Live pool re-read of a running drain | [2_design.md](./2_design.md#re-submission) | [ORB-25866], [ORB-25893] |
+| Existing dispatch routes | [1_overview.md §1](#what-exists-today-and-why-it-did-not-cover-these-restarts-b) | [ORB-26010] |
+| Standing rules | [4_decisions.md](./4_decisions.md) | — |
 
 ## Task References
 

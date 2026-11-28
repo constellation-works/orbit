@@ -45,6 +45,8 @@ routines still name only `job:<name>`, and a job may now contain a step that nam
 granted script. Phase 2 recorded the superseding decision,
 [Granted script steps run under the script profile](../activity-job/4_decisions.md#granted-script-steps-run-under-the-script-profile).
 
+## 1. Motivation
+
 Bearing: Orbit already has these pieces, read from source at `a5b5408ea` (the `local_shell`
 bullet was rechecked at `d10fae79b`).
 
@@ -125,7 +127,7 @@ bullet was rechecked at `d10fae79b`).
   through `allowlisted_child_env` (`orbit_common::security::child_env`), and plugin
   `env_pass` refuses `ORBIT_*` names.
 
-## Problem
+### The gap
 
 Daniel wants routines to run scripts, and wants a job to mix script steps with agent
 and deterministic steps so that one job can be a whole pipeline (2026-10-27). Example:
@@ -176,7 +178,7 @@ Three things exist now that did not when the shell surface was removed:
   showed how: host-local, digest-witnessed, operator-only to write, re-consent on a
   changed request.
 
-## Goal
+### Intended outcome
 
 A job step can run a script that the workspace names, as a program with a list of
 arguments and no shell, inside the executor sandbox. It runs only while the operator's
@@ -189,7 +191,7 @@ Routines, condition triggers and plugins keep their contracts. Routine targets s
 `job:<name>`. No YAML field, workspace setting or agent can grant a script, widen a
 grant or keep a grant valid across a content change.
 
-## Non-goals
+### Out of scope
 
 - **Inline shell text in script steps.** No `command:`, no `sh -c`, no expression
   evaluated as a command in the manifest or the `script:` target (§1). `local_shell` keeps
@@ -204,7 +206,7 @@ grant or keep a grant valid across a content change.
 - **Routine `script:` targets in v1.** Wrap the script in a job (§1, §6).
 - **Cross-host grants.** A grant is consent on one host (§7).
 
-## Acceptance (feature level)
+### Acceptance (feature level)
 
 - A job step `target: script:<name>` whose manifest is missing, whose `entry` escapes the
   workspace, or which uses inline-code interpreter flags fails to load, and the error
@@ -240,6 +242,30 @@ grant or keep a grant valid across a content change.
   today, and a nonzero exit still fails the step unless `allow_nonzero_exit` is set.
 
 The mechanisms, walkthroughs and open questions are in [2_design.md](./2_design.md); decisions that qualify are kept in [4_decisions.md](./4_decisions.md).
+
+## 2. Core Concepts
+
+- **Script step.** A job step whose `target: script:<name>` runs a workspace-named script as a program with an argument list and no shell, inside the script sandbox.
+- **Script manifest.** The workspace file naming a script's entry, declared input and output files, and the network and environment it asks for.
+- **Script grant.** The operator's host-local, digest-witnessed consent for one script name; it holds only while it matches the script's current content digest, and no YAML field or agent can create or widen one.
+- **Script sandbox.** The `linux-bwrap-script-v1` and `macos-sandbox-script-v1` profiles: nothing readable but what is named, one writable directory, a capped log and a kill bound, with no network unless the grant says so.
+- **I/O contract.** JSON on stdin, JSON on stdout read by later steps as `steps.<id>.output`, and declared files exposed as `steps.<id>.files` with their digests.
+- **`local_shell`.** The existing deterministic action that runs a direct child; it stays as it is and does not use the grant model.
+
+## 3. At a Glance
+
+| Concern | File | Task |
+|---------|------|------|
+| Why the removal of the shell surface is reversed | [2_design.md](./2_design.md#why-orb-00374-is-reversed) | [ORB-00374] |
+| Relation to `local_shell` | [2_design.md](./2_design.md#relation-to-local_shell) | [ORB-11294] |
+| Reference form and manifest loading | [2_design.md §1](./2_design.md#1-reference-form) | [ORB-19983], [ORB-23140] |
+| Authority outside the workspace YAML | [2_design.md §2](./2_design.md#2-authority-outside-the-workspace-yaml) | [ORB-19983], [ORB-21299] |
+| Sandbox and capabilities | [2_design.md §3](./2_design.md#3-sandbox-and-capabilities) | [ORB-19985], [ORB-21298], [ORB-21301] |
+| I/O contract and files | [2_design.md §4](./2_design.md#4-io-contract) | [ORB-20866], [ORB-21297] |
+| Audit and composition | [2_design.md §5–6](./2_design.md#5-audit) | [ORB-19985] |
+| Placement and compatibility | [2_design.md §7–8](./2_design.md#7-placement) | [ORB-10021] |
+| orbit-office requirements | [2_design.md §9](./2_design.md#9-orbit-office-requirements) | [ORB-19206] |
+| Standing rules | [4_decisions.md](./4_decisions.md) | — |
 
 ## Task References
 

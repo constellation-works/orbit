@@ -20,6 +20,8 @@ Status: accepted and shipped. Orbit supports persistent seeding policies and TOM
 workspace presets. This page records that behavior; ideas that were superseded or remain
 unbuilt are called out separately in [2_design.md](./2_design.md#future-ideas-not-part-of-the-shipped-scope).
 
+## 1. Motivation
+
 Bearing: The [plugin standard](../plugins/1_overview.md) lets a package add tools, CLI groups,
 panels, routines, auto-tasks, activities, jobs and skills from one manifest. Plugin-seeded
 definitions land disabled and become active only through an operator act. Orbit also ships
@@ -33,7 +35,7 @@ was retired in [ORB-22804]. Seeded definitions carry managed
 provenance and digest-based retirement ([ORB-10800]). A distribution can narrow the Orbit defaults its workspace carries and choose
 which of its already-seeded plugin definitions to enable with a preset.
 
-## Problem
+### The gap
 
 An app built on Orbit is not itself a plugin. It is a product for an audience, with its own
 app or UI, the components it installs, a workspace setup and an installation story. Calling
@@ -45,7 +47,7 @@ persistent policy, an operator who removes defaults can see them return on re-in
 upgrade. A distribution also needs a supported way to provide workspace settings and enable
 some of its own plugin definitions after the operator has enabled those plugins.
 
-## Goal
+### Intended outcome
 
 Name the role: an app built on Orbit is a **distribution**. Give each workspace a durable
 way to choose which Orbit-shipped default routines and auto-tasks it carries, and let a
@@ -54,7 +56,7 @@ seeded. Orbit remains generic: a preset is data the distribution supplies, and O
 not branch on a distribution's name. Without a seeding policy, a workspace keeps the
 default behavior of seeding every shipped default.
 
-## Acceptance (feature level)
+### Acceptance (feature level)
 
 - With both seeding keys set to `"none"`, initialization, re-initialization, sync and
   upgrade seeding omit Orbit-shipped defaults.
@@ -68,6 +70,26 @@ default behavior of seeding every shipped default.
   defaults added by a later release.
 
 The mechanisms are in [2_design.md](./2_design.md); decisions that qualify are kept in [4_decisions.md](./4_decisions.md).
+
+## 2. Core Concepts
+
+- **Distribution.** A product built on Orbit for an audience, with its own app or UI, components, workspace setup and installation story; distinct from the plugins that add capabilities to Orbit.
+- **Component.** A plugin: the unit that adds tools and definitions to the engine.
+- **Seeding policy.** The `seeding.routines` and `seeding.auto_tasks` workspace keys, each `"all"` (the default), `"none"` or a list of shipped names, saying which Orbit defaults a workspace carries.
+- **Preset.** A TOML file a distribution supplies to configure a workspace; Orbit does not branch on the distribution's name.
+- **Managed provenance.** The marker and digest on a seeded definition that lets Orbit retire it when a policy narrows, preserving an edited copy under `.orbit/.retired-managed/`.
+
+## 3. At a Glance
+
+| Concern | File | Task |
+|---------|------|------|
+| Vocabulary and ownership split | [2_design.md](./2_design.md#vocabulary) | — |
+| Seeding policy | [2_design.md](./2_design.md#seeding-policy) | [ORB-10800] |
+| Workspace presets | [2_design.md](./2_design.md#workspace-presets) | — |
+| How a distribution installs | [2_design.md](./2_design.md#how-a-distribution-installs) | — |
+| Default routines and auto-tasks seeded enabled or disabled | [2_design.md](./2_design.md#seeding-policy) | [ORB-17816], [ORB-22804], [ORB-21596], [ORB-24934] |
+| Ideas not part of the shipped scope | [2_design.md](./2_design.md#future-ideas-not-part-of-the-shipped-scope) | — |
+| Standing rules | [4_decisions.md](./4_decisions.md) | — |
 
 ## Task References
 

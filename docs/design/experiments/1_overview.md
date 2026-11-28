@@ -19,6 +19,8 @@ tags: [experiments, admission, tag-instructions, crew-pools, analytics, decision
 Status: building. Phase 1 (records and shadow assignment) and the instruction and tool surfaces of phase 2 are implemented: a `live` experiment applies them on owner and claimed runs, and every dispatch it changes records an `activity.experiment_overlay_applied` audit row with the digest of what it received. Removal is refused for the tools the agent handoff contract needs (`orbit.task.show`, `orbit.task.update`, `orbit.task.artifact` action `put`); a `false` instruction entry leaves Orbit's shipped default tag instructions out of that role. The per-arm readout (`orbit experiment readout`, `orbit.experiment.readout` and `GET /api/diagnostics/experiments/{id}/readout`) computes outcomes, intervals, the sample-ratio and drift checks and the verdict on read. The Analytics › Experiments dashboard page lists each experiment's per-arm progress toward `min_sample` (`GET /api/diagnostics/experiments`) and opens one (`GET /api/diagnostics/experiments/{id}`, plus the readout with its cumulative primary-metric series) to arm cards, a forest plot, the per-complexity table, crew mix, health warnings and the event timeline. An operator concludes from that page, the CLI or `orbit.experiment.conclude`: the conclusion event stores the readout JSON at that moment, assignment stops, and a chosen arm files one proposed promotion task. Concluding changes no configuration or repository file. An operator also defines, edits and starts experiments from that page: **New experiment** opens a form over the whole definition (population, arms with their crew, instruction, tool, skill and config overlays, primary metric, guardrails, sample rules, mode and reason), a draft card offers Edit and Start, and **Save and start** saves then starts after a confirmation naming the arms, weights and population. The routes `POST /api/diagnostics/experiments`, `PATCH /api/diagnostics/experiments/{id}`, `POST /api/diagnostics/experiments/{id}/start`, `POST /api/diagnostics/experiments/{id}/pause` and `POST /api/diagnostics/experiments/{id}/resume` are operator-only and call the same `create_experiment`, `update_experiment` and `change_experiment` as `orbit.experiment.create`, `update`, `start`, `pause` and `resume`, so core's validation and refusals apply unchanged and each write records its event with actor `dashboard` and the given reason. A running experiment's page offers **Pause** and a paused one **Resume**, each behind a confirmation with an optional reason; no other state offers either, and a session without operator authority sees neither. Reweight, clone and abandon stay on the CLI and tools.
 Skills, crew pools and allowlisted config values are also live. Skill replacement currently supports Claude on Unix through an invocation-local discovery root; other providers refuse the overlay. Bundles are pinned to the run base, carried in claimed captures, and recorded with per-bundle digests (see [configuration](../../config/extensions.md#experiments--experiments-over-agent-treatments)).
 
+## 1. Motivation
+
 Bearing: Orbit already has most of the parts an experiment needs, scattered across
 mechanisms that were each built for one purpose. **Tag instructions**
 (`[workflow.tag_instructions.<tag>]`,
@@ -38,7 +40,7 @@ ladder (`crates/orbit-web/src/api/diagnostics/trend.rs`) behind the tokens-per-t
 escaped regressions per run. The former explorer cohort comparison ([ORB-16814]) was observational; it
 was removed with explorer delegation.
 
-## Problem
+### The gap
 
 Orbit changes how agents work through many levers: activity prompts, tag instructions,
 skills, the tools an activity may call, which crew runs a task, and workflow settings such as
@@ -71,7 +73,7 @@ weakens the result:
 4. **Readout.** Every trial needs per-arm sample counts, intervals, a stratified comparison and
    guardrails. Each readout builds them by hand, so they differ from trial to trial.
 
-## Goal
+### Intended outcome
 
 An operator defines an **experiment**: a population of tasks, two or more **arms** each
 carrying an **overlay** (instructions, skills, tools, crew, allowlisted config), a primary
@@ -86,7 +88,7 @@ task received.
 With no running experiment, Orbit behaves exactly as today. Tag instructions, crew pools and
 config keep their meaning; an experiment layers on top of them for the tasks it assigns.
 
-### Metric scope
+#### Metric scope
 
 Whole-task primary metrics are `total_tokens`, `cost_usd`, `lead_time`,
 `first_pass_acceptance`, `review_repairs`, `step_recoveries`,
@@ -121,7 +123,7 @@ work between steps without improving the task, so these cannot be primary;
 they remain readable and usable as guardrails. A legacy step-local primary
 keeps its data but its verdict is withheld.
 
-## Non-goals
+### Out of scope
 
 - **Adaptive allocation (bandits).** Fixed weights per segment keep the comparison simple to
   read. Shifting traffic to the leader trades inference for regret; revisit once fixed
@@ -135,7 +137,7 @@ keeps its data but its verdict is withheld.
 - **Automatic promotion.** A verdict suggests; the operator decides, and promotion is an
   ordinary reviewed change.
 
-## Acceptance (feature level)
+### Acceptance (feature level)
 
 - Given a running experiment and an eligible task, the task's first admission writes exactly
   one assignment row, and every later run of that task on any host applies the same arm and
@@ -156,6 +158,27 @@ keeps its data but its verdict is withheld.
 - With `experiments.enabled = false`, admission and runs are unchanged from today.
 
 The mechanisms are in [2_design.md](./2_design.md); decisions that qualify are kept in [4_decisions.md](./4_decisions.md).
+
+## 2. Core Concepts
+
+- **Experiment.** A defined population of tasks, two or more arms, a primary metric, guardrails and a minimum sample; durable rows in the workspace store.
+- **Arm and overlay.** An arm is one treatment; its overlay is the instructions, skills, tools, crew and allowlisted config it applies to the runs it receives.
+- **Assignment.** The reproducible random draw that fixes a task's arm when the task is first admitted; every later run of the task, on any host, keeps it. `shadow` mode records the draw without applying the overlay and `live` applies it.
+- **Readout.** The per-arm outcomes, intervals, sample-ratio and drift checks and verdict, computed on read from records Orbit already keeps.
+- **Conclusion.** The operator's decision, stored with the readout at that moment; assignment stops and a chosen arm files one proposed promotion task. It changes no configuration or repository file.
+
+## 3. At a Glance
+
+| Concern | File | Task |
+|---------|------|------|
+| Experiment, arm and overlay nouns and storage | [2_design.md](./2_design.md#nouns) | — |
+| Instruction, skill, tool, crew and config overlays | [2_design.md](./2_design.md#overlay-surfaces) | [ORB-22804] |
+| Assignment by reproducible draw | [2_design.md](./2_design.md#assignment) | — |
+| Outcomes, metrics and analysis | [2_design.md](./2_design.md#outcomes-and-analysis) | [ORB-20646], [ORB-18364], [ORB-18383] |
+| Conclusion and promotion | [2_design.md](./2_design.md#decision-and-promotion) | — |
+| Tag instructions and crew pool draws the experiment layers on | [tag_instructions.rs](../../../crates/orbit-core/src/application/tag_instructions.rs) | [ORB-18032] |
+| Dashboard and CLI surfaces | [2_design.md](./2_design.md#surfaces) | — |
+| Standing rules | [4_decisions.md](./4_decisions.md) | — |
 
 ## Task References
 

@@ -16,9 +16,14 @@ tags: [doc-layout, docs, principles, index]
 
 # Doc Layout — Overview
 
+Doc layout puts every page under `docs/` in a folder that answers one question, gives each stance Orbit holds across features one principle page, and adds one page that explains how the repository is worked.
+
 Status: the operator approved this design ([ORB-29306]) on 2026-11-27, with the three recommendations under
 [Settled questions](./2_design.md#settled-questions). Phase 1 is built; the later phases in
 [2_design.md](./2_design.md#phasing) are filed as tasks.
+
+## 1. Motivation
+
 Bearing: the feature board is leaving the generated index ([ORB-29261]), `docs/dev/` is being
 folded into `docs/agents/records/` and `docs/development/examples/` ([ORB-29290]), and the two
 large references are being split into `docs/development/` ([ORB-29291]) and `docs/config/`
@@ -26,7 +31,7 @@ large references are being split into `docs/development/` ([ORB-29291]) and `doc
 vendored standards already carry their own [index](../../standards/README.md). Sizes and counts
 below were measured at agent-main `7c6fa22806`.
 
-## Problem
+### The gap
 
 Three pages sit at the root of `docs/` because no folder fits them:
 
@@ -58,7 +63,7 @@ who wants to know how the repository is worked (why standards are vendored, wher
 goes, what the companion tools are) finds the pieces in `AGENTS.md`, the standards index and the
 design conventions, with nothing that connects them.
 
-## Goal
+### Intended outcome
 
 Every page under `docs/` sits in a folder that answers one question, and the root holds only
 the generated index and the two maps. Each stance Orbit holds across features has one page that
@@ -66,7 +71,7 @@ states the rule, the reason and the cost, and every other statement of it become
 page explains how the repository is worked and links to the document that owns each part. No
 existing page is reworded when it moves, and the four chained tasks keep their scope.
 
-## Non-goals
+### Out of scope
 
 - **Rewording the three moved pages.** They move as they are. The only edit is the positioning
   page's duplicated section, in the phase that adds the pages it would then repeat.
@@ -77,7 +82,7 @@ existing page is reworded when it moves, and the four chained tasks keep their s
 - **A project-docs standard for this repository.** Whether Orbit adopts the shared project-docs
   standard is a separate decision. This layout does not depend on it.
 
-## Acceptance (feature level)
+### Acceptance (feature level)
 
 - Given the finished layout, `ls docs/*.md` prints `CONFIG.md`, `DEVELOPMENT.md` and `INDEX.md`,
   and `scripts/generate-doc-indexes.sh --check` fails when any other Markdown file is added there.
@@ -92,6 +97,27 @@ existing page is reworded when it moves, and the four chained tasks keep their s
   optimistic-merging page only.
 
 The mechanisms are in [2_design.md](./2_design.md); decisions that qualify are kept in [4_decisions.md](./4_decisions.md).
+
+## 2. Core Concepts
+
+- **Root pages.** The pages that sit at the root of `docs/` because no folder fits them; the finished layout keeps only the generated index and the two maps there.
+- **Principle page.** A page that states one cross-feature stance in five parts, with its rule, reason and cost, and names at least two feature folders it reaches; every other statement of the stance links to it.
+- **Operating-model page.** The one page that explains how the repository is worked, linking each section to the document that owns its subject.
+- **Chained tasks.** The four tasks that move the feature board, `docs/dev/` and the two large references; this feature keeps their scope and order.
+
+## 3. At a Glance
+
+| Concern | File | Task |
+|---------|------|------|
+| Target layout and the three moved pages | [2_design.md](./2_design.md#layout) | [ORB-29306] |
+| What counts as a principle and the page shape | [2_design.md](./2_design.md#what-counts-as-a-principle) | [ORB-29306] |
+| Principle pages to add | [2_design.md](./2_design.md#pages-to-add) | [ORB-29306] |
+| How the repository is worked | [2_design.md](./2_design.md#how-the-repository-is-worked) | [ORB-29306] |
+| Feature board out of the generated index | [2_design.md](./2_design.md#phasing) | [ORB-29261] |
+| `docs/dev/` records and examples | [2_design.md](./2_design.md#phasing) | [ORB-29290] |
+| `docs/DEVELOPMENT.md` and `docs/CONFIG.md` splits | [2_design.md](./2_design.md#phasing) | [ORB-29291], [ORB-29292] |
+| Settled questions | [2_design.md](./2_design.md#settled-questions) | [ORB-29306] |
+| Standing rules | [4_decisions.md](./4_decisions.md) | — |
 
 ## Task References
 

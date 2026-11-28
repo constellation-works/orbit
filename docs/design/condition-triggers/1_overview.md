@@ -27,6 +27,8 @@ expressions/scripts", for predicates only. The other non-goals stay: a generic e
 bus, scripts, arbitrary transition subscriptions, cross-host failover and a second
 scheduler.
 
+## 1. Motivation
+
 Bearing: the pre-condition baseline below was read at `d0cfa7a04`. The shipped
 phase-1 and phase-2 changes are recorded in [Phasing](./2_design.md#phasing); baseline claims
 about missing predicates or edge state describe the motivation, not current gaps.
@@ -84,7 +86,7 @@ about missing predicates or edge state describe the motivation, not current gaps
   can answer a decision request (`orbit.decision.submit`,
   [human decision channel](../human-decision-channel/2_design.md#3-delegated-human-authority)).
 
-## Problem
+### The gap
 
 Daniel wants automation that waits for a situation instead of a clock tick or a
 hard-coded kind. Four situations he named (2026-10-27):
@@ -125,7 +127,7 @@ The current code shapes the fix in four ways:
   and the constellation rules forbid an agent from tagging or publishing unasked.
   npm publish needs Daniel's OTP.
 
-## Goal
+### Intended outcome
 
 A routine or auto-task can fire on a typed, side-effect-free predicate over a
 task, the workspace board, the owner host or a file under a declared root. It
@@ -137,7 +139,7 @@ The typed kinds, cron, intervals, delivery coverage and every existing definitio
 stay unchanged. A condition can't move a task or run a high-authority action
 unless an operator grants it explicitly.
 
-## Non-goals
+### Out of scope
 
 - **Scripts, user functions, or regular expressions in v1.** Predicates only (§5).
 - **Task transitions as actions.** Pipeline-only (§6). Approving, re-backlogging or
@@ -157,7 +159,7 @@ unless an operator grants it explicitly.
 - **A workflow engine.** Triggers start work, and jobs order it (§11). There are no
   trigger-to-trigger links, nested trigger trees or time-correlation rules.
 
-## Acceptance (feature level)
+### Acceptance (feature level)
 
 - A routine or auto-task with `condition` whose expression names an unknown field,
   is not `bool`, uses a computed cross-read index or lacks a task prefilter fails to
@@ -214,6 +216,30 @@ unless an operator grants it explicitly.
   depth 5 is refused and recorded, and explain shows each fire's upstream chain.
 
 The mechanisms are in [2_design.md](./2_design.md); decisions that qualify are kept in [4_decisions.md](./4_decisions.md).
+
+## 2. Core Concepts
+
+- **Condition.** A typed, side-effect-free CEL predicate on a routine or auto-task that fires it when the predicate becomes true for a subject.
+- **Subject.** The thing a condition watches: a task, the workspace board, the owner host or a file under a declared root.
+- **Edge.** The moment a predicate turns true for a subject; each edge fires at most once, kept in the existing fenced checkpoint across crashes, restarts and concurrent evaluators.
+- **`when:` guard.** A condition added to a `cron`, `every_minutes`, `deliveries_landed` or `state` trigger that suppresses the fire while false or unknown.
+- **Rearm and hold.** `rearm` says when a fired subject may fire again; `for_minutes` requires the predicate to stay true across a continuity window.
+- **Explain.** `orbit automation explain`, which shows current matches, near misses and a clause tree with operand values without writing anything.
+- **Fire.** One admitted action carrying its fire ID, subject key and observation revision, with an origin chain whose depth is bounded.
+- **Per-fire approval.** The human answer an operator-authority target requires before each run, bound to the definition, target and grant.
+
+## 3. At a Glance
+
+| Concern | File | Task |
+|---------|------|------|
+| Why the recorded non-goal is reversed for predicates | [2_design.md](./2_design.md#why-the-non-goal-is-reversed) | [ORB-19288] |
+| The `condition` kind and its subjects | [2_design.md §1–2](./2_design.md#1-position-a-condition-kind-beside-the-typed-kinds) | [ORB-19288] |
+| Firing semantics and evaluation | [2_design.md §3–4](./2_design.md#3-firing-semantics) | [ORB-20156] |
+| CEL schema, load-time checking and explain | [2_design.md §5, §9](./2_design.md#5-language-cel) | [ORB-19990] |
+| Actions and authority for high-authority targets | [2_design.md §6–7](./2_design.md#6-actions) | [ORB-20156] |
+| Chains, `when:` guards and `clear-stall` | [2_design.md §11](./2_design.md#11-combining-and-chaining) | [ORB-20156] |
+| Retired state trigger sources | [2_design.md §10](./2_design.md#10-compatibility) | [ORB-22844] |
+| Standing rules | [4_decisions.md](./4_decisions.md) | — |
 
 ## Task References
 

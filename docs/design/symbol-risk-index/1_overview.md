@@ -17,10 +17,14 @@ related_features: [backlog-forecast, routines, plugins]
 
 # Symbol Risk Index — Overview
 
+The symbol risk index is a proposed standing per-symbol risk record, kept current by a routine together with how many tests cover each symbol, so admission scoring and test planning share one source instead of fitting risk per task at read time.
+
 Status: proposed. This doc and [2_design.md](./2_design.md) are the design deliverable of
 [ORB-19358]; no code lands with them. This overview states the problem, the evidence, the
 non-goals and the acceptance criteria; [2_design.md](./2_design.md) specifies the record, the indexer
 boundary, storage, the routine, staleness and renames.
+
+## 1. Motivation
 
 Bearing: per-task riskiness is `crates/orbit-core/src/app/codebase/risk.rs`,
 initially shipped as estimator version 1 by [ORB-18690] and consumed by the backlog forecast
@@ -39,7 +43,7 @@ plugin already indexes symbols with source extents in ten languages and maps cha
 symbols and candidate tests. Routines run catalog jobs from the sweep clock
 ([routines design](../routines/2_design.md)).
 
-## Problem
+### The gap
 
 Daniel (2026-10-27): rate each symbol upfront, as a routine, and track how many tests cover
 it, so tests can be focused on high-risk symbols. Risk exists only per task, fitted from
@@ -78,7 +82,7 @@ footprint, and today that is a count of paths. A count treats a 20-line helper f
 3,000-line module alike. A per-symbol line count, kept current by a routine, lets admission
 measure a declared footprint in lines.
 
-## Goal
+### Intended outcome
 
 A standing per-symbol index, rebuilt per base commit by a routine, that holds each symbol's
 body size, its test coverage and its regression-site history. Two consumers read it: admission
@@ -88,7 +92,7 @@ ships only if a stated backtest beats today's model; otherwise it is dropped and
 behavior stays. Language parsing stays outside Orbit core. Task riskiness's API, states and
 the forecast's consumption of `probability` are unchanged.
 
-## Non-goals
+### Out of scope
 
 - **Running coverage.** The index reads the Coverage job's report; it never runs an
   instrumented suite itself.
@@ -101,7 +105,7 @@ the forecast's consumption of `probability` are unchanged.
 - **Gating merges or admission.** Riskiness stays informational and forecast input; the index
   adds no admission or review policy.
 
-## Acceptance (feature level)
+### Acceptance (feature level)
 
 - Given an enabled routine and an indexer plugin, each time the integration head or the
   coverage report changes, Orbit records one generation with a body-line count for every
@@ -119,6 +123,27 @@ the forecast's consumption of `probability` are unchanged.
 - No risk score anywhere reads fan-in, branch counts, domain count or crew proneness.
 
 The mechanisms, ship gates and open questions are in [2_design.md](./2_design.md); decisions that qualify are kept in [4_decisions.md](./4_decisions.md).
+
+## 2. Core Concepts
+
+- **Symbol record.** The standing per-symbol rating the index holds, with its test coverage, kept by a routine and shared by admission scoring and test planning.
+- **Indexer boundary.** The line between core, which stores and reads the record, and a plugin such as orbit-graph, which resolves symbols with source extents.
+- **Task riskiness.** The existing per-task estimate fitted at read time from historical task sizes and regression outcomes; the index does not replace it.
+- **Regression sites.** The `symbol:`/`file:` selectors a `regression_from` link carries for the code that was wrong, the site history the rating learns from.
+- **Ship gates.** The backtests a phase must pass before its reader is turned on.
+
+## 3. At a Glance
+
+| Concern | File | Task |
+|---------|------|------|
+| What the index holds and its outputs | [2_design.md](./2_design.md#what-the-index-holds) | [ORB-19358] |
+| Per-task riskiness it extends | [risk.rs](../../../crates/orbit-core/src/app/codebase/risk.rs) | [ORB-18690], [ORB-19361], [ORB-19376] |
+| Regression site history | [2_design.md §6](./2_design.md#6-site-history) | [ORB-19276] |
+| Admission reader: the `declared_lines` basis | [2_design.md §7.1](./2_design.md#71-admission-the-declared_lines-basis) | [ORB-18691] |
+| Diff size evidence | [2_design.md §1](./2_design.md#1-the-per-symbol-record) | [ORB-18383] |
+| Indexer boundary, storage and the routine | [2_design.md §2–4](./2_design.md#2-the-indexer-boundary) | [ORB-19358] |
+| Backtests and ship gates | [2_design.md §8](./2_design.md#8-backtests-and-ship-gates) | [ORB-19358] |
+| Standing rules | [4_decisions.md](./4_decisions.md) | — |
 
 ## Task References
 

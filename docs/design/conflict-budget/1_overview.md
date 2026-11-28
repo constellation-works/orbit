@@ -16,6 +16,10 @@ tags: [conflict-budget, footprints, admission, locks, conflict-recovery]
 
 # Conflict Budget — Overview
 
+The conflict budget lets an operator set how much expected conflict-repair work Orbit may take on to run overlapping tasks together, instead of treating every shared locked path as exclusive. Admission prices each overlap per path from recorded conflict history and admits the candidate when the cost fits the budget; at the default of zero it behaves as it does today.
+
+## 1. Motivation
+
 Bearing: admission holds a context lock for every declared `context_files` selector and defers a
 candidate on any overlap with a held claim, reservation or wave member
 (`footprints_block`, defined in [`lock_mode.rs`](../../../crates/orbit-common/src/fs/lock_mode.rs), is consulted by [`coordination/admission/footprint.rs`](../../../crates/orbit-store/src/boundary/coordination/admission/footprint.rs),
@@ -42,7 +46,7 @@ settles. A conflict that reaches landing is repaired by `pr_conflict_recovery`, 
 `workflow.purpose_crews.failure_recovery` ([ORB-15663]). This feature makes the lock a priced decision instead of a
 static allow-list.
 
-## Problem
+### The gap
 
 On 2026-10-24 eleven `auto-task-catalog-2026-10-24` tasks entered ws_orbit's backlog. Each adds
 one shipped auto-task: a YAML file of its own, one line in the `DEFAULT_AUTO_TASK_FILES` list in
@@ -76,7 +80,7 @@ Orbit has no way to express that trade today:
   The commonest and cheapest outcome — a recovered conflict — is the one the owner cannot see,
   and nothing records what a recovery cost.
 
-## Goal
+### Intended outcome
 
 The operator sets how much expected conflict-repair work Orbit may take on to run overlapping
 tasks together, and can set it higher during working hours than overnight. Admission admits an
@@ -88,7 +92,7 @@ beside a non-matching one. Landing,
 conflict recovery and review are unchanged; the budget changes only which work runs at the same
 time.
 
-## Non-goals
+### Out of scope
 
 - **Changing landing or conflict recovery.** The budget only decides what runs at the same time;
   recovery keeps its crews, rounds and generated-path regeneration.
@@ -99,7 +103,7 @@ time.
 - **Auto-tuning the budget.** The operator sets it. Tying it to usage pressure or queue depth is a
   later question.
 
-## Acceptance (feature level)
+### Acceptance (feature level)
 
 - With `workflow.conflict_budget` unset or `0`, every admission decision is identical to today's,
   for local waves, owner pull admission and lock reservations.
@@ -115,6 +119,26 @@ time.
   the budget it used.
 
 The mechanisms are in [2_design.md](./2_design.md); decisions that qualify are kept in [4_decisions.md](./4_decisions.md).
+
+## 2. Core Concepts
+
+- **Conflict budget.** The expected conflict-repair work, set by the operator (`workflow.conflict_budget`), that admission may take on to run overlapping tasks together. At `0` admission is exactly today's.
+- **Conflict record.** The owner-held record of a landing conflict: the paths, the resolution and the recovery cost, written after recovery on any host.
+- **Path score.** The per-path expected repair cost, estimated from recorded conflict history and an optional durable weights artifact.
+- **Budget window.** A configured time window with its own budget, so the operator can allow more while at the desk and keep the conservative default overnight.
+- **Exclusive paths.** Paths matching `exclusive_context_paths` are never shared, and no path has more than `conflict_budget_max_holders` holders.
+
+## 3. At a Glance
+
+| Concern | File | Task |
+|---------|------|------|
+| Existing lock relaxations: `lock_modes`, `generated_paths`, `unlocked_context_paths` | [workflow config](../../config/workflow.md) | [ORB-16784], [ORB-18157] |
+| Footprint-less editing tasks as whole-tree locks | [lock_mode.rs](../../../crates/orbit-common/src/fs/lock_mode.rs) | [ORB-15191] |
+| Recording every landing conflict on the owner | [2_design.md](./2_design.md#1-record-every-landing-conflict-on-the-owner) | — |
+| Per-path scoring and admission within the budget | [2_design.md](./2_design.md#2-score-each-path) | — |
+| Scheduling the budget by window | [2_design.md](./2_design.md#4-schedule-the-budget) | — |
+| Conflict recovery crew | [workflow config](../../config/workflow.md) | [ORB-15663] |
+| Standing rules | [4_decisions.md](./4_decisions.md) | — |
 
 ## Task References
 

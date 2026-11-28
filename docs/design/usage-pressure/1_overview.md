@@ -16,9 +16,14 @@ tags: [usage-pressure, crews, crew-pools, provider-limits, admission]
 
 # Usage Pressure — Overview
 
+Usage pressure tilts crew pool draws toward accounts whose subscription capacity expires first, using the provider usage readings Orbit already records, so less of the combined capacity is lost at resets. It only scales the configured weights; which crews a source may draw does not change.
+
 Status: phases 1–4 (pressure view, task draws, shared pool draws and pull drains) ([`workflow.crew_selection`](../../config/crews.md#usage-pressure-draws)) implemented.
 The phase-1 task [ORB-17769] records Daniel's approval of this scope on 2026-10-23;
 all four implementation phases are done, so its document status is Accepted and its stage is shipped.
+
+## 1. Motivation
+
 Bearing: [provider usage limits](../../config/crews.md#provider-usage-limits) already record every
 window a provider reports ([ORB-14695] failures, [ORB-14696] post-run readings, [ORB-17644] Muse)
 and gate crews that reach a threshold ([ORB-14697]). Weighted complexity and purpose pools
@@ -26,7 +31,7 @@ and gate crews that reach a threshold ([ORB-14697]). Weighted complexity and pur
 that are left. Task-type draws also use a `type:<type>/<tier>` source. This scope uses the
 readings to tilt those draws too, without changing which crews a source may draw.
 
-## Problem
+### The gap
 
 Subscription capacity disappears at its reset. On a Friday evening the Claude login on a host
 reads `seven_day` 10% used, resetting in 6 hours. The Codex login reads its weekly window 0%
@@ -44,7 +49,7 @@ Admission then kept that member "while it can run", in `unheld_task_crew_candida
 re-drew when a hold or a limit removed it. A task filed on Tuesday could run on Friday with
 Tuesday's draw. Weighting the creation draw alone would weight it with days-old readings.
 
-## Goal
+### Intended outcome
 
 Spend the capacity that expires first, so that less of the accounts' combined capacity is lost
 at resets. Quality routing is unchanged: the task's source pool (complexity, purpose, or task
@@ -52,7 +57,7 @@ type) still decides which crews it may run as, and the configured weights still 
 operator's preference among them.
 Pressure only scales those weights.
 
-## Non-goals
+### Out of scope
 
 - **Changing pool membership or task routing.** Pressure never sends a task to a crew outside
   its existing complexity, purpose, or task-type pool.
@@ -64,7 +69,7 @@ Pressure only scales those weights.
   [auto-concurrency](../auto-concurrency/1_overview.md), not here.
 - **Absolute capacity.** No conversion of percentages into tokens across providers.
 
-## Acceptance (feature level)
+### Acceptance (feature level)
 
 - With `crew_selection = "usage_pressure"`, a hard pool `opus:50, sonnet:25, sol:25`, Claude
   `seven_day` at 10% resetting in 6 h and Codex weekly at 0% resetting in 7 d, the admission
@@ -80,6 +85,26 @@ Pressure only scales those weights.
 - Readiness and doctor show each account's pressure and the window that set it.
 
 The mechanisms are in [2_design.md](./2_design.md); decisions that qualify are kept in [4_decisions.md](./4_decisions.md).
+
+## 2. Core Concepts
+
+- **Pressure.** How much of a usage window's capacity remains against how soon it resets; high pressure means capacity that will expire unspent.
+- **Crew pressure.** The pressure of a crew's account, taken from the window that sets it and shown in readiness and doctor.
+- **Effective weight.** A pool member's configured weight scaled by its pressure; a crew with no reading, or any crew under `crew_selection = "static"`, keeps its configured weight.
+- **Draw point.** Where pressure applies: the creation draw, the re-draw at admission, shared pool draws and a pull follower's offer order.
+- **Source pool.** The complexity, purpose or task-type pool that still decides which crews a task may run as.
+
+## 3. At a Glance
+
+| Concern | File | Task |
+|---------|------|------|
+| Usage readings pressure is computed from | [crews config](../../config/crews.md#provider-usage-limits) | [ORB-14695], [ORB-14696], [ORB-17644] |
+| Crews gated at their limit | [crews config](../../config/crews.md#provider-usage-limits) | [ORB-14697] |
+| Pressure of one window and of a crew | [2_design.md](./2_design.md#pressure-of-one-window) | [ORB-17769] |
+| Effective weight | [2_design.md](./2_design.md#effective-weight) | [ORB-17769] |
+| Where pressure applies | [2_design.md](./2_design.md#where-pressure-applies) | [ORB-17769] |
+| Creation draw | [candidate_assignment.rs](../../../crates/orbit-core/src/application/job/crew_pools/candidate_assignment.rs) | [ORB-17769] |
+| Standing rules | [4_decisions.md](./4_decisions.md) | — |
 
 ## Task References
 

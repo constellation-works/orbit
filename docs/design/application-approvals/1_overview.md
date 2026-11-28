@@ -23,6 +23,8 @@ profile remains [ORB-20363]; compatibility retirement is [ORB-21043]. The folder
 pairs this overview with [2_design.md](./2_design.md), which holds the mechanisms, and with
 [4_decisions.md](./4_decisions.md).
 
+## 1. Motivation
+
 Bearing: [ORB-20362] shipped scoped application authority in orbit 0.41.0. An operator
 consents, once, to an application id, an expiry and a list of exact operations, bound to
 one workspace id and checkout root. Orbit mints a credential that the service passes to
@@ -33,7 +35,7 @@ scopes admit entries and callbacks against typed fields and current task state. 
 contract is documented for users in the installed `orbit-setup` skill reference
 `applications.md`. The admission code is `crates/orbit-runtime/src/host/application_consent/invocation.rs`.
 
-## Problem
+### The gap
 
 The original problem was that the orbit-office app (the user's Today and Needs-you
 screens) could not carry the user's approval clicks through application authority.
@@ -69,7 +71,7 @@ The original app integration used `ORBIT_OPERATOR` to accept proposals. That sta
 operator grant to a login service is what ORB-20363 rules out; the scoped office profile
 is the remaining integration work.
 
-## Goal
+### Intended outcome
 
 An operator can consent once to a bounded **approval profile** for one app. Under it the
 app can accept, dismiss, approve, send back and send exactly the kinds of work the profile
@@ -79,7 +81,7 @@ digest binding of plugin manifests, per-call audit, and refusal of everything no
 No capability is granted. Unattended-execution controls (`orbit.routine.control`,
 `orbit.auto_task` action `mint`) stay outside application authority.
 
-## Non-goals
+### Out of scope
 
 - **No capability grant.** The app never holds Operator, Runner or Agent. Admission
   bypasses the capability floor only for the listed, constrained operations, exactly as
@@ -95,7 +97,7 @@ No capability is granted. Unattended-execution controls (`orbit.routine.control`
 - **No Office-specific code in Orbit core.** Constraints name tags, statuses, artifact
   paths and JSON pointers. The office profile is data the operator consents to.
 
-## Acceptance (feature level)
+### Acceptance (feature level)
 
 - Given an operator consented to the office profile, the app accepts a pending proposal
   at the digest the user saw. The task ends `done`, and no `ORBIT_OPERATOR` is in the
@@ -106,6 +108,26 @@ No capability is granted. Unattended-execution controls (`orbit.routine.control`
   callback, `proposed` to `backlog`, `orbit.routine.control` or `orbit.auto_task` action `mint` is
   refused. So is a call after expiry or revocation, or from another workspace.
 - Given an existing v1 exact consent, it keeps working unchanged across the upgrade.
+
+## 2. Core Concepts
+
+- **Application authority.** The scoped, audited consent an operator gives one application id: an expiry and a list of operations, bound to one workspace id and checkout root.
+- **Exact scope.** A consented operation admitted only when the call has the same tool and a structurally equal input. Exact scopes keep their original matching.
+- **Constrained scope.** A consented operation that admits typed per-field constraints bound to current task state, so an input value that did not exist at consent time can still be admitted.
+- **Bound and read callback.** A follow-up call the app makes after an approval (reading a task or artifact, writing a named transition) that is checked against the same consented profile.
+- **Approval profile.** The bounded set of constrained operations an operator consents to once for one app, such as the office profile.
+- **Ceiling.** The fixed set of operations and fields application consent can never exceed; unattended-execution controls stay outside it.
+
+## 3. At a Glance
+
+| Concern | File | Task |
+|---------|------|------|
+| Consent schema v2 and constrained entries | [2_design.md §4](./2_design.md#4-consent-schema-v2) | [ORB-21038], [ORB-21039] |
+| Admission of calls and bound or read callbacks | [2_design.md §5](./2_design.md#5-admission-algorithm) | [ORB-21040], [ORB-21042] |
+| Audit fields on every call | [2_design.md §7](./2_design.md#7-audit-record) | [ORB-21041] |
+| Office approval profile | [2_design.md §6](./2_design.md#6-office-approval-actions) | [ORB-20363] |
+| Compatibility with v1 exact consent | [2_design.md §8](./2_design.md#8-migration-and-compatibility) | [ORB-21043] |
+| Standing rules | [4_decisions.md](./4_decisions.md) | — |
 
 ## Task References
 

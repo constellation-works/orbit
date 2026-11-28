@@ -18,13 +18,15 @@ tags: [backlog-forecast, backlog-forecast-v2, analytics-metrics]
 
 Status: v1 shipped in [ORB-18385]; v2 scoped by [ORB-18685], with the implementation tasks listed in [2_design.md](./2_design.md#tasks). The per-task riskiness estimator shipped in [ORB-18690], [ORB-18686] shipped the admission factor, [ORB-18687] shipped review-mode sampling, [ORB-18688] shipped attempt outcomes and blocked returns, [ORB-18689] shipped enforce-mode resource fit as `MODEL_VERSION` **6**, [ORB-18853] keeps sub-second and same-instant blocked returns drawable as `MODEL_VERSION` **7**, [ORB-18856] counts censored blocked waits in return-wait totals as `MODEL_VERSION` **8**, [ORB-18691] ships one generation of regression rework and donor-based arrivals as `MODEL_VERSION` **9**, and [ORB-18859] stores retry-inclusive per-task work and spend as `MODEL_VERSION` **10** (see [Shipped so far](./2_design.md#shipped-so-far)). [ORB-20673] shifts each attempt by a residual correction as `MODEL_VERSION` **15**, [ORB-20728] counts one residual per distinct task as `MODEL_VERSION` **16**, [ORB-20729] applies that correction to the full-script total as `MODEL_VERSION` **17**, [ORB-21949] fits it and scores task-level calibration on one forecast per task, withholding a cohort whose held-out p90 coverage drops, as `MODEL_VERSION` **18**, and [ORB-25278] removes its cohort-center spread stretch and adds a held-out p50 check as `MODEL_VERSION` **20**, and [ORB-25806] recovers in-origin defect records and reports adjusted totals over a bounded share of fix-history gaps as `MODEL_VERSION` **21**. Model **22** adjusts the median and upper tail using each task's own uncorrected quantiles, [ORB-26752] corrects the finite-sample upper rank under equal weights as `MODEL_VERSION` **23**, and [ORB-28343] falls back along the return-basis chain for an unsupported return tail and marks un-rescuable blocked tasks unforecastable (`return_tail_unsupported`) as `MODEL_VERSION` **24**. The explicitly listed residual rules (review phases, shadow resource-fit, follower capacity, richer calibration) remain planned. “v2” names the feature revision; implementations increment `MODEL_VERSION` from the value they find.
 
+## 1. Motivation
+
 Bearing: Orbit records managed invocations, task status history, leaf occupancy, admission decisions and host resource profiles. The shared service is `crates/orbit-core/src/unit/backlog_forecast/`, with sampling in `backlog_forecast/model.rs`, scenario aggregation in `backlog_forecast/simulation.rs`, synthetic bundles in `backlog_forecast/rework.rs`, and scoring in `backlog_forecast/scoring.rs`. It serves the owner sweep clock and `crates/orbit-web/src/api/diagnostics/backlog_forecast/`. The drain already owns the admission rules this forecast must reuse ([auto-concurrency](../auto-concurrency/2_design.md), [distributed drain](../distributed-drain/1_overview.md)).
 
-## Problem
+### The gap
 
 V1 draws a completed delivery per task and list-schedules independent work on N slots. A dependency chain can run side by side, overlapping lock surfaces consume separate slots, and resource-heavy work always fills the ceiling. Its priority/age sort differs from the drain's order. Mixing reviewed and unreviewed deliveries, omitting failed attempts and ignoring regression fixes further understates time and spend. An operator cannot tell whether 40 tasks drain overnight or over a week, or why a forecast missed.
 
-## Goal
+### Intended outcome
 
 A read-only, admission-faithful forecast: p50/p90 elapsed time to drain, USD and normalized tokens, overall and by complexity, with completion probabilities, coverage and explanations of constrained parallelism. A reusable per-task riskiness estimate is also shown on task rows and task detail. Store canonical forecasts hourly and score their versions separately. Forecasts never dispatch, reserve real locks, change task state or change admission policy.
 
@@ -49,14 +51,14 @@ A read-only, admission-faithful forecast: p50/p90 elapsed time to drain, USD and
 
 Remaining feature-level limits after model 10: review residual/support phases, run-lineage rather than status-history episode evidence, provider holds, retained review locks, completion Brier scores, dependency/footprint rescope exclusions, execution-host/factor calibration partitions and revision-keyed facts caches are still unshipped. Donor history is the measured completed-delivery subset, not every filing. Generated-node materialization is bounded at 10,000 per iteration and uses precomputed overlap rows; dense arrival streams can cost more than the default no-arrivals scenario. Limits null affected time/spend draws and increment `simulation_truncated`.
 
-## Non-goals
+### Out of scope
 
 - Dispatching, real reservations, policy changes or automatically changing N based on a forecast.
 - A pooled multi-host cluster simulator or new follower telemetry transport. One execution host is modelled with its own evidence; unavailable remote capacity is explicit.
 - A separate shared reviewer/CI service-capacity queue. Review modes, observed waits and return delays are modelled, but future global CI/provider incidents and human decisions are not independently simulated.
 - Recursive synthetic regression generations, causal crew comparisons or risk as an admission veto.
 
-## Acceptance (feature level)
+### Acceptance (feature level)
 
 - The public forecast for A→B→C cannot finish earlier than its sampled dependency path. Conflicting editing tasks cannot overlap; real unknown-footprint work obeys pilot/exclusive/tree-reservation rules; no-diff work holds no locks. Reservation and dispatch results agree with real admission for identical frozen inputs.
 - Changing review policy selects the corresponding observed mode history or reports its fallback. Raised block/fail history adds waits/incompletion, releases slots at episode end, and retains failed spend. Heavy profiles reduce parallelism in enforce mode at fixed N, with idle-host/head protection intact.
@@ -65,6 +67,33 @@ Remaining feature-level limits after model 10: review residual/support phases, r
 - Each implementation validates its observed behavior through public API/CLI boundaries and records the 200-task/1000-iteration latency where scheduling changes. UI changes attach dark-theme desktop/375px screenshots and update the affected interface docs.
 
 The mechanisms are in [2_design.md](./2_design.md); decisions that qualify are kept in [4_decisions.md](./4_decisions.md).
+
+## 2. Core Concepts
+
+- **Forecast.** A read-only, admission-faithful estimate of how long a backlog takes to drain and what it costs: p50/p90 elapsed time, USD and normalized tokens, overall and by complexity.
+- **`MODEL_VERSION`.** The integer naming the forecast model revision. Stored forecasts are scored per version, and implementations increment it from the value they find.
+- **Admission pass.** The one shared pass that reuses the drain's own admission rules (dependencies, lock conflicts, resource fit, review mode) to schedule sampled work on N slots.
+- **Attempt script.** The sampled sequence of delivery, blocked, failed and retried attempts a task draws from measured history; its work and spend include retries.
+- **Task riskiness.** The shared per-task estimate of regression probability, shown on task rows and detail and consumed by the forecast.
+- **Regression rework.** Synthetic follow-up fix bundles, drawn from historical donors after a risky initial task, entering the backlog after their detection delay.
+- **Arrivals.** Exogenous work that files during the horizon, drawn from completed historical footprint donors.
+- **Scoring.** Hourly stored forecasts compared with what actually happened, kept apart by model version and measure.
+
+## 3. At a Glance
+
+| Concern | File | Task |
+|---------|------|------|
+| Shared service, sampling, simulation, rework and scoring | [backlog_forecast/](../../../crates/orbit-core/src/unit/backlog_forecast/) | [ORB-18385] |
+| Dependencies, locks, dispatch and one shared admission pass | [2_design.md](./2_design.md#one-shared-admission-pass) | [ORB-18686] |
+| Review-mode sampling | [2_design.md](./2_design.md#review-mode-cells) | [ORB-18687] |
+| Blocked, failed and retry outcomes | [2_design.md](./2_design.md#outcomes-retries-and-currently-blocked-work) | [ORB-18688], [ORB-18853], [ORB-18856] |
+| Resource-fit concurrency | [2_design.md](./2_design.md#resource-fit-and-execution-host) | [ORB-18689] |
+| Per-task riskiness estimator | [2_design.md](./2_design.md#per-task-riskiness-estimator) | [ORB-18690] |
+| Regression follow-up work and arrivals | [2_design.md](./2_design.md#regression-follow-up-work) | [ORB-18691], [ORB-25806] |
+| Retry-inclusive per-task work and spend | [2_design.md](./2_design.md#additive-response-contract) | [ORB-18859] |
+| Residual correction and held-out calibration | [2_design.md](./2_design.md#storage-version-policy-and-scoring) | [ORB-20673], [ORB-20728], [ORB-20729], [ORB-21949], [ORB-25278] |
+| Return-basis fallback for unsupported return tails | [2_design.md](./2_design.md#outcomes-retries-and-currently-blocked-work) | [ORB-28343] |
+| Standing rules | [4_decisions.md](./4_decisions.md) | — |
 
 ## Task References
 
