@@ -69,20 +69,20 @@
 //!
 //! # Page actions
 //!
-//! The witness carries, the same way, the `spec.web.pages[].actions` list
-//! of each page as the operator consented to it at enable (plugin-pages
-//! design §1). The dashboard runs an action only when the page still names it
-//! and the witness lists it for that page, so a list that changed since
-//! consent leaves its new actions inactive until an enabling command records
-//! it again (STD-05 §R21). A witness written before actions existed lists
-//! none, which consents to none.
+//! The witness binds each approved page and action verb to the manifest,
+//! the page bundle and the action's resolved schemas (plugin-pages design
+//! §1). The dashboard checks that binding against the loaded content on
+//! every action. Ordinary grants have their own digest and can survive a
+//! replacement that requires fresh page-action consent (STD-05 §R21).
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
 use orbit_common::fs::io::atomic_write_text;
-use orbit_tools::plugin::physical_with_missing_tail;
+use orbit_tools::plugin::{
+    LoadedPlugin, LoadedPluginPage, ResolvedPluginTool, physical_with_missing_tail,
+};
 use orbit_types::identity::lower_hex;
 use orbit_types::plugin::{InstalledPlugin, is_valid_namespace};
 use serde::{Deserialize, Serialize};
@@ -104,6 +104,8 @@ const INVALID_GRANT_WITNESS_FILE: &str = ".invalid.json";
 /// of another. Bumping it invalidates every witness, which fails closed.
 const GRANT_DIGEST_DOMAIN: &str = "orbit.plugin.grants.v1";
 
+const PAGE_ACTION_DIGEST_DOMAIN: &str = "orbit.plugin.page-action.v1";
+
 const WITNESS_SCHEMA_VERSION: u32 = 1;
 
 /// What `orbit plugin enable` authorized for one plugin, as the loader checks
@@ -120,15 +122,101 @@ struct GrantAuthorization {
     /// therefore grant no program (see the module docs).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     programs: BTreeMap<String, PathBuf>,
-    /// Page id → the action verbs the operator consented to for that page.
-    /// Absent from witnesses written before page actions, which therefore
-    /// consent to none (see the module docs).
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    page_actions: PageActionConsent,
+    // A separate field lets old name-only witnesses keep ordinary grants
+    // while requiring fresh page-action consent.
+    #[serde(default, skip_serializing_if = "PageActionConsent::is_empty")]
+    page_action_consent: PageActionConsent,
 }
 
-/// Page id → the action verbs consented to for that page.
-pub type PageActionConsent = BTreeMap<String, Vec<String>>;
+/// Content digest for each approved page ID and action verb.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct PageActionConsent(BTreeMap<String, BTreeMap<String, String>>);
+
+impl PageActionConsent {
+    /// Capture the approved content from the same load the enabling command
+    /// reviewed. Pages without a readable bundle confer no authority.
+    pub fn from_plugin(plugin: &LoadedPlugin) -> Self {
+        let Some(web) = &plugin.manifest.spec.web else {
+            return Self::default();
+        };
+        Self(
+            web.declared_actions()
+                .into_iter()
+                .filter_map(|(id, verbs)| {
+                    let page = plugin.pages.iter().find(|page| page.id == id)?;
+                    let bundle_digest = page.digest()?;
+                    let actions = plugin
+                        .tools
+                        .iter()
+                        .filter(|tool| verbs.contains(&tool.verb))
+                        .map(|tool| {
+                            (
+                                tool.verb.clone(),
+                                page_action_content_digest(
+                                    &plugin.manifest_digest,
+                                    bundle_digest,
+                                    tool,
+                                ),
+                            )
+                        })
+                        .collect();
+                    Some((id, actions))
+                })
+                .collect(),
+        )
+    }
+
+    /// Require the loaded definition to match both today's installed row
+    /// and the content covered by the operator's consent.
+    pub fn allows_action(
+        &self,
+        installed: &InstalledPlugin,
+        plugin: &LoadedPlugin,
+        page: &LoadedPluginPage,
+        tool: &ResolvedPluginTool,
+    ) -> bool {
+        let Some(approved) = self
+            .0
+            .get(&page.id)
+            .and_then(|actions| actions.get(&tool.verb))
+        else {
+            return false;
+        };
+        let Some(bundle_digest) = page.digest() else {
+            return false;
+        };
+        installed.manifest_digest == plugin.manifest_digest
+            && installed.page_digests.get(&page.id).map(String::as_str) == Some(bundle_digest)
+            && *approved == page_action_content_digest(&plugin.manifest_digest, bundle_digest, tool)
+    }
+
+    fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+fn page_action_content_digest(
+    manifest_digest: &str,
+    bundle_digest: &str,
+    tool: &ResolvedPluginTool,
+) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(PAGE_ACTION_DIGEST_DOMAIN);
+    hasher.update(b"\n");
+    hasher.update(manifest_digest);
+    hasher.update(b"\n");
+    hasher.update(bundle_digest);
+    // The manifest records schema references. Hash the resolved documents
+    // too, since a referenced file can change under the same manifest.
+    hasher.update(b"\n");
+    hasher.update(tool.input_schema.to_string());
+    hasher.update(b"\n");
+    if let Some(output_schema) = &tool.output_schema {
+        hasher.update(output_schema.schema().to_string());
+    }
+    lower_hex(hasher.finalize())
+}
 
 /// Where the witness for `name` lives.
 ///
@@ -203,7 +291,7 @@ pub fn record_authorized_grants(
         enabled,
         grants,
         &BTreeMap::new(),
-        &PageActionConsent::new(),
+        &PageActionConsent::default(),
     )
 }
 
@@ -216,7 +304,7 @@ pub fn record_authorization(
     enabled: bool,
     grants: &[String],
     programs: &BTreeMap<String, PathBuf>,
-    page_actions: &PageActionConsent,
+    page_action_consent: &PageActionConsent,
 ) -> Result<(), OrbitError> {
     if !is_valid_namespace(name) {
         return Err(OrbitError::Execution(format!(
@@ -230,7 +318,7 @@ pub fn record_authorization(
         grants_digest: plugin_grants_digest(name, enabled, grants),
         authorized_at: chrono::Utc::now().to_rfc3339(),
         programs: programs.clone(),
-        page_actions: page_actions.clone(),
+        page_action_consent: page_action_consent.clone(),
     };
     let body = serde_json::to_string_pretty(&witness).map_err(|error| {
         OrbitError::Execution(format!("serialize grant authorization: {error}"))
@@ -263,31 +351,29 @@ pub fn recorded_program_paths(global_root: &Path, name: &str) -> BTreeMap<String
         .unwrap_or_default()
 }
 
-/// The page actions the last enabling command recorded for `name`, empty
-/// when there is no readable witness written for it.
+/// The bound page actions the last CLI enable recorded for `name`. A host
+/// toggle can carry this consent forward without binding it to new content.
 pub fn recorded_page_actions(global_root: &Path, name: &str) -> PageActionConsent {
     read_witness(global_root, name)
-        .map(|witness| witness.page_actions)
+        .map(|witness| witness.page_action_consent)
         .unwrap_or_default()
 }
 
-/// The page actions an enabled row's operator consented to, read back from
-/// a witness that still matches the row. Empty for a disabled row, a row
-/// without a witness, or one whose grants no longer match it, so a call
-/// checked against this runs nothing the operator did not consent to.
+/// Content-bound page-action consent for an enabled row whose ordinary
+/// grants still match the witness. Use `allows_action` to check loaded content.
 pub fn witnessed_page_actions(
     global_root: &Path,
     installed: &InstalledPlugin,
 ) -> PageActionConsent {
     if !installed.enabled {
-        return PageActionConsent::new();
+        return PageActionConsent::default();
     }
     read_witness(global_root, &installed.name)
         .filter(|witness| {
             witness.grants_digest
                 == plugin_grants_digest(&installed.name, installed.enabled, &installed.grants)
         })
-        .map(|witness| witness.page_actions)
+        .map(|witness| witness.page_action_consent)
         .unwrap_or_default()
 }
 

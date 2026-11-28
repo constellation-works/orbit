@@ -19,7 +19,7 @@ use crate::app::plugin::panel::{PluginLinkSummary, PluginPanelSummary, web_summa
 
 use crate::OrbitRuntime;
 use crate::runtime::plugin::cache::load_installed_plugin;
-use crate::runtime::plugin::grants::{recorded_program_paths, witnessed_page_actions};
+use crate::runtime::plugin::grants;
 use crate::runtime::plugin::paths::{plugin_state_dir, read_pin_file};
 
 /// One plugin tool as the CLI reports it.
@@ -492,7 +492,7 @@ pub(in crate::app::plugin) fn summary_for_installed(
             .map(|plugin| {
                 let mut programs = program_statuses(
                     &plugin.manifest.spec.requires.programs,
-                    &recorded_program_paths(global_root, &installed.name),
+                    &grants::recorded_program_paths(global_root, &installed.name),
                     global_root,
                     &plugin_state_dir(global_root, &installed.name),
                 );
@@ -527,7 +527,7 @@ fn page_summaries(
     status: PluginStatus,
     global_root: &Path,
 ) -> Vec<PluginPageSummary> {
-    let consented = witnessed_page_actions(global_root, installed);
+    let consented = grants::witnessed_page_actions(global_root, installed);
     plugin
         .pages
         .iter()
@@ -560,9 +560,13 @@ fn page_summaries(
                     .iter()
                     .map(|verb| PluginPageActionSummary {
                         tool: plugin_tool_name(plugin.namespace(), verb, installed.first_party),
-                        consented: consented
-                            .get(&page.id)
-                            .is_some_and(|verbs| verbs.contains(verb)),
+                        consented: plugin
+                            .tools
+                            .iter()
+                            .find(|tool| &tool.verb == verb)
+                            .is_some_and(|tool| {
+                                consented.allows_action(installed, plugin, page, tool)
+                            }),
                     })
                     .collect(),
                 kit: page.kit,

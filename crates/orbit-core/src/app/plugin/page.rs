@@ -7,7 +7,7 @@
 //! install), and a call runs only a `read_only` tool of the same plugin that
 //! the page declares, with input that fits the tool's schema. An action — a
 //! mutating tool the page names under `actions` — additionally needs the
-//! operator session, the operator's consent to that list at enable, and a
+//! operator session, the operator's consent to the action content, and a
 //! one-time confirmation the dashboard obtained outside the frame for that
 //! exact plugin, page, tool and input. Everything is checked before anything
 //! runs.
@@ -27,7 +27,7 @@ use serde_json::{Value, json};
 
 use crate::app::exec::{DashboardOrigin, Operation};
 use crate::application::contracts::ToolInvocationPort;
-use crate::runtime::plugin::grants::witnessed_page_actions;
+use crate::runtime::plugin::grants;
 use crate::{Core, OrbitRuntime};
 
 /// An active page's files, held in the plugin load that hashed them, so the
@@ -259,8 +259,8 @@ pub(super) fn check_page_call(
 }
 
 /// Check one action request from an active page: the tool is this plugin's
-/// and mutating, the page names it under `actions`, the operator's consent
-/// recorded at enable lists it for this page, and `input` fits its schema.
+/// and mutating, the page names it under `actions`, the loaded action
+/// matches the recorded consent, and `input` fits its schema.
 /// Nothing runs.
 pub(super) fn check_page_action(
     core: &Core,
@@ -294,14 +294,14 @@ pub(super) fn check_page_action(
         .host_store()
         .read()
         .and_then(|snapshot| snapshot.plugin().get(namespace))?;
-    let consented = installed
-        .as_ref()
-        .map(|installed| witnessed_page_actions(&runtime.global_root(), installed))
-        .unwrap_or_default();
-    if !consented
-        .get(page_id)
-        .is_some_and(|verbs| verbs.iter().any(|consented| consented == verb))
-    {
+    if !installed.as_ref().is_some_and(|installed| {
+        grants::witnessed_page_actions(&runtime.global_root(), installed).allows_action(
+            installed,
+            &source.plugin,
+            source.page(),
+            resolved,
+        )
+    }) {
         return Err(OrbitError::PolicyDenied(format!(
             "action '{verb}' of page '{page_id}' of plugin '{namespace}' has no recorded \
              consent; review the page's actions with `orbit plugin enable {namespace}`"

@@ -4,10 +4,14 @@
 //! and panels keep serving.
 
 use std::path::Path;
+use std::process::{Command, Stdio};
+use std::time::Duration;
 
-use serde_json::Value;
+use reqwest::blocking::Client;
+use serde_json::{Value, json};
 
 use super::{CheckedPluginOutput, Fixture, write_status_plugin};
+use crate::bound_server::{Announcement, BoundServer};
 
 const PAGES_SPEC: &str = concat!(
     "  web:\n",
@@ -124,13 +128,7 @@ fn a_page_installs_lists_and_goes_inactive_alone_when_its_files_change() {
 }
 
 #[test]
-fn enabling_a_plugin_whose_page_names_actions_lists_them_and_records_consent() {
-    if !orbit_exec::macos_sandbox_test_guard(
-        &orbit_common::Env::capture(),
-        "enabling_a_plugin_whose_page_names_actions_lists_them_and_records_consent",
-    ) {
-        return;
-    }
+fn a_replaced_page_action_needs_fresh_cli_consent() {
     let fixture = Fixture::new();
     let source = fixture.source("pages");
     write_status_plugin(
@@ -143,12 +141,14 @@ fn enabling_a_plugin_whose_page_names_actions_lists_them_and_records_consent() {
     );
     // `tools` is the manifest's last key, so a tool appended is in it.
     let manifest = source.join(".orbit-plugin/plugin.yaml");
-    let mut raw = std::fs::read_to_string(&manifest).expect("manifest");
+    let mut raw = std::fs::read_to_string(&manifest)
+        .expect("manifest")
+        .replace("    type: exec\n", "    type: exec\n    sandbox: none\n");
     raw.push_str(
         "    - name: settle\n      description: Settle a request.\n      execution_kind: \
          mutating\n      mcp_scope: workspace\n",
     );
-    std::fs::write(&manifest, raw).expect("write manifest");
+    std::fs::write(&manifest, &raw).expect("write manifest");
     write_page(&source.join(".orbit-plugin"));
 
     // The documented preview: a plain `add` lists the actions and `show`
@@ -165,13 +165,13 @@ fn enabling_a_plugin_whose_page_names_actions_lists_them_and_records_consent() {
     let shown = fixture.json(["plugin", "show", "pages"]);
     assert_eq!(
         only_page(&shown)["actions"],
-        serde_json::json!([{"tool": "pages.settle", "consented": false, "active": false}]),
+        json!([{"tool": "pages.settle", "consented": false, "active": false}]),
         "the preview leaves the action witness unchanged: {shown}"
     );
 
     // `enable` reports the consent it has just recorded.
     let added = fixture
-        .command(["plugin", "enable", "pages"])
+        .command(["plugin", "enable", "pages", "--grant", "unsandboxed"])
         .success_output();
     let added = String::from_utf8_lossy(&added.stdout);
     assert!(
@@ -181,7 +181,92 @@ fn enabling_a_plugin_whose_page_names_actions_lists_them_and_records_consent() {
     let shown = fixture.json(["plugin", "show", "pages"]);
     assert_eq!(
         only_page(&shown)["actions"],
-        serde_json::json!([{"tool": "pages.settle", "consented": true, "active": true}]),
+        json!([{"tool": "pages.settle", "consented": true, "active": true}]),
         "{shown}"
     );
+
+    let mut command = Command::new(env!("CARGO_BIN_EXE_orbit"));
+    orbit_common::test_env::clear_inherited_authority(|name| {
+        command.env_remove(name);
+    });
+    let mut server = BoundServer::spawn(
+        command
+            .current_dir(&fixture.work)
+            .env("HOME", &fixture.home)
+            .env("USERPROFILE", &fixture.home)
+            .args(["web", "serve", "--port", "0", "--no-open", "--operator"])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped()),
+        Announcement::Dashboard,
+    )
+    .expect("spawn dashboard");
+    let origin = format!(
+        "http://{}",
+        server
+            .wait_for_address(Duration::from_secs(30))
+            .expect("dashboard bound")
+    );
+    let client = Client::builder()
+        .no_proxy()
+        .timeout(Duration::from_secs(30))
+        .build()
+        .expect("HTTP client");
+    let post = |path: &str, body: Value| {
+        let response = client
+            .post(format!("{origin}/api/plugins/pages/{path}"))
+            .header("origin", &origin)
+            .json(&body)
+            .send()
+            .expect("dashboard request");
+        let status = response.status().as_u16();
+        let body = response.json::<Value>().expect("dashboard JSON");
+        (status, body)
+    };
+    let confirm = || {
+        post(
+            "pages/overview/actions/confirm",
+            json!({"tool": "settle", "input": {}}),
+        )
+    };
+    let (status, action) = confirm();
+    assert_eq!(status, 200, "{action}");
+    assert_eq!(action["description"], "Settle a request.");
+
+    // The page ID, action verb, page bundle and ordinary grant set are unchanged.
+    std::fs::write(
+        &manifest,
+        raw.replace("Settle a request.", "Settle a reviewed request."),
+    )
+    .expect("replace the action definition");
+    fixture.add(&source, &["--force"]);
+    let replaced = fixture.json(["plugin", "show", "pages"]);
+    assert_eq!(replaced["granted"], shown["granted"]);
+    assert_eq!(replaced["status"], "active", "{replaced}");
+    assert_eq!(only_page(&replaced)["state"], "active", "{replaced}");
+    assert_eq!(
+        only_page(&replaced)["actions"],
+        json!([{"tool": "pages.settle", "consented": false, "active": false}]),
+        "{replaced}"
+    );
+    let (status, read) = post(
+        "pages/overview/call",
+        json!({"tool": "status", "input": {}}),
+    );
+    assert_eq!(status, 200, "{read}");
+    let (status, refusal) = confirm();
+    assert_eq!(status, 403, "{refusal}");
+    assert_eq!(refusal["code"], "tool_refused");
+
+    let (status, disabled) = post("disable", json!({"scope": "host"}));
+    assert_eq!(status, 200, "{disabled}");
+    let (status, enabled) = post("enable", json!({"scope": "host"}));
+    assert_eq!(status, 200, "{enabled}");
+    let (status, refusal) = confirm();
+    assert_eq!(status, 403, "{refusal}");
+    assert_eq!(refusal["code"], "tool_refused");
+
+    fixture.success(["plugin", "enable", "pages", "--grant", "unsandboxed"]);
+    let (status, action) = confirm();
+    assert_eq!(status, 200, "{action}");
+    assert_eq!(action["description"], "Settle a reviewed request.");
 }
