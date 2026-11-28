@@ -62,6 +62,12 @@ pub struct ClaimRepair {
     pub candidate: orbit_types::workflow::handoff::HandoffCandidate,
     /// The landing stop's evidence.
     pub stop_evidence: String,
+    /// Captured owner review timing for this repair claim (`none`,
+    /// `before-pr`, `before-landing`), as the owner resolved it at repair
+    /// admission. Absent on legacy repair claims recorded before this field
+    /// existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_review_timing: Option<orbit_types::workflow::ReviewTiming>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

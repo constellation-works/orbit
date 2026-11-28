@@ -110,16 +110,22 @@ impl PullLeafClaim {
     /// One line for a run page.
     #[must_use]
     pub fn describe(&self) -> String {
+        let repairs = self
+            .repairs_claim_id
+            .as_deref()
+            .map(|claim_id| format!(" repairs {claim_id}"))
+            .unwrap_or_default();
         let failure = self
             .failure_class
             .map(|class| format!(" failure={}", class.as_str()))
             .unwrap_or_default();
         format!(
-            "task {} claim {} owner {} drain {} settlement={}{failure} — {}",
+            "task {} claim {}{repairs} owner {} drain {} owner_review={} settlement={}{failure} — {}",
             self.task_id.as_deref().unwrap_or("-"),
             self.claim_id.as_deref().unwrap_or("-"),
             self.owner,
             self.drain_run_id,
+            self.owner_review_timing.as_str(),
             self.settlement_phase,
             self.guidance
         )

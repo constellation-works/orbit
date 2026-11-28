@@ -2,7 +2,7 @@
 
 use chrono::{DateTime, Utc};
 use orbit_store::contract::AdmissionCrewPressure;
-use orbit_types::workflow::{ClaimFailureClass, CrewExclusion, PullAuthExclusion};
+use orbit_types::workflow::{ClaimFailureClass, CrewExclusion, PullAuthExclusion, ReviewTiming};
 use serde::Serialize;
 
 /// The crews a pull drain's window can run, and those it will not [ORB-13941].
@@ -147,6 +147,14 @@ pub struct PullLeafClaim {
     /// settlement types it; `None` until a failure or release is recorded,
     /// and for a release of a leaf that never launched.
     pub failure_class: Option<ClaimFailureClass>,
+    /// The owner's captured review timing for this claim (`none`, `before-pr`,
+    /// `before-landing`), derived from the durable pull admission's ship
+    /// contract.
+    pub owner_review_timing: ReviewTiming,
+    /// The superseded claim this claim repairs, when it is a landing-repair
+    /// claim.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repairs_claim_id: Option<String>,
     /// What the phase means for the operator.
     pub guidance: String,
 }

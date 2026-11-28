@@ -29,18 +29,29 @@ use serde_json::Value;
 use super::REVIEW_ADMITTED_JOBS;
 use super::crew::pre_landing_review_crew_unset;
 use crate::OrbitRuntime;
-use crate::application::contracts::review_layer_json;
+use crate::application::contracts::review_layer_json_for_run;
 use crate::application::job::ReviewAdmissionHook;
 use crate::application::task::TaskReviewPort;
 use crate::runtime::run_input::carried_task_ids;
 
 impl OrbitRuntime {
-    /// A run's captured review layer as `{"timing", "source"}`, or null
-    /// when it captured no review admission.
+    /// A run's captured review layer as `{"timing", "source"}` (plus
+    /// `"scope": "supervisor_local"` on pull supervisors), or null when it
+    /// captured no review admission.
     pub fn run_review_layer(&self, run_id: &str) -> Result<Value, OrbitError> {
-        Ok(run_review_admission(self, run_id)?
+        let Some(run) = self.get_job_run_backend(run_id)? else {
+            return Ok(Value::Null);
+        };
+        let admission = run
+            .input
             .as_ref()
-            .map_or(Value::Null, review_layer_json))
+            .map(ReviewAdmission::from_run_input)
+            .transpose()
+            .map_err(OrbitError::from)?
+            .flatten();
+        Ok(admission.as_ref().map_or(Value::Null, |admission| {
+            review_layer_json_for_run(&run.job_id, admission)
+        }))
     }
 
     /// Authenticate the exact-head review for a security-state delivery.
