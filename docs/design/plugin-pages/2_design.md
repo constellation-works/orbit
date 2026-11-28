@@ -271,7 +271,7 @@ whose manifest has pages lists them in the consent prompt.
 - [ORB-14679] — added `/api/on/<host>/…` forwarding to another host's dashboard API.
 - [ORB-29504] — this design.
 - [ORB-29534] — built the manifest key, validation, the bundle digest and the listings.
-- [ORB-29532] — measured the frame policy in Chromium and WebKit.
+- [ORB-29532] — measured the initial frame policy in Chromium and WebKit, then validated the one-document policy in Chromium, WebKit and Firefox.
 - [ORB-29573] — revised the page contract to one document after that measurement.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
