@@ -825,6 +825,7 @@ forge read can clear. Per code:
 | `delivery_pr_closed` | no | Nothing open to complete. |
 | `delivery_task_not_promotable` | no | The task's status is an operator decision. |
 | `delivery_landing_conflict` | no | Owner landing needs fresh validation and a new handoff. |
+| `delivery_completion_conflict` | no | The branch conflicts and no authorized repair is admitted; the per-PR ledger repairs a conflict, not a hand-back. |
 | `base_chase_exhausted` | no | Orphan adoption already continues it. |
 | `delivery_origin_unavailable` | no | Backlog admission, no pull request. |
 | `delivery_dependency_not_delivered` | no | Backlog admission, no pull request. |

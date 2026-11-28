@@ -68,6 +68,7 @@ pub(crate) fn handed_back_hold(refusal: DeliveryRefusal) -> bool {
         | DeliveryRefusal::PullRequestClosed
         | DeliveryRefusal::TaskNotPromotable
         | DeliveryRefusal::LandingConflict
+        | DeliveryRefusal::CompletionConflict
         | DeliveryRefusal::BaseChaseExhausted
         | DeliveryRefusal::OriginUnavailable
         | DeliveryRefusal::DependencyNotDelivered

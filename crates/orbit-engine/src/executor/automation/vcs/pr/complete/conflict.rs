@@ -1,7 +1,7 @@
 //! Admitting, refreshing and rebasing a pull request branch that conflicts with its base.
 
 use orbit_common::OrbitError;
-use orbit_types::workflow::PrAutoFixBlocker;
+use orbit_types::workflow::{DeliveryRefusal, PrAutoFixBlocker};
 use serde_json::{Value, json};
 
 use crate::context::{
@@ -69,11 +69,16 @@ pub(super) fn has_completion_recovery_checkpoint(input: &Value) -> bool {
             .all(|key| input_string_field(input, key).is_some())
 }
 
+/// The hold for a conflicting pull request completion may not repair: the
+/// task stays in review, so the run is parked rather than failed.
 pub(super) fn completion_conflict_error(pr_number: &str) -> OrbitError {
-    OrbitError::Execution(format!(
-        "pr_complete: pull request #{pr_number} cannot be merged (the branch has merge conflicts); \
-         the task stays in review"
-    ))
+    OrbitError::DeliveryRefused {
+        refusal: DeliveryRefusal::CompletionConflict,
+        message: format!(
+            "pr_complete: pull request #{pr_number} cannot be merged (the branch has merge \
+             conflicts); no authorized conflict repair is admitted, so the task stays in review"
+        ),
+    }
 }
 
 /// Reconcile a published candidate with the base that GitHub currently sees.
