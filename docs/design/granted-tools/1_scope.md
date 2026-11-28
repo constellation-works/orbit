@@ -51,11 +51,8 @@ fails implementer admission when the deny policy covers a requirement, and
 only non-implementer activities (review, recovery, pilot — see
 [`activity_tool_requirements.rs`](../../../crates/orbit-core/src/application/job/activity_tool_requirements.rs))
 drop a covered requirement with a note instead. [ORB-15162] made "a
-requirement never overrides a disallow list" the rule, because the obvious
-alternative is a privilege-escalation hole: any agent that can file a task
-could file one granting itself denied tools, and automatic filing and
-approval paths would carry the grant through without an operator ever
-seeing it.
+requirement never overrides a disallow list" the rule; the reason is
+[operator admission](../../principles/operator-admission.md).
 
 So the mechanism needed is not a stronger `required_tools`. It is a grant
 whose *authority* is different from the requirement's, and whose effect is
