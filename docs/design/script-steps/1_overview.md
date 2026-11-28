@@ -79,8 +79,11 @@ bullet was rechecked at `d10fae79b`).
   effective OS sandbox or by restrictions the Orbit process inherited. Kernel confinement is
   opt-in, through a `sandbox:` on the executor definition, which wraps every activity that uses
   it. An activity's optional `fsProfile` selects the named policy profile; without one, the
-  built-in `unrestricted` profile applies with the policy's denies
-  (`crates/orbit-core/assets/executors/local-shell.yaml`). A nonzero exit fails the step
+  built-in `unrestricted` profile applies (`crates/orbit-core/assets/executors/local-shell.yaml`).
+  On macOS, Seatbelt applies the profile's read and modify rules, including policy denies. On
+  Linux, Bubblewrap enforces modify rules only: profile read rules, including `denyRead`, are not
+  enforced, so host reads stay available except for fixed credential and runtime-directory masks
+  and explicit caller-provided masks. A nonzero exit fails the step
   (`LocalShellFailed`) unless `allow_nonzero_exit` is set.
 - **The non-success outcome survives.** `StepOutcome { success, output, message }`
   (`crates/orbit-engine/src/activity_job/job_executor/exec_ctx.rs`) still carries
