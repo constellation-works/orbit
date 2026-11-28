@@ -115,7 +115,8 @@ fn dispatched_agent_implement_env(
     runtime: &OrbitRuntime,
     root: &Path,
     run_id: &str,
-    task_id: &str,
+    task_id: Option<&str>,
+    activity_input: Value,
 ) -> Env {
     use std::os::unix::fs::PermissionsExt as _;
 
@@ -173,7 +174,7 @@ fn dispatched_agent_implement_env(
         "agent_implement",
         run_id,
         audit,
-        &json!({"task_id": task_id, "workspace_path": root.join("repo")}),
+        &activity_input,
         None,
     )
     .unwrap();
@@ -197,7 +198,7 @@ fn dispatched_agent_implement_env(
     );
     assert_eq!(
         env.orbit_task_id().and_then(std::ffi::OsStr::to_str),
-        Some(task_id)
+        task_id
     );
     env
 }
@@ -214,7 +215,13 @@ pub(super) fn managed_pipeline_run_posts_and_closes_notices_as_agent() {
     );
 
     #[cfg(unix)]
-    let cli_env = dispatched_agent_implement_env(&runtime, root.path(), &run_id, &task);
+    let cli_env = dispatched_agent_implement_env(
+        &runtime,
+        root.path(),
+        &run_id,
+        Some(&task),
+        json!({"task_id": task, "workspace_path": root.path().join("repo")}),
+    );
     #[cfg(not(unix))]
     let cli_env = managed_pipeline_env(&run_id, Some(&task));
 
@@ -619,4 +626,94 @@ pub(super) fn managed_run_notice_authority_preserves_fail_closed_rejections() {
     .expect("unbound orchestrator with configured crew still works");
     assert_eq!(unbound_orch["notice"]["author"]["class"], "orchestrator");
     assert_eq!(unbound_orch["notice"]["author"]["crew"], "sol");
+}
+
+#[cfg(unix)]
+pub(super) fn bundled_activity_notice_uses_selected_task_and_refuses_ambiguity() {
+    let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+    let runtime = runtime_at(root.path());
+    let first = add_task(&runtime, "First bundled task");
+    let active = add_task(&runtime, "Active bundled task");
+    let run = insert_run(
+        &runtime,
+        "task_pr_pipeline",
+        Some(json!({"task_ids": [first, active]})),
+    );
+    let env = dispatched_agent_implement_env(
+        &runtime,
+        root.path(),
+        &run,
+        Some(&active),
+        json!({
+            "task_ids": [first, active],
+            "task_id": active,
+            "workspace_path": root.path().join("repo")
+        }),
+    );
+    let post = |env: &Env, title: &str| {
+        call_with_env(
+            &runtime,
+            env,
+            "orbit.notice.post",
+            json!({"kind": "info", "title": title, "linked_task": active}),
+            ToolEntryPoint::Cli,
+            local_cli_session(&runtime),
+        )
+    };
+    let notice = post(&env, "Selected activity").unwrap();
+    assert_eq!(notice["notice"]["author"]["task_id"], active);
+    let id = notice["notice"]["id"].as_str().unwrap();
+    let mismatched = Env::from_vars([
+        ("ORBIT_MANAGED_RUN_CONTEXT", "1"),
+        ("ORBIT_RUN_ID", run.as_str()),
+        ("ORBIT_TASK_ID", first.as_str()),
+        ("ORBIT_ACTIVE_TASK_ID", active.as_str()),
+    ]);
+    refused(
+        post(&mismatched, "Wrong task"),
+        "notice_poster_unidentified",
+    );
+    refused(
+        call_with_env(
+            &runtime,
+            &mismatched,
+            "orbit.notice.close",
+            json!({"id": id, "reason": "cleared"}),
+            ToolEntryPoint::Cli,
+            local_cli_session(&runtime),
+        ),
+        "notice_poster_unidentified",
+    );
+    let ambiguous = dispatched_agent_implement_env(
+        &runtime,
+        root.path(),
+        &run,
+        None,
+        json!({"task_ids": [first, active], "workspace_path": root.path().join("repo")}),
+    );
+    refused(
+        post(&ambiguous, "Ambiguous activity"),
+        "notice_poster_unidentified",
+    );
+    refused(
+        call_with_env(
+            &runtime,
+            &ambiguous,
+            "orbit.notice.close",
+            json!({"id": id, "reason": "cleared"}),
+            ToolEntryPoint::Cli,
+            local_cli_session(&runtime),
+        ),
+        "notice_poster_unidentified",
+    );
+    let closed = call_with_env(
+        &runtime,
+        &env,
+        "orbit.notice.close",
+        json!({"id": id, "reason": "cleared"}),
+        ToolEntryPoint::Cli,
+        local_cli_session(&runtime),
+    )
+    .unwrap();
+    assert_eq!(closed["notice"]["closed"]["by"]["task_id"], active);
 }

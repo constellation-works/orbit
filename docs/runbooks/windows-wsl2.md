@@ -38,7 +38,7 @@ not supported.
   and `<repo>/.orbit/`) lives **inside one distribution, as one Linux user**.
   Windows only hosts that distribution and, optionally, launches Orbit's MCP
   server through `wsl.exe`.
-- Orbit's sandbox fails closed. If the Bubblewrap probe fails inside WSL,
+- Orbit's sandbox refuses rather than degrades ([principle](../principles/refuse-not-degrade.md)). If the Bubblewrap probe fails inside WSL,
   agent dispatch stays blocked. Do not set an executor's `spec.sandbox: off`,
   enable `allow_fallback`, install a setuid `bwrap`, or loosen the
   distribution's user-namespace policy to get past it; report the probe detail

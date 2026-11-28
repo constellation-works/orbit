@@ -26,20 +26,20 @@ delegated within boundaries they choose.
   [optimistic merging](optimistic-merging.md#where-the-operator-stays-in-control) explain
   its place in delivery. The [auto-tasks design](../design/auto-tasks/2_design.md) describes
   the exceptions for configured initial statuses and no-diff tasks. The operator can opt
-  into a [drain that approves qualifying pilot-assessed proposals](../CONFIG.md#workflowstanding_drain--the-opt-in-drain-keeper),
+  into a [drain that approves qualifying pilot-assessed proposals](../config/workflow.md#workflowstanding_drain--the-opt-in-drain-keeper),
   subject to holds and opt-outs; this is delegated admission, not self-approval. The config
   layer does not enforce operator-only settings, so that boundary also depends on workspace rules.
 - Forced lifecycle transitions belong to the operator; the agent tool surface has no force
-  override. See the [lifecycle configuration](../CONFIG.md#human-crews) for the distinct
+  override. See the [lifecycle configuration](../config/crews.md#human-crews) for the distinct
   human-crew path and its limits.
 - The [granted-tools design](../design/granted-tools/1_scope.md) reserves grants to the
   operator. A grant does not confer operator capability; current mutating grants use reviewed
   proposals rather than live calls. Operators can also put grants in auto-task definitions.
-- The operator chooses review layers: [review configuration](../CONFIG.md#review-and-operation--automatic-review)
+- The operator chooses review layers: [review configuration](../config/review.md#review-and-operation--automatic-review)
   and the [review gate](../design/review-gate/1_overview.md) describe the available modes.
   The [agent gate rules](../agents/gate-rules.md#gates) describe the constrained light-delivery
   exception. Review is one admission choice, not a separate source of agent authority.
-- The operator configures [crew pools](../CONFIG.md#automatic-crew-pools-by-complexity);
+- The operator configures [crew pools](../config/crews.md#automatic-crew-pools-by-complexity);
   Orbit draws from those pools under the configured rules.
 
 ## What it costs
