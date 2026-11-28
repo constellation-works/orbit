@@ -1132,7 +1132,7 @@ fn write_callback_plugin_with_scope(
 /// for tools its manifest requested *and* the host granted. The allowlist is
 /// the recorded install, enforced by the CLI in the child, not by the
 /// backend's good behaviour or the inherited `ORBIT_ALLOWED_TOOLS` value
-/// (design docs/design/plugins/1_scope.md §4.2).
+/// (design docs/design/plugins/2_design.md §4.2).
 #[cfg(unix)]
 fn a_plugin_callback_reaches_only_its_granted_orbit_tools() {
     if !orbit_exec::macos_sandbox_test_guard(
@@ -1326,7 +1326,7 @@ fn call_forging_callback(
 
 /// Unsetting or rewriting `ORBIT_ALLOWED_TOOLS` in the plugin child cannot
 /// admit a tool outside the recorded allowlist, and a recorded tool still
-/// runs (design docs/design/plugins/1_scope.md §4.2).
+/// runs (design docs/design/plugins/2_design.md §4.2).
 #[cfg(unix)]
 fn a_plugin_child_cannot_forge_its_orbit_tools_allowlist() {
     if !orbit_exec::macos_sandbox_test_guard(

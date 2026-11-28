@@ -160,7 +160,7 @@ impl RuntimeKernel {
     ///
     /// The plugin host keeps a refused plugin's tool *names* on the registry
     /// so a caller that names one is told why rather than told the tool does
-    /// not exist (design `docs/design/plugins/1_scope.md` §4.1, §4.8). That
+    /// not exist (design `docs/design/plugins/2_design.md` §4.1, §4.8). That
     /// only holds if inactive also means uncallable, which is here: the
     /// registry is the one place every workspace caller passes through.
     /// Enforce a persisted tool disable before built-in application dispatch.
@@ -282,7 +282,7 @@ pub fn check_activity_tool_policy(
 /// surface", which an operator may still call and which
 /// `ensure_tool_agent_facing` decides; for a plugin tool it means the plugin
 /// was refused at load, and nothing may call it until the operator fixes what
-/// the diagnostic names (design `docs/design/plugins/1_scope.md` §4.1).
+/// the diagnostic names (design `docs/design/plugins/2_design.md` §4.1).
 pub fn check_tool_active(
     registry: &orbit_tools::ToolRegistry,
     name: &str,

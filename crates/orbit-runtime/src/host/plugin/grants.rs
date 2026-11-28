@@ -2,7 +2,7 @@
 //! tamper-evident [ORB-12778].
 //!
 //! `orbit plugin enable --grant …` is the only source of a plugin's authority
-//! (design `docs/design/plugins/1_scope.md` §4.1), but the grant set it
+//! (design `docs/design/plugins/2_design.md` §4.1), but the grant set it
 //! records lives in the `plugins` row of `orbit.db`, and a backend holding
 //! `orbit_tools` can write that file — ORB-12777 confined the sandbox to named
 //! paths and the store is necessarily one of them, because the child cannot

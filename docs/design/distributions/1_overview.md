@@ -20,7 +20,7 @@ Status: accepted and shipped. Orbit supports persistent seeding policies and TOM
 workspace presets. This page records that behavior; ideas that were superseded or remain
 unbuilt are called out separately in [2_design.md](./2_design.md#future-ideas-not-part-of-the-shipped-scope).
 
-Bearing: The [plugin standard](../plugins/1_scope.md) lets a package add tools, CLI groups,
+Bearing: The [plugin standard](../plugins/1_overview.md) lets a package add tools, CLI groups,
 panels, routines, auto-tasks, activities, jobs and skills from one manifest. Plugin-seeded
 definitions land disabled and become active only through an operator act. Orbit also ships
 7 default routines and 18 default auto-tasks: 25 defaults in total. By default it seeds all

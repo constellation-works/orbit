@@ -967,7 +967,7 @@ What is missing:
 - **Notice delivery.** `notify` needs a no-answer *notice* record in the decision
   channel, and a transport to deliver it. The `orbit-decision-mail` transport is
   implemented for decision requests and digests, behind the default-off decision channel
-  ([human decision channel](../human-decision-channel/1_scope.md), phases 4 and 5). It
+  ([human decision channel](../human-decision-channel/2_design.md), phases 4 and 5). It
   does not by itself deliver `notify` notices: the no-answer notice record and its
   integration are still missing. Until they ship, notices appear in the dashboard
   Automation view, in `orbit automation explain` and in the clock log.
@@ -1058,7 +1058,7 @@ target: job:media_ingest_pipeline    # workspace-defined
     `automation.watch_roots`, which only an operator edits, or, for a plugin-seeded
     definition, a place inside that plugin's granted `permissions.fs.read`. The
     operator consented to that grant at `orbit plugin enable`
-    ([plugins](../plugins/1_scope.md)).
+    ([plugins](../plugins/1_overview.md)).
   - **Limits.** Depth and file-count limits apply (§4).
   - **No sandbox access.** The trigger grants no sandbox read to the job.
 - **Unreadable roots.** On macOS, `~/Downloads`, `~/Documents`, `~/Desktop` and

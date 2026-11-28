@@ -1,5 +1,5 @@
 //! `[plugins.<ns>]`: dynamically named configuration sections owned by
-//! installed plugins (design `docs/design/plugins/1_scope.md` §1).
+//! installed plugins (design `docs/design/plugins/2_design.md` §1).
 //!
 //! The shape mirrors `[crews.<name>]`: the keys are not known at compile time,
 //! so they are not registry rows, but a live `plugins.<ns>.<key>` is

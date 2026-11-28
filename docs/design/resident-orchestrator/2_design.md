@@ -109,7 +109,7 @@ not the prompt.
   refused. Friction updates and delivery recovery may also write in another covered workspace on
   the same host; every other write stays in the mandate's own workspace.
 - **Enforcement.** The cycle's tool grant is computed from the authority at cycle start and frozen
-  for the cycle, like a dispatched attempt's [granted tools](../granted-tools/1_scope.md). A right the
+  for the cycle, like a dispatched attempt's [granted tools](../granted-tools/1_overview.md). A right the
   mandate lacks is a tool the cycle cannot call; a workspace outside scope fails the call in core.
   Exercising a resident right on an operator-only operation requires the run's authenticated
   resident broker [ORB-26169]. Core also refuses `resident.*` writes whose cycle id is not the mandate's live cycle.

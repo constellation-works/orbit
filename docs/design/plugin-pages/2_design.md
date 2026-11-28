@@ -24,7 +24,7 @@ Section 1 (the manifest), section 2 (serving), section 3 (the bridge and kit) an
 [ORB-29537]). The rest describes what later phases make true. The problem, the goal and the
 build tasks are in the
 [overview](./1_overview.md). The plugin manifest,
-grants and tool dispatch it builds on are the [plugin standard](../plugins/1_scope.md)'s.
+grants and tool dispatch it builds on are the [plugin standard](../plugins/2_design.md)'s.
 
 ## 1. The manifest
 

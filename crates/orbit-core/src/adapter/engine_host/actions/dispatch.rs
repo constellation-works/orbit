@@ -78,7 +78,7 @@ pub(crate) fn run_deterministic(
     }
     match deterministic_action {
         // The one deterministic action a plugin contributes behaviour through
-        // (design `docs/design/plugins/1_scope.md` §4.5). It reaches a plugin
+        // (design `docs/design/plugins/2_design.md` §4.5). It reaches a plugin
         // tool and nothing else: an ordinary built-in still goes through
         // `orbit_tool_call`, so a plugin activity cannot use this variant to
         // borrow Orbit's own authority under plugin provenance.

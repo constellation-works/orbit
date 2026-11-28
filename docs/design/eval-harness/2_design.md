@@ -101,7 +101,7 @@ What that buys, with no core change:
 - **Leakage control by configuration.** The workspace's own `config.toml` turns off mid-run steering (`workflow.mid_run_steering.enabled`) and experiments (which also keeps crew memory off, since it runs only under a memory-arm experiment), and holds no workspace notices.
 - **A capacity cap.** The workspace's drain has its own concurrency (§9).
 
-What it costs: a second clone with cold build caches; a `config.toml` that has to mirror the live workspace's validation commands, tag instructions and crews by hand (`config.toml` is read-only to a plugin: [plugins 1_scope.md §4.3](../plugins/1_scope.md)); and no priority relation between the two workspaces' drains.
+What it costs: a second clone with cold build caches; a `config.toml` that has to mirror the live workspace's validation commands, tag instructions and crews by hand (`config.toml` is read-only to a plugin: [plugins 2_design.md §4.3](../plugins/2_design.md)); and no priority relation between the two workspaces' drains.
 
 The alternative, running replay candidates in the live workspace at `low` priority, gets priority below delivery for free but needs a lock exemption for candidates, an analytics exclusion on every surface, and leaves the original task one `orbit.search` away from the candidate. §14 Q1 asks Daniel to confirm the choice.
 
@@ -177,7 +177,7 @@ For the first two, the first version detects and does not prevent. Each invocati
 
 ### 5.1 The job
 
-Each candidate task carries a `delivery:eval_replay_candidate` tag, which routes it to the plugin's delivery job through the same gate as the shipped pipelines ([plugins 1_scope.md §4.5](../plugins/1_scope.md)). The job declares `task_delivery: { modes: [local] }` and `owns_task_worktree: true`. Its step sequence and the candidate task's lifecycle status at each step:
+Each candidate task carries a `delivery:eval_replay_candidate` tag, which routes it to the plugin's delivery job through the same gate as the shipped pipelines ([plugins 2_design.md §4.5](../plugins/2_design.md)). The job declares `task_delivery: { modes: [local] }` and `owns_task_worktree: true`. Its step sequence and the candidate task's lifecycle status at each step:
 
 1. `worktree_setup` at the entry's base commit (§1.4). Admission moves the candidate from `backlog` to `in-progress` and binds the run ID (`setup.rs:195-204`).
 2. `agent_implement`, the shipped activity, unchanged (`in-progress`).
@@ -404,9 +404,9 @@ Two earlier mechanisms covered nearby ground and were removed. This design shoul
 
 ## 11. Plugin shape
 
-**Location.** Its own repository, `constellation-works/orbit-eval`, checked out under `codebases/` like other components. Plugin trees are never vendored into a workspace repository and a `source:` inside it is refused ([plugins 1_scope.md §3](../plugins/1_scope.md)). Namespace `eval`; tools are `eval.<verb>`, CLI `orbit eval <verb>`. Installed once per host with `orbit plugin add`, pinned per workspace in `.orbit/plugins.yaml`.
+**Location.** Its own repository, `constellation-works/orbit-eval`, checked out under `codebases/` like other components. Plugin trees are never vendored into a workspace repository and a `source:` inside it is refused ([plugins 2_design.md §3](../plugins/2_design.md)). Namespace `eval`; tools are `eval.<verb>`, CLI `orbit eval <verb>`. Installed once per host with `orbit plugin add`, pinned per workspace in `.orbit/plugins.yaml`.
 
-**Backend.** `exec`, Python, one process per call. A plugin tool call is capped at 300 seconds (`PLUGIN_TIMEOUT_CEILING_MS`, `crates/orbit-tools/src/plugin/backend/model.rs:4`), so no tool builds or tests anything itself. Long work (the implementer, validation, held-out tests) runs as job steps; tools only file tasks, capture artifacts and compute readouts. The held-out test step is a [script step](../script-steps/1_scope.md) or the shipped validation activity with the entry's command; task 3 of §13 picks one.
+**Backend.** `exec`, Python, one process per call. A plugin tool call is capped at 300 seconds (`PLUGIN_TIMEOUT_CEILING_MS`, `crates/orbit-tools/src/plugin/backend/model.rs:4`), so no tool builds or tests anything itself. Long work (the implementer, validation, held-out tests) runs as job steps; tools only file tasks, capture artifacts and compute readouts. The held-out test step is a [script step](../script-steps/2_design.md) or the shipped validation activity with the entry's command; task 3 of §13 picks one.
 
 **Which workspaces enable it.**
 

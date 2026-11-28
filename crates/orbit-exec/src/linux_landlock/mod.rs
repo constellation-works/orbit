@@ -26,7 +26,7 @@
 //! ([`LandlockBoundary`]). That ruleset additionally takes over every
 //! write-side right, so a write outside the granted roots is refused by the
 //! kernel, and on ABI 4 refuses TCP for a plugin whose manifest declares
-//! `network: none` (design `docs/design/plugins/1_scope.md` §4.3).
+//! `network: none` (design `docs/design/plugins/2_design.md` §4.3).
 //!
 //! A write root carries read rights so the child can read what it writes,
 //! except where the root is at or above a read deny or a caller read

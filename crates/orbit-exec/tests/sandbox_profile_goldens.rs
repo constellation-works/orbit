@@ -66,7 +66,7 @@ const ROOT_ENV: &str = "ORBIT_TEST_SANDBOX_GOLDEN_ROOT";
 const CHILD_TEST: &str = "render_compiled_profiles_in_a_pinned_environment";
 const CHILD_DEADLINE: Duration = orbit_common::test_env::CHILD_TEST_DEADLINE;
 
-/// The macOS script profile (`docs/design/script-steps/1_scope.md` §3), for a
+/// The macOS script profile (`docs/design/script-steps/2_design.md` §3), for a
 /// run worktree cwd and for the workspace root read-only.
 const SCRIPT_CASES: [(&str, bool); 2] =
     [("script_worktree", true), ("script_read_only_root", false)];

@@ -1,5 +1,5 @@
 //! When a task's `granted_tools` may change (design
-//! `docs/design/granted-tools/1_scope.md` §1, "Change window").
+//! `docs/design/granted-tools/2_design.md` §1, "Change window").
 //!
 //! Who may change a grant is decided at the tool chokepoint, which requires
 //! operator authority for any `granted_tools` input. This module decides

@@ -333,7 +333,7 @@ pub const DASHBOARD_CLAIM_RECOVER: GovernedOperation = GovernedOperation {
 ///
 /// Plugin tools are not enumerable at compile time, so they enter the
 /// registry through generic rows rather than one row per tool
-/// (design `docs/design/plugins/1_scope.md` §4.1). The manifest chooses the
+/// (design `docs/design/plugins/2_design.md` §4.1). The manifest chooses the
 /// execution kind and requests agent access; recorded operator consent is
 /// required before that declaration can activate.
 ///

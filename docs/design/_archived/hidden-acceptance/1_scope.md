@@ -21,7 +21,7 @@ tracked diff and untracked inputs), runs an inventory of end-to-end scenarios in
 isolated Orbit root, records NOT_RUN and BLOCKED honestly, and files deduplicated
 defects without repairing them. [Automation triggers](../../automation-triggers/2_design.md)
 provide the `deliveries_landed` schedule that `delivery-code-review` uses for
-after-landing review. The [plugin standard](../../plugins/1_scope.md) lets a plugin ship
+after-landing review. The [plugin standard](../../plugins/1_overview.md) lets a plugin ship
 tools, auto-tasks, jobs and a private `{{plugin_state}}` directory from one manifest.
 [Finding verification](../finding-verification/1_overview.md) establishes that a review-filed
 defect is confirmed before it becomes work. This scope builds on all four and changes

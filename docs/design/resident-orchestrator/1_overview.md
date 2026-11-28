@@ -57,7 +57,7 @@ Two things push this into Orbit rather than into a constellation script. First, 
 exist: the clock and routines ([routines](../routines/1_overview.md)), typed state triggers and
 condition triggers ([condition-triggers](../condition-triggers/1_overview.md)), the activity and job
 machinery ([activity-job](../activity-job/1_overview.md)), the human decision channel
-([human-decision-channel](../human-decision-channel/1_scope.md)), fleet notices
+([human-decision-channel](../human-decision-channel/1_overview.md)), fleet notices
 ([fleet-notices](../fleet-notices/1_overview.md), [ORB-21207]) and `orbit attention`
 ([operator-attention](../operator-attention/1_overview.md), [ORB-21164]). A resident is a composition of those,
 plus a mandate record, a checkpoint contract and an authority boundary. Second, authority has to be

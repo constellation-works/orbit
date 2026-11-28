@@ -121,7 +121,7 @@ minutes = 45
 
 ## Plugins — `.orbit/plugins.yaml` and `[plugins.<ns>]`
 
-Plugins install once per machine (`~/.orbit/plugins/<ns>/<version>/`); enable state and grants are host-local. A checkout keeps only its gitignored pin file, and `orbit plugin sync` installs what it names. Linked Git worktrees share the main checkout's `.orbit/plugins.yaml`: runtime loading, `orbit plugin sync` and `orbit plugin doctor` read that file and ignore a worktree-local one. Operator guide (installs, grants, source builds, workspace toggles): the orbit-setup [plugins reference](../../crates/orbit-core/assets/skills/orbit-setup/references/plugins-install.md). Manifest spec: [plugin standard](../design/plugins/1_scope.md).
+Plugins install once per machine (`~/.orbit/plugins/<ns>/<version>/`); enable state and grants are host-local. A checkout keeps only its gitignored pin file, and `orbit plugin sync` installs what it names. Linked Git worktrees share the main checkout's `.orbit/plugins.yaml`: runtime loading, `orbit plugin sync` and `orbit plugin doctor` read that file and ignore a worktree-local one. Operator guide (installs, grants, source builds, workspace toggles): the orbit-setup [plugins reference](../../crates/orbit-core/assets/skills/orbit-setup/references/plugins-install.md). Manifest spec: [plugin standard](../design/plugins/2_design.md).
 
 ```yaml
 # .orbit/plugins.yaml — per-checkout, gitignored

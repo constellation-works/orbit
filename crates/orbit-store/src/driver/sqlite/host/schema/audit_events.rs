@@ -151,7 +151,7 @@ pub(super) fn apply_audit_actor_alias_v2(conn: &Connection) -> Result<(), OrbitE
 
 /// v25 `audit_plugin_grants` migration: the grant set (JSON array of grant
 /// names) a plugin-backed tool call ran under, beside the three provenance
-/// columns (design `docs/design/plugins/1_scope.md` §4.4). Additive.
+/// columns (design `docs/design/plugins/2_design.md` §4.4). Additive.
 pub(super) fn apply_audit_plugin_grants(conn: &Connection) -> Result<(), OrbitError> {
     ensure_audit_events_schema_v25(conn)?;
     add_column_if_missing(conn, "audit_events", "plugin_grants", "TEXT")
@@ -195,7 +195,7 @@ pub(super) fn apply_audit_tool_call_index(conn: &Connection) -> Result<(), Orbit
 
 /// v30 `audit_plugin_secrets` migration: the names (JSON array) of the
 /// declared secrets a plugin-backed tool call's request carried, beside the
-/// plugin provenance columns (design `docs/design/plugins/1_scope.md` §3,
+/// plugin provenance columns (design `docs/design/plugins/2_design.md` §3,
 /// "Plugin secrets"). Names only; a value never reaches the table. Additive:
 /// an older binary ignores the column.
 pub(super) fn apply_audit_plugin_secrets(conn: &Connection) -> Result<(), OrbitError> {
@@ -206,7 +206,7 @@ pub(super) fn apply_audit_plugin_secrets(conn: &Connection) -> Result<(), OrbitE
 /// v31 `audit_plugin_secret_updates` migration: each secret a plugin-backed
 /// tool call's backend asked to rotate through `secret_updates`, as a JSON
 /// object of name to `applied` or `refused` (design
-/// `docs/design/plugins/1_scope.md` §3, "Plugin secrets"). Names and outcomes
+/// `docs/design/plugins/2_design.md` §3, "Plugin secrets"). Names and outcomes
 /// only; a value never reaches the table. Additive: an older binary ignores
 /// the column.
 pub(super) fn apply_audit_plugin_secret_updates(conn: &Connection) -> Result<(), OrbitError> {

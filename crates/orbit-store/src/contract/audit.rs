@@ -167,16 +167,16 @@ pub struct AuditInvocationFields<'a> {
     /// from it, so no query that reads trusted identity can pick it up.
     pub self_reported_actor: Option<&'a str>,
     /// The plugin behind this tool call: name, version, and manifest digest
-    /// (design `docs/design/plugins/1_scope.md` §4.4). `None` for every
+    /// (design `docs/design/plugins/2_design.md` §4.4). `None` for every
     /// built-in and legacy external tool.
     pub plugin: Option<&'a PluginProvenance>,
     /// The names of the declared secrets the plugin call's request carried
-    /// (design `docs/design/plugins/1_scope.md` §3, "Plugin secrets"). Names
+    /// (design `docs/design/plugins/2_design.md` §3, "Plugin secrets"). Names
     /// only: no value reaches an audit row. Empty for every other call.
     pub plugin_secrets: &'a [String],
     /// Each secret the plugin's backend asked to rotate, by name, and whether
     /// the update was applied or refused (design
-    /// `docs/design/plugins/1_scope.md` §3, "Plugin secrets"). `None`, or an
+    /// `docs/design/plugins/2_design.md` §3, "Plugin secrets"). `None`, or an
     /// empty map, for every call that rotated nothing.
     pub plugin_secret_updates: Option<&'a BTreeMap<String, PluginSecretUpdateStatus>>,
     /// Set when a run's plugin broker executed the call for a sandboxed

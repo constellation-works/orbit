@@ -31,7 +31,7 @@ pages as sub-tabs under Plugins inside the sandboxed frame with its bridge relay
 
 ## 1. Motivation
 
-The [plugin standard](../plugins/1_scope.md) gives a plugin one manifest, one sandboxed backend,
+The [plugin standard](../plugins/1_overview.md) gives a plugin one manifest, one sandboxed backend,
 consented grants and audited tool calls. Its dashboard contribution is declarative: panels drawn
 by one generic renderer, and link tiles ([ORB-12738]).
 

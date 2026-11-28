@@ -1,18 +1,23 @@
 ---
-title: "Task pilot — assessment persistence"
+title: Task Pilot — Design
 owner: orbit
 created_date: 2026-11-09
-updated_date: 2026-11-22
+updated_date: 2026-11-28
 status: Draft
 feature: task-pilot
-doc_role: scope
+doc_role: design
 type: design
-summary: "Pilot assessment artifacts, compact receipt comments, and compatibility with inline audits."
-stage: shipped
-next: "—"
+summary: "Design: pilot assessment artifacts, compact receipt comments, no-diff verdict tagging, and compatibility with inline audits."
+tags: [task-pilot]
 ---
 
-# Task pilot — assessment persistence
+# Task Pilot — Design
+
+This doc holds the mechanisms behind [1_overview.md](./1_overview.md), which states the problem and the goal.
+
+## Shape
+
+### Assessment persistence
 
 [ORB-23677] stores the assessment as a task artifact and leaves a one-line comment. A pilot still
 decides selectors, crew, complexity and admission using the same assessment schema. Apply stores

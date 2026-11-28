@@ -151,7 +151,7 @@ admitting work on that assumption. The proposal treats three kinds of other task
 - **Symbol-granular overlap.** A file stops being a single lock only when every selector on both
   sides of it is a `symbol:` that resolves to a source range. Any `file:`/`dir:` selector, or an
   unresolvable symbol, falls back to today's file lock. Symbol resolution is language-specific,
-  so it lives in a plugin (orbit-graph or the [symbol-risk-index](../symbol-risk-index/1_scope.md)
+  so it lives in a plugin (orbit-graph or the [symbol-risk-index](../symbol-risk-index/1_overview.md)
   parser), never in core.
 - **Verify actual diffs at landing, not declarations.** Pilot-declared footprints are predictions,
   and implementing agents routinely edit beyond them (imports, `mod.rs`, shared helpers, tests).

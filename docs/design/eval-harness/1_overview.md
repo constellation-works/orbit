@@ -56,7 +56,7 @@ Nothing is implemented. The table maps each concern to where the design settles 
 | Bake-off: lifecycle, locks, review, pick, cleanup | [2_design.md §8](./2_design.md#8-bake-off-job) | [locks/index.rs](../../../crates/orbit-runtime/src/stored/locks/index.rs), [pr/open/superseded.rs](../../../crates/orbit-engine/src/executor/automation/vcs/pr/open/superseded.rs), [worktree/gc/sweep.rs](../../../crates/orbit-engine/src/executor/automation/vcs/worktree/gc/sweep.rs) |
 | Capacity and spend | [2_design.md §9](./2_design.md#9-capacity-and-spend) | [task.rs dispatch order](../../../crates/orbit-types/src/task/model/task.rs), [provider_limit/budget.rs](../../../crates/orbit-config/src/provider_limit/budget.rs) |
 | Relation to experiments | [2_design.md §10](./2_design.md#10-relation-to-live-experiments) | [experiments scope](../experiments/1_overview.md) |
-| Plugin location, tools, schemas, authority | [2_design.md §11](./2_design.md#11-plugin-shape) | [plugins scope](../plugins/1_scope.md) |
+| Plugin location, tools, schemas, authority | [2_design.md §11](./2_design.md#11-plugin-shape) | [plugins](../plugins/1_overview.md) |
 | Build order and open questions | [2_design.md §13](./2_design.md#13-build-order) and [§14](./2_design.md#14-open-questions-for-daniel) | — |
 
 ## Task References

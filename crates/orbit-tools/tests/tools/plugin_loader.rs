@@ -1,5 +1,5 @@
 //! `orbit plugin validate` semantics against the design's manifest example
-//! and the documented rejections (docs/design/plugins/1_scope.md §2), and the
+//! and the documented rejections (docs/design/plugins/2_design.md §2), and the
 //! archive members a plugin source install refuses.
 #![allow(missing_docs)]
 #![allow(clippy::expect_used, clippy::unwrap_used)]

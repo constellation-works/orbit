@@ -1,6 +1,6 @@
 //! Register installed plugins into the runtime tool registry.
 //!
-//! Fail closed per plugin (design `docs/design/plugins/1_scope.md` §4.9): a
+//! Fail closed per plugin (design `docs/design/plugins/2_design.md` §4.9): a
 //! plugin whose manifest no longer loads, whose `requires` no longer hold,
 //! whose namespace collides, whose required grants the operator has not
 //! recorded, or whose `plugins` row this host cannot verify is reported as one

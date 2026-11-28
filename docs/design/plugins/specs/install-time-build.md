@@ -21,7 +21,7 @@ Status: implemented by [ORB-13887]. §6 maps each decision to the code and recor
 refines it. A change to any decision below is a security decision and needs a change to this
 document in the same PR.
 
-Builds on [1_scope.md](../1_scope.md) §3 (plugin sources, pin file, staged install) and §4.1–§4.3
+Builds on [2_design.md](../2_design.md) §3 (plugin sources, pin file, staged install) and §4.1–§4.3
 (grants, execution protocol, backend sandbox).
 
 ## 1. What is being added
