@@ -1850,6 +1850,19 @@ fn assert_rendered_path(path: &str, link: &Path, programs_on_path: bool) {
     }
 }
 
+/// The newest audit row a `plugin test` run recorded.
+#[cfg(unix)]
+fn latest_plugin_test_row(fixture: &Fixture) -> Value {
+    let rows = fixture.json(["audit", "list", "--limit", "1000", "--json"]);
+    rows.as_array()
+        .expect("audit rows")
+        .iter()
+        .filter(|row| row["command"] == "plugin" && row["subcommand"] == "test")
+        .max_by_key(|row| row["id"].as_i64())
+        .cloned()
+        .expect("a plugin test audit row")
+}
+
 #[cfg(unix)]
 #[test]
 fn scaffold_validate_test_and_install_run_end_to_end() {
@@ -1958,6 +1971,12 @@ fn scaffold_validate_test_and_install_run_end_to_end() {
         .failure()
         .stdout(predicate::str::contains("status_reports_ready"))
         .stdout(predicate::str::contains("failed"));
+    // The audit row names the failing case instead of recording a bare exit 1.
+    let failed_row = latest_plugin_test_row(&fixture);
+    assert_eq!(failed_row["status"], "failure", "{failed_row}");
+    assert_eq!(failed_row["exit_code"], 1, "{failed_row}");
+    let failure = failed_row["error_message"].as_str().unwrap_or_default();
+    assert!(failure.contains("status_reports_ready"), "{failed_row}");
 
     fixture
         .success([
@@ -1969,6 +1988,11 @@ fn scaffold_validate_test_and_install_run_end_to_end() {
             "--update-goldens",
         ])
         .stdout(predicate::str::contains("updated"));
+    // A passing suite audits as success with no failure message.
+    let passed_row = latest_plugin_test_row(&fixture);
+    assert_eq!(passed_row["status"], "success", "{passed_row}");
+    assert_eq!(passed_row["exit_code"], 0, "{passed_row}");
+    assert!(passed_row["error_message"].is_null(), "{passed_row}");
     let updated = std::fs::read_to_string(&golden).expect("read updated golden");
     assert!(updated.contains("status: ready"), "{updated}");
 
