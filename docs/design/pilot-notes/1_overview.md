@@ -6,7 +6,7 @@ updated_date: 2026-11-28
 last_validated: 2026-11-28
 status: Accepted
 stage: building
-next: "Show pilot notes on the dashboard task detail [ORB-29589]. Task-pilot stays on the owner, so [ORB-29590] is documentation only and claimed tasks take the owner's notes (2_design.md §6)"
+next: "Show pilot notes on task detail [ORB-29589]; task-pilot stays owner-side"
 feature: pilot-notes
 doc_role: overview
 type: design
