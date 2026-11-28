@@ -3105,10 +3105,7 @@ fn task_and_delivery_refusals_use_the_calling_surface_syntax() {
         json!({"action": "show", "id": task_id}),
         "not_found",
     );
-    assert_message_parts(
-        &missing_run,
-        &["orbit_run {\"action\":\"list\"}", "orbit_task_show"],
-    );
+    assert_message_parts(&missing_run, &["ask an operator to check run history"]);
     assert!(!message_contains(&missing_run, "orbit run "));
     assert!(!message_contains(&missing_run, "orbit.task."));
     client.call_tool_ok("orbit_run", json!({"action": "list"}));
@@ -3126,7 +3123,7 @@ fn task_and_delivery_refusals_use_the_calling_surface_syntax() {
         json!({"action": "show", "id": "jrun-bogus"}),
         "not_found",
     );
-    assert_message_parts(&missing_run_id, &["orbit_run {\"action\":\"list\"}"]);
+    assert_message_parts(&missing_run_id, &["ask an operator to check run history"]);
     assert!(!message_contains(&missing_run_id, "orbit_task_show"));
     assert!(!message_contains(&missing_run_id, "task show"));
     let missing =
@@ -3150,7 +3147,7 @@ fn task_and_delivery_refusals_use_the_calling_surface_syntax() {
 
 /// [ORB-17648] A missing artifact path refuses with the listing remedy in the
 /// caller's own surface syntax: the CLI names `orbit task show --fields
-/// artifacts`, while MCP keeps the `orbit.task.show` tool-call spelling.
+/// artifacts`, while MCP uses the advertised `orbit_task_show` spelling.
 #[test]
 fn missing_artifact_names_the_listing_in_each_surface_syntax() {
     let workspace = McpWorkspace::init();
@@ -3178,7 +3175,7 @@ fn missing_artifact_names_the_listing_in_each_surface_syntax() {
     );
     let message = refused["message"].as_str().unwrap_or_default();
     assert!(
-        message.contains("orbit.task.show") && message.contains("field: \"artifacts\""),
+        message.contains("orbit_task_show") && message.contains("field: \"artifacts\""),
         "the MCP refusal must keep the MCP listing spelling: {refused}"
     );
 
