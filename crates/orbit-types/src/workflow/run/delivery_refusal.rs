@@ -76,7 +76,8 @@ pub enum DeliveryRefusal {
     ReviewBudgetExhausted,
     /// `candidate_resume` refused a published candidate that an operator must
     /// either repair explicitly or discard. The refusal message is unchanged.
-    /// Integrity and authority refusals stay failures.
+    /// A pushed head that is not the reviewed publication head is held here
+    /// [ORB-29909]; other integrity and authority refusals stay failures.
     SourceRepairDecision,
     /// `worktree_setup` found an existing branch or registered checkout whose
     /// tip does not match the freshly resolved base. Setup leaves the branch

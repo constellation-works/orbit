@@ -212,7 +212,8 @@ recovery can proceed. Their `delivery_*` diagnostic codes are listed in
 `candidate_resume` holds as `delivery_source_repair_decision` when a published
 candidate needs an operator to inspect explicit source repair or discard the
 candidate (no unique requeue binding, a publication that predates the current
-binding, a retained local branch that moved, a source that is not an exact
+binding, a pushed head that is not the reviewed publication head, a retained
+local branch that moved, a source that is not an exact
 owner-local single-task execution, or a source that is live, discarded,
 changed, or lacks an applied requeue). The refusal message is unchanged and
 names that next step. The task stays as the refusing action left it: the hold
@@ -1005,7 +1006,8 @@ identity refusals end with the same reason code, except
 local identity missing` refusal. That block is the requeue guard and is
 unchanged. A later `candidate_resume` that still meets an operator-decision
 refusal (no unique requeue binding, a publication that predates the current
-binding, a retained local branch that moved, a source that is not an exact
+binding, a pushed head that is not the reviewed publication head, a retained
+local branch that moved, a source that is not an exact
 owner-local single-task execution, or a source that is live, discarded,
 changed, or lacks an applied requeue) holds the run as
 `delivery_source_repair_decision` with the same message and next step. It does
