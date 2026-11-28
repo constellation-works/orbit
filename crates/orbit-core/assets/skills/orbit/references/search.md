@@ -84,4 +84,4 @@ orbit doctor
 Reindex replaces task chunks from the task store and reports task/chunk counts.
 The `search-index` doctor check reports indexed tasks versus stored tasks.
 Search requires no model download or separate process. The database keeps its
-legacy `semantic.db` filename; see the upgrade runbook for migration details.
+legacy `semantic.db` filename; see the [upgrade runbook](https://github.com/constellation-works/orbit/blob/main/docs/runbooks/upgrades.md) for migration details.
