@@ -293,6 +293,7 @@ pub(crate) fn attention_query(
             &mut candidates,
             &open_tasks,
         );
+        super::stale_base_source::read(&source_context, reads_runtime, &mut candidates);
         provider_source::read_ci_attention(
             &source_context,
             session_context,
