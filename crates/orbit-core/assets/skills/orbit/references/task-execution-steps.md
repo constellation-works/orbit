@@ -124,13 +124,16 @@ When the envelope lists it, the delivery pipeline runs those commands
 on the final candidate after base synchronization. For a diff, leave them to it,
 except the pre-handoff checks the workspace guide requires for a diff (such as
 `make ci-guards`): run those before handoff even when the list names them, and
-run focused checks plus every required check the list omits. Record each
-pre-handoff command and its actual outcome separately from the listed command's
-`not_run` entry for pipeline final validation; the same command can appear in
-both phases. A pre-handoff run does not count as pipeline final validation.
-Respect the workspace guide's applicable no-diff, light-delivery and platform
-exceptions. A clean no-op or already-landed handoff skips that validation, so it
-still runs every required check.
+run focused checks plus every required check the list omits. Two phases have
+two records. The pre-handoff phase records each command it ran and that
+command's actual outcome in the task execution summary (Step 5). The pipeline
+final-validation phase records each listed command as `not_run` in the same
+summary. The same command can appear in both phases. A pre-handoff run does not
+count as pipeline final validation. The required pipeline receipts (the
+validation logs the pipeline attaches to the task) remain the record of
+committed-candidate validation. Respect the workspace guide's applicable
+no-diff, light-delivery and platform exceptions. A clean no-op or already-landed
+handoff skips that validation, so it still runs every required check.
 
 For a task tagged `no-diff-expected`, in owner or claimed mode,
 run no workspace gates or required validation commands and attach no
@@ -221,6 +224,14 @@ task's notice with `orbit.notice.close` when it stops being true.
 Persist `execution_summary` via `orbit.task.update` **first**.
 
 Before handoff, record each golden or named expected result the diff changed on the task, in the execution summary: its path or test name, and the criterion or decision that justifies the new value. Reviewers check the diff against that record.
+
+Record validation in the same execution summary, with the phase named. Under
+the pre-handoff phase, list each command you ran with its actual outcome
+(`passed`, `failed`, or `not_run` with its reason). Under the pipeline
+final-validation phase, list each `task.final_validation_commands` entry as
+`not_run`. Record deferred coverage from a sanctioned sandbox deferral as
+`not_run` under the phase where it was deferred, never as passed. The summary
+never replaces the pipeline's receipts for committed-candidate validation.
 
 Then consider friction: if the task surfaced a contradicted assumption, a
 recurring failure mode, a non-obvious gotcha, or an incident root cause, record
