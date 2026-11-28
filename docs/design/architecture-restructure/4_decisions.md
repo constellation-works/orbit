@@ -2,8 +2,8 @@
 title: Architecture Restructure — Decisions
 owner: claude
 created_date: 2026-11-25
-updated_date: 2026-11-26
-last_validated: 2026-11-26
+updated_date: 2026-11-27
+last_validated: 2026-11-27
 status: Accepted
 feature: architecture-restructure
 doc_role: decisions
@@ -12,7 +12,7 @@ summary: Decision log for the architecture restructure — the opaque Core, apps
 tags: [architecture-restructure, orbit-core, orbit-store, orbit-runtime, architecture]
 paths: ["crates/orbit-core/**", "crates/orbit-runtime/**", "crates/orbit-store/**", "crates/orbit-engine/src/context/hosts/**", "crates/orbit-cmd/**", "crates/orbit-common/src/env_vars.rs"]
 related_features: [orbit-core, operations-as-data]
-related_artifacts: [ORB-28318, ORB-27886, ORB-15932]
+related_artifacts: [ORB-28318, ORB-27886, ORB-15932, ORB-28427]
 ---
 
 # Architecture Restructure — Decisions
@@ -424,6 +424,73 @@ No R19 breach exists. A change that adds one of these findings fails the gate, i
 | R26 | the wrapper | 2,585 breaches |
 | R6–R10, R17, R24, R25 | review only | none |
 
+## Pass A moves raise the baseline's `&OrbitRuntime` count until Pass B
+
+**Recorded:** 2026-11-27 · [ORB-29440] for [ORB-28427], landed at `4022037bf`
+**Code anchors:** `scripts/architecture-ratchet-baseline.json`, `scripts/check-architecture-ratchet.py`
+
+### Context
+
+The baseline for `orbit_runtime_ref_param_fns` is 1524, up from 1171 before [ORB-28427], while `impl_orbit_runtime_files` fell in the same landings. A reader who takes the ratchet to only shrink the old shape will read that rise as a regression. [ORB-28427] moved the notice, search, evolution and crew memory operations from `application/` into `app/`. Pass A (2_design.md §11, step 5) turns each `impl OrbitRuntime` block into functions that still take `rt: &OrbitRuntime`, so one count falls and the other rises. The landing edited the baseline by hand: `--write-baseline` refuses to raise any count, and no CI guard rejects growth in this file.
+
+### Decision
+
+[ORB-28427] changed two entries of `scripts/architecture-ratchet-baseline.json`:
+
+| Count | Before (`a19679759`) | Landed (`4022037bf`) | At `f1df352b3` |
+| --- | ---: | ---: | ---: |
+| `impl_orbit_runtime_files` | 324 | 308 (-16) | 258 |
+| `orbit_runtime_ref_param_fns` | 1171 | 1240 (+69) | 1524 |
+
+Other phase 5 landings also raised the count by hand; `git log -p -- scripts/architecture-ratchet-baseline.json` lists each step. The +69 is the landing's share, not the current rise.
+
+**Approved source.** Daniel approved the design as proposed on 2026-11-25 [ORB-28318]. The design does not name a count rise. The rise follows from decision 2 above, "Operations are functions in one app per subject", and Pass A as approved. The formation chief's audit receipt 104 judged that the temporary increase fits that approval.
+
+**Retirement.** Phase 5, Pass B: [ORB-28451] to [ORB-28454] change each `&OrbitRuntime` parameter to the lowest layer it reaches (`&Base`, `&Stored`, `&Host` or `&Run`). Phase 7, [ORB-28455], deletes the wrapper, and with it both counts reach zero. Until then each pass lowers its baseline with `--write-baseline` as it lands.
+
+### Consequences
+
+- Cost: until Pass B, the baseline admits 353 more functions with an `&OrbitRuntime` parameter than the 1171 at `a19679759` (1524 now), and the ratchet does not catch regrowth up to that number.
+- Alternative not taken: leave each moved method in its `impl` block until Pass B could narrow it in the same change. That keeps the baseline flat, but §11 orders the passes so the move comes first.
+
+### Lint exemptions for test-support-only items keep the dead-code allow until a caller exists
+
+**Recorded:** 2026-11-27 · [ORB-29440] for [ORB-28427], landed at `4022037bf`
+**Code anchors:** `crates/orbit-core/src/app/crew_memory/proposal.rs::crew_memory_proposal_board`, `crates/orbit-core/src/app/crew_memory/space.rs::crew_memory_write`, `crates/orbit-core/src/app/crew_memory/record.rs::decide_proposal`, `crates/orbit-core/src/app/evolution/ledger.rs::reconcile_evolution_checkpoint`
+
+### Context
+
+The landing added 13 `#[cfg_attr(not(feature = "test-support"), allow(dead_code))]` attributes in five files, and its message gives no reason. The cause is where the code moved. Before the landing, the crew-memory and evolution code sat under `application/`, and `lib.rs` exempts that tree from dead code module-wide in a non-test build (`#[allow(dead_code, unused_imports)] pub(crate) mod application`). None of the 13 had a caller in a non-test build then either; that exemption hid it. The landing moved them to `app/`, which has no such exemption, so each now needs its own. Each reaches a caller outside its module only through a `test-support` re-export (`crew_memory/mod.rs:51`, `:54` and `:57`; `evolution/mod.rs:28`). A build without that feature, such as the `orbit` binary's, has no route to them.
+
+### Decision
+
+The 13 exemptions stay. Each is removed in the change that gives its item a non-test caller or deletes it; the table gives the condition per row. At `f1df352b3` all 13 are present at moved line numbers, none has been removed, and none has a non-test caller.
+
+Verification: at `f1df352b3` each item name was searched with `rg -w` across `crates/`, and the table lists every caller found. Apart from the re-exports and the `match` arms that name `MemoryWriter::Operator`, the only callers outside each item's own file are integration tests under `crates/orbit-core/tests/`. The compiler was not run without the attributes, so this rests on the call graph and the cfg gates.
+
+| Site | Item | Callers | Removal condition |
+| --- | --- | --- | --- |
+| `app/crew_memory/proposal.rs:41` | `crew_memory_proposal_board` | Re-exported under `test-support` (`mod.rs:51`); test `tests/runtime/crew_memory.rs:215` | A surface reads the board outside tests, or the board is deleted |
+| `proposal.rs:17` | `RECENTLY_CLOSED_LIMIT` | Only inside the board (`:77`, `:90`) | Same as the board |
+| `proposal.rs:24` | `ClosedBoardEntry` | Built and sorted only in the board (`:67`, `:83`, `:119`) | Same as the board |
+| `proposal.rs:118` | `recently_closed_order` | Only the board (`:89`) | Same as the board |
+| `proposal.rs:131` | `proposal_view` | The board (`:62`, `:79`) and `open_proposal_views` (`:169`) | Same as the board |
+| `proposal.rs:150` | `open_proposal_views` | The board (`:94`) | Same as the board |
+| `proposal.rs:176` | `proposal_tokens` | `open_proposal_views` (`:154`) | Same as the board |
+| `proposal.rs:184` | `similar_proposal_tokens` | `open_proposal_views` (`:165`) | Same as the board |
+| `app/crew_memory/record.rs:51` | `decide_proposal` | Re-exported under `test-support` (`mod.rs:54`); test `tests/runtime/crew_memory.rs:159`. The `memory.decide_proposal` call at `record.rs:59` is the store's method | A surface decides a proposal |
+| `app/crew_memory/space.rs:295` | `crew_memory_write` | Re-exported under `test-support` (`mod.rs:57`); tests `tests/runtime/crew_memory.rs:283` and `tests/runtime/distributed_drain/experiment_admission.rs:323` | An operator write path calls it outside tests |
+| `space.rs:55` | `operator_memory_writer` | Only `crew_memory_write` (`:303`) | Same as `crew_memory_write` |
+| `app/crew_memory/mod.rs:87` | `MemoryWriter::Operator` | Constructed only in `operator_memory_writer` (`space.rs:58`); other sites match it | Same as `crew_memory_write` |
+| `app/evolution/ledger.rs:123` | `reconcile_evolution_checkpoint` | Re-exported under `test-support` (`evolution/mod.rs:28`); test `tests/runtime/resident_authority.rs:739` | A production path calls it, or it is deleted |
+
+### Consequences
+
+- Cost: the `allow` also hides dead code added to these items later, because the lint stays off for them until the attribute is removed.
+- Alternative not taken: gate each item with `#[cfg(feature = "test-support")]`, or delete it, so it is absent from a build without the feature instead of silenced. That is a code change and is not made here.
+- Crew memory is dormant (`proposal.rs` header), so the proposal and operator-write rows stay test-only until a surface uses them.
+- `reconcile_evolution_checkpoint` repairs a projection after an interrupted post-commit ingestion, and no production path runs it. Whether one should is a separate decision.
+
 ## Task References
 
 - [ORB-28318] — carried the proposal to Daniel's approval.
@@ -440,5 +507,7 @@ No R19 breach exists. A change that adds one of these findings fails the gate, i
 - [ORB-28647] — resolved the root, worker invocation and actor once in the CLI entry.
 - [ORB-28390] — resolved the process role once in `Base`.
 - [ORB-28417] — will close `orbit-core`'s exports.
+- [ORB-28427] — moved the notice, search, evolution and crew memory operations into `app/` at `4022037bf`; the ratchet change and the 13 exemptions above are its record. A commit with the same subject, `6425e2200`, is not an ancestor of `f1df352b3`.
+- [ORB-29440] — recorded the count changes, the approved source, the retirement condition and the 13 exemptions.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
