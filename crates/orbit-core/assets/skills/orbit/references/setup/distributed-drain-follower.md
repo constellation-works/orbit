@@ -91,11 +91,14 @@ returns.
     and the next due attempt settles it, or `orbit run auto --stop` retries it
     at once.
 - The leaf's agent runs in claimed mode: the sandbox denies `~/.ssh`, so it
-  has no direct route to the owner. The run broker carries only the scoped
-  claimed-task read and other owner calls documented in the [owner surface
-  reference](distributed-drain-owner-surface.md); the
-  agent is denied `orbit.task.update` and returns its execution summary as
-  step output. `claim_handoff` carries it to the owner's `execution_summary`.
+  has no direct route to the owner. The run broker carries only a closed list
+  of owner calls: reads (`orbit.search`, `orbit.task.list`, `orbit.task.show`,
+  and `orbit.task.artifact` `get`) that may name any task in the claimed
+  workspace, and writes and notices bound to the claimed task and run. The
+  [claimed-mode steps](../task-execution-steps.md#step-5--summarize-and-hand-off)
+  list each call; the agent is denied `orbit.task.update` and returns its
+  execution summary as step output. `claim_handoff` carries it to the owner's
+  `execution_summary`.
   Never loosen the sandbox to give an agent direct owner access.
 - A leaf that fails before handing off settles its claim as a failure: the
   owner's task moves to `blocked` with the leaf run, failed step and error in
