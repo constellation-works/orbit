@@ -46,7 +46,7 @@ const READINESS_OVERRIDDEN_EVENT: &str = "readiness_overridden";
 /// The readiness gates `task` fails now that an operator's explicit ship
 /// overrides, in a stable order. `schedule_held` is whether its `not_before`
 /// still holds it.
-pub(in crate::application::admission) fn operator_overridden_gates(
+pub(in crate::unit::admission) fn operator_overridden_gates(
     task: &Task,
     schedule_held: bool,
 ) -> Vec<String> {
@@ -67,7 +67,7 @@ pub(in crate::application::admission) fn operator_overridden_gates(
 /// naming each holder, the tasks a reservation holds the files for, and the
 /// files it held, ordered by holder. A reservation that can no longer be read
 /// is named by its id alone.
-pub(in crate::application::admission) fn lock_conflict_gate(
+pub(in crate::unit::admission) fn lock_conflict_gate(
     runtime: &OrbitRuntime,
     conflicts: &[TaskLockConflict],
 ) -> String {
@@ -124,7 +124,7 @@ fn reservation_task_ids(runtime: &OrbitRuntime, reservation_id: &str) -> Option<
 }
 
 /// Record that `actor`'s explicit ship of `task_id` overrode `gates`.
-pub(in crate::application::admission) fn record_readiness_override(
+pub(in crate::unit::admission) fn record_readiness_override(
     runtime: &OrbitRuntime,
     task_id: &str,
     gates: &[String],

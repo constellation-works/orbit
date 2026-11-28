@@ -4,15 +4,14 @@
 //! executor census, with the requester declared by its request, after
 //! reconciling abandoned repair footprints. `admission` owns those rules,
 //! and it also drives the distributed drain, so a direct
-//! call from here would close a cycle. This port is the way in: `admission`
-//! implements it on [`OrbitRuntime`](crate::OrbitRuntime), so composing the
-//! runtime binds it.
+//! call from here would close a cycle. This port uses a runtime-backed
+//! adapter bound in `app::port`.
 
 use orbit_common::OrbitError;
 use orbit_store::contract::{ExecutorCapability, ExecutorCensus};
 
 /// The reconciliation and census operations implemented by `admission`.
-pub(in crate::application) trait DistributedAdmissionPort {
+pub(crate) trait DistributedAdmissionPort {
     /// Reconcile stopped repair-only reservations before taking the owner's
     /// admitting snapshot. Implemented by admission, as for local drains.
     fn reconcile_pull_recovery_context(&self) -> Result<(), OrbitError>;

@@ -165,15 +165,16 @@ pub(crate) fn reserve_locks(
     // gate does not wait on the holders that refused it; the leaf
     // takes its footprint before its first edit, unless an operator's
     // explicit ship overrode those local locks below.
-    let published_delivery = if let Some((deferred, publication)) = runtime
-        .published_delivery_reservation(
-            input,
-            &output,
-            tool_context.agent_name.clone(),
-            tool_context.model_name.clone(),
-            tool_context.reservation_owner.clone(),
-        )
-        .map_err(|err| DispatchError::action_failed(action, format!("{err}")))?
+    let published_delivery = if let Some((deferred, publication)) =
+        crate::app::port::JobAdmission(runtime)
+            .published_delivery_reservation(
+                input,
+                &output,
+                tool_context.agent_name.clone(),
+                tool_context.model_name.clone(),
+                tool_context.reservation_owner.clone(),
+            )
+            .map_err(|err| DispatchError::action_failed(action, format!("{err}")))?
     {
         output = deferred;
         Some(publication)
@@ -239,11 +240,10 @@ fn operator_lock_override(
             conflicts.clone(),
         )?,
     };
-    let gate = runtime.lock_conflict_gate(&conflicts);
+    let gate = crate::app::port::JobAdmission(runtime).lock_conflict_gate(&conflicts);
     let actor = runtime.actor().label.clone();
     for task_id in task_ids {
-        JobAdmissionPort::record_readiness_override(
-            runtime,
+        crate::app::port::JobAdmission(runtime).record_readiness_override(
             task_id,
             std::slice::from_ref(&gate),
             &actor,

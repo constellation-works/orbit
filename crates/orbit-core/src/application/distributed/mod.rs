@@ -65,7 +65,7 @@ mod settlement;
 mod task_port;
 mod work_fit;
 
-pub(in crate::application) use admission_port::DistributedAdmissionPort;
+pub(crate) use admission_port::DistributedAdmissionPort;
 pub(crate) use auth_failures::pilot_run_crew_from_draws;
 pub(crate) use auto_task_port::DistributedAutoTaskPort;
 pub use contract::{

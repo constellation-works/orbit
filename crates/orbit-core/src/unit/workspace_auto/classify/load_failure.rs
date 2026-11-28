@@ -8,7 +8,7 @@ use orbit_types::task::Task;
 use orbit_types::workflow::{ChildDispatchPhase, JobRunState, JobTargetType};
 
 use crate::OrbitRuntime;
-use crate::application::admission::pass_error::PassError;
+use crate::unit::admission::PassError;
 
 use super::super::drains::LEAF_JOB_NAME;
 

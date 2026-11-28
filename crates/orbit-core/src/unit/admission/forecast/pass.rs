@@ -4,13 +4,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use chrono::Duration;
 use resource_fit::{PassFit, ResourceFit};
 
-use crate::application::admission::surface_reservation::{
-    MAX_SURFACE_RESERVATIONS, withhold_reserved_by,
-};
-use crate::application::admission::unknown_footprint::{
+use crate::runtime::host_resource::profile::ProfileSource;
+use crate::unit::admission::surface_reservation::{MAX_SURFACE_RESERVATIONS, withhold_reserved_by};
+use crate::unit::admission::unknown_footprint::{
     FootprintGuard, FootprintWait, FootprintWave, whole_tree_holder,
 };
-use crate::runtime::host_resource::profile::ProfileSource;
 
 use super::model::{ForecastAdmission, ForecastPassScratch, ForecastWait};
 use super::task_set::ForecastTaskSet;

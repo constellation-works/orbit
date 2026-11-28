@@ -11,11 +11,10 @@
 //! - Tool names: `tool_name_migration`.
 //! - Workspace and host: `distributed`, `pull_drain`,
 //!   `host_labels`, `change_watch`.
-//! - Policy: `application_authority`, `contracts`, `admission`,
+//! - Policy: `application_authority`, `contracts`,
 //!   `pilot_note`, `tag_instructions`.
 //! - `test_support` is compiled only for tests.
 
-pub(crate) mod admission;
 mod application_authority;
 pub mod automation;
 pub mod change_watch;

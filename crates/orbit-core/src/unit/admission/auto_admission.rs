@@ -35,7 +35,7 @@ use orbit_store::contract::ExecutionClaim;
 use orbit_types::task::{Task, TaskStatus};
 use serde_json::{Value, json};
 
-use super::claim_holders::claim_detail;
+use super::claim_holder::claim_detail;
 use super::gap_fit::GapFit;
 use super::perf_lane::{needs_perf_lane, perf_lane_detail, perf_lane_holder};
 use super::unknown_footprint::{FootprintGuard, FootprintWave};

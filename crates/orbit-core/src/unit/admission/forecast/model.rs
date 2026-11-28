@@ -4,7 +4,7 @@ use chrono::{DateTime, Utc};
 use orbit_types::task::Task;
 use resource_fit::ResourceFit;
 
-use crate::application::admission::unknown_footprint::FootprintWait;
+use crate::unit::admission::unknown_footprint::FootprintWait;
 
 use super::resource_fit;
 use super::task_set::ForecastTaskSet;

@@ -265,6 +265,33 @@ impl OrbitRuntime {
             .is_some())
     }
 
+    /// Why `task` waits out a provider limit at this admission: `Some` when
+    /// every crew it may run as is limited, `None` when it may be drawn.
+    pub(crate) fn provider_limit_deferral(
+        &self,
+        task: &Task,
+        pools: &CrewPools,
+        gate: &ProviderLimitGate,
+    ) -> Result<Option<String>, OrbitError> {
+        if gate.is_empty() {
+            return Ok(None);
+        }
+        let (candidates, source, hold, _) = self.held_crew_candidates(task, pools)?;
+        Ok(
+            match self.provider_limited_candidates(
+                task,
+                pools,
+                hold.as_ref(),
+                gate,
+                &candidates,
+                &source,
+            )? {
+                LimitedDraw::Wait(detail) => Some(detail),
+                LimitedDraw::Unlimited | LimitedDraw::Narrowed(..) => None,
+            },
+        )
+    }
+
     /// What `gate` leaves of `task`'s draw over `candidates`, which `source`
     /// produced and a standing `hold` has already narrowed.
     pub(in crate::application) fn provider_limited_candidates(
@@ -426,33 +453,6 @@ impl OrbitRuntime {
                     }),
                 ),
                 LimitedDraw::Unlimited | LimitedDraw::Wait(_) => (candidates, source, hold_reason),
-            },
-        )
-    }
-
-    /// Why `task` waits out a provider limit at this admission: `Some` when
-    /// every crew it may run as is limited, `None` when it may be drawn.
-    pub(in crate::application) fn provider_limit_deferral(
-        &self,
-        task: &Task,
-        pools: &CrewPools,
-        gate: &ProviderLimitGate,
-    ) -> Result<Option<String>, OrbitError> {
-        if gate.is_empty() {
-            return Ok(None);
-        }
-        let (candidates, source, hold, _) = self.held_crew_candidates(task, pools)?;
-        Ok(
-            match self.provider_limited_candidates(
-                task,
-                pools,
-                hold.as_ref(),
-                gate,
-                &candidates,
-                &source,
-            )? {
-                LimitedDraw::Wait(detail) => Some(detail),
-                LimitedDraw::Unlimited | LimitedDraw::Narrowed(..) => None,
             },
         )
     }

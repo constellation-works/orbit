@@ -273,7 +273,7 @@ No heartbeat or automatic reclamation is introduced. Age and TTL support inspect
 ## Owner ordering does not require a materialized queue
 
 **Recorded:** 2026-09 · design-review revision of the contract authored by [ORB-12488].
-**Code anchors:** `crates/orbit-core/src/application/admission/backlog_exclusion/ordering.rs::sort_tasks_for_automatic_dispatch`
+**Code anchors:** `crates/orbit-core/src/unit/admission/backlog_exclusion/ordering.rs::sort_tasks_for_automatic_dispatch`
 
 ### Context
 
@@ -709,7 +709,7 @@ is off on the Mac by design.
 ## No-diff-expected work does not hold context locks
 
 **Recorded:** 2026-10-06 · [ORB-14247]
-**Paths:** `crates/orbit-core/src/runtime/task/locks/`, `crates/orbit-core/src/application/admission/backlog_exclusion/`, `crates/orbit-engine/src/executor/automation/vcs/commit/actions.rs`
+**Paths:** `crates/orbit-core/src/runtime/task/locks/`, `crates/orbit-core/src/unit/admission/backlog_exclusion/`, `crates/orbit-engine/src/executor/automation/vcs/commit/actions.rs`
 
 ### Context
 
@@ -736,7 +736,7 @@ An unexpected diff is committed. `git_commit` treats a non-empty stage as a norm
 ## Admission prefers work only the requesting executor can run
 
 **Recorded:** 2026-10-20 · [ORB-17304] (refines [ORB-14938])
-**Code anchors:** `crates/orbit-types/src/task/model/task.rs::automatic_dispatch_cmp_with_affinity`, `crates/orbit-store/src/contracts/task/coordination/census.rs::census_dispatch_order`, `crates/orbit-store/src/boundary/coordination/selection.rs::TaskCommitBoundary::admission_snapshot`, `crates/orbit-core/src/application/admission/census.rs`
+**Code anchors:** `crates/orbit-types/src/task/model/task.rs::automatic_dispatch_cmp_with_affinity`, `crates/orbit-store/src/contracts/task/coordination/census.rs::census_dispatch_order`, `crates/orbit-store/src/boundary/coordination/selection.rs::TaskCommitBoundary::admission_snapshot`, `crates/orbit-core/src/unit/admission/executor_order.rs`
 
 ### Context
 

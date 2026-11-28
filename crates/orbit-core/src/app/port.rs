@@ -19,9 +19,11 @@ pub(crate) use super::routine::ResidentRoutineStatus;
 use crate::app::resident::ResidentRoutineStatusPort;
 use crate::app::{agent, codebase};
 use crate::application::automation::{AutomationAutoTaskPort, AutomationBoardPort};
-use crate::application::distributed::{DistributedAutoTaskPort, DistributedExperimentPort};
+use crate::application::distributed::{
+    DistributedAdmissionPort, DistributedAutoTaskPort, DistributedExperimentPort,
+};
 use crate::application::job::{
-    JobAutoConcurrencyPort, JobAutoTaskPort, JobDrainLeafPort, JobExperimentPort,
+    JobAdmissionPort, JobAutoConcurrencyPort, JobAutoTaskPort, JobDrainLeafPort, JobExperimentPort,
 };
 use crate::application::review::{ReviewCandidateSizePort, ReviewLandingDispatchPort};
 use crate::application::tag_instructions::TagInstructionExperimentPort;
@@ -29,12 +31,23 @@ use crate::application::task::{
     TaskCodebasePort, TaskCorpusPort, TaskEvolutionPort, TaskExperimentPort, TaskNoticePort,
     TaskResidentPort, TaskSweepFilingPort, TaskWorkspaceAutoPort,
 };
+pub(crate) use crate::unit::admission::{
+    DistributedPort as DistributedAdmission, JobPort as JobAdmission,
+};
 use crate::unit::landing;
 pub(crate) use crate::unit::landing::ReviewPort as ReviewLandingDispatch;
 pub(crate) use crate::unit::sweep_filing::TaskPort as TaskSweepFiling;
 pub(crate) use crate::unit::workspace_auto::{
     AutomationPort as AutomationBoard, DrainLeafPort as JobDrainLeaf,
     JobPort as JobAutoConcurrency, TaskPort as TaskWorkspaceAuto,
+};
+
+const _: () = {
+    const fn binds_distributed_admission<T: DistributedAdmissionPort>() {}
+    const fn binds_job_admission<T: JobAdmissionPort>() {}
+
+    binds_distributed_admission::<DistributedAdmission<'_>>();
+    binds_job_admission::<JobAdmission<'_>>();
 };
 
 const _: () = {

@@ -516,8 +516,7 @@ class RelativeImportTests(unittest.TestCase):
     def test_inherent_calls_from_task_into_upper_modules_rejected(self):
         # Each owner defines its own name, so a row's call is reported only when
         # the guard derives that owner's inherent names.
-        owners = ("automation", "job", "review", "distributed", "pull_drain",
-                  "admission")
+        owners = ("automation", "job", "review", "distributed", "pull_drain")
         self.check_rows(
             [("task/worker.rs",
               "impl OrbitRuntime {\n    pub(crate) fn drive_task(&self) {\n"
@@ -659,7 +658,7 @@ class RelativeImportTests(unittest.TestCase):
 
     def test_lower_modules_cannot_reach_workspace_auto(self):
         lowers = ("contracts", "task", "job", "automation", "review", "distributed",
-                  "pull_drain", "admission")
+                  "pull_drain", "../unit/admission")
         self.check_rows([
             row for lower in lowers for row in (
                 (f"{lower}/probe.rs", "use crate::unit::workspace_auto::Probe;\n"),
@@ -674,7 +673,7 @@ class RelativeImportTests(unittest.TestCase):
 
     def test_lower_modules_cannot_reach_the_forecast(self):
         lowers = ("contracts", "task", "job", "automation", "review", "distributed",
-                  "pull_drain", "admission", "../unit/workspace_auto")
+                  "pull_drain", "../unit/admission", "../unit/workspace_auto")
         self.check_rows([
             row for lower in lowers for row in (
                 (f"{lower}/probe.rs", "use crate::unit::backlog_forecast::Probe;\n"),
@@ -1252,7 +1251,7 @@ class RelativeImportTests(unittest.TestCase):
     def test_lower_modules_cannot_reach_sweep_filing(self):
         modules = (
             "contracts", "task", "job", "review",
-            "../unit/workspace_auto", "../unit/backlog_forecast",
+            "../unit/admission", "../unit/workspace_auto", "../unit/backlog_forecast",
         )
         self.check_rows([
             row for module in modules for row in (
@@ -1960,7 +1959,7 @@ class RelativeImportTests(unittest.TestCase):
     def test_commented_grouped_imports_rejected(self):
         for owner, modules in (
             ("job", ("distributed", "pull_drain", "review")),
-            ("task", ("job", "review", "distributed", "admission")),
+            ("task", ("job", "review", "distributed")),
         ):
             self.check_rows([
                 (f"{owner}/worker.rs", f"use {tree};\n")

@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 use super::super::drains::drain_run_id;
 use super::pool::{DEFAULT_POLL_SLEEP_SECONDS, templated_u64};
 use crate::OrbitRuntime;
-use crate::application::admission::pass_error::PassError;
+use crate::unit::admission::PassError;
 
 /// Consecutive admission passes a drain defers on a busy store lock before it
 /// fails with that cause. A deferred pass has already waited out one lock

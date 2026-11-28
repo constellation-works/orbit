@@ -44,7 +44,7 @@ pub(crate) use activity_tool_requirements::{
     drops_disallowed_requirements, granted_tool_refusal, implementing_activity_disallow_list,
     unliftable_required_tool_error,
 };
-pub(in crate::application) use admission_port::JobAdmissionPort;
+pub(crate) use admission_port::JobAdmissionPort;
 pub(crate) use admission_port::OPERATOR_READINESS_OVERRIDE_INPUT;
 pub use agent::{AgentInvokeResult, agent_invoke_result};
 pub(crate) use auto_concurrency_port::JobAutoConcurrencyPort;

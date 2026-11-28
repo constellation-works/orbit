@@ -248,8 +248,8 @@ fn capability_refusal(
 pub(super) fn follower_footprint_conflicts(
     runtime: &OrbitRuntime,
     task: &Task,
-    holders: &crate::application::admission::auto_admission::AdmissionHolders,
-) -> Vec<crate::application::admission::auto_admission::AdmissionConflict> {
+    holders: &crate::unit::admission::AdmissionHolders,
+) -> Vec<crate::unit::admission::AdmissionConflict> {
     let mut conflicts = crate::runtime::stored::locks::lock_context_files_for_task(
         task,
         &runtime.paths().repo_root,

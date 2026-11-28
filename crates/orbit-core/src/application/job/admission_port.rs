@@ -4,8 +4,7 @@
 //! published delivery, and a starved gate names the execution claims that
 //! hold its blockers. `admission` owns those rules, and it also drives job
 //! runs, so a direct call from here would close a cycle. This port is the
-//! way in: `admission` implements it on [`OrbitRuntime`](crate::OrbitRuntime),
-//! so composing the runtime binds it.
+//! way in through a runtime-backed adapter bound in `app::port`.
 
 use std::collections::BTreeSet;
 
@@ -25,7 +24,7 @@ use crate::runtime::stored::locks::ReservationOutcome;
 pub(crate) const OPERATOR_READINESS_OVERRIDE_INPUT: &str = "operator_readiness_override";
 
 /// Admission decisions a job's gate calls, implemented by `admission`.
-pub(in crate::application) trait JobAdmissionPort {
+pub(crate) trait JobAdmissionPort {
     /// Preview named admission without reserving a wave.
     fn preview_named_ship(&self, input: &Value) -> Result<Value, OrbitError>;
 

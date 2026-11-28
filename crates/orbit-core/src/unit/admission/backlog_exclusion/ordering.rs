@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use chrono::{DateTime, Utc};
 use orbit_types::task::Task;
 
-use crate::application::admission::census::DispatchOrder;
+use crate::unit::admission::executor_order::DispatchOrder;
 
 pub(super) const MAX_TASK_PARENT_CHAIN_DEPTH: usize = 32;
 
@@ -21,7 +21,7 @@ pub(crate) fn sort_tasks_for_automatic_dispatch<T: Borrow<Task>>(
     order.sort(tasks, expiring);
 }
 
-pub(in crate::application::admission) fn task_root_id(
+pub(in crate::unit::admission) fn task_root_id(
     task: &Task,
     task_lookup: &BTreeMap<String, Task>,
 ) -> String {

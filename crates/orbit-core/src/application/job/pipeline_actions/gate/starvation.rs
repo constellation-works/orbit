@@ -235,7 +235,8 @@ fn gate_starvation_defer(
     for task_id in task_ids {
         blocking_task_ids.remove(task_id);
     }
-    let (blocking_claims, claims_detail) = runtime.execution_claims_holding(&blocking_task_ids);
+    let (blocking_claims, claims_detail) =
+        crate::app::port::JobAdmission(runtime).execution_claims_holding(&blocking_task_ids);
 
     let mut detail = format!(
         "admission window never opened within {}; deferred to backlog",

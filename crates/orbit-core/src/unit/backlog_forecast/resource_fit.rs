@@ -25,8 +25,8 @@ use orbit_types::workflow::AutoConcurrencyMode;
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
-use crate::application::admission::forecast::{ForecastHostEvidence, RESOURCE_RECHECK_HOURS};
 use crate::runtime::host_resource::forecast::SimulatedHost;
+use crate::unit::admission::{ForecastHostEvidence, RESOURCE_RECHECK_HOURS};
 
 /// How recent the admission pass the baseline is read from must be.
 const BASELINE_EVIDENCE_MINUTES: i64 = 15;

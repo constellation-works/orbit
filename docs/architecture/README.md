@@ -25,7 +25,7 @@ unit coverage, path existence, first-line `//!` doc comments, and one destinatio
 2. **Pilot.** `orbit-core`'s `crates/orbit-core/src/application/task/pilot/` prepares and applies the
    task-pilot assessment; an authorized `--approve-proposed` drain can
    promote an eligible task from `proposed` to `backlog`.
-3. **Dispatch.** `crates/orbit-core/src/application/admission/` decides which backlog tasks automatic
+3. **Dispatch.** `crates/orbit-core/src/unit/admission/` decides which backlog tasks automatic
    dispatch may admit; `crates/orbit-core/src/unit/workspace_auto/` runs the auto-drain
    (classify, approval, window, readiness); `crates/orbit-core/src/application/pull_drain/` runs a
    follower's pull drain. Jobs are validated and reserved by

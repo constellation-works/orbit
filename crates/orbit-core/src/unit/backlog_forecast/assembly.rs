@@ -16,7 +16,7 @@ use super::options::Options;
 use super::review_modes::ReviewEvidenceGap;
 use super::usage::ForecastRun;
 use super::{dependencies, model, outcomes, resource_fit, rework, usage};
-use crate::application::admission::backlog_exclusion;
+use crate::unit::admission::{forecast_admission, no_drain_exclusion};
 
 /// Days the arrival rate is measured over.
 pub(super) const ARRIVAL_DAYS: i64 = 7;
@@ -46,7 +46,7 @@ pub(super) struct ForecastSimulationInputs {
     pub(super) done_recently: u64,
     pub(super) plan: dependencies::DependencyPlan,
     pub(super) resource_fit_report: Value,
-    pub(super) admission: crate::application::admission::forecast::ForecastAdmission,
+    pub(super) admission: crate::unit::admission::ForecastAdmission,
     pub(super) review_evidence_gaps: BTreeMap<String, ReviewEvidenceGap>,
 }
 
@@ -281,7 +281,8 @@ pub(super) fn assemble_forecast_simulation(
     let resource_fit = resource_fit::resource_fit_inputs(runtime, concurrency_source, now)?;
     // A blocked task re-enters the queue as backlog, with its own priority
     // and footprint.
-    let mut admission = runtime.forecast_admission(
+    let mut admission = forecast_admission(
+        runtime,
         queued
             .iter()
             .map(|task| match task.status {
@@ -306,7 +307,7 @@ pub(super) fn assemble_forecast_simulation(
         // Running work is already admitted. The frozen admission snapshot
         // has resolved operator schedule overrides for pending work.
         if !item.in_progress {
-            item.drain_hold = backlog_exclusion::no_drain_exclusion(task)
+            item.drain_hold = no_drain_exclusion(task)
                 .map(DrainHold::Excluded)
                 .or_else(|| {
                     admission

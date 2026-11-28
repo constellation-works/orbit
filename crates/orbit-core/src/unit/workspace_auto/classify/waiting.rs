@@ -5,20 +5,17 @@ use orbit_types::task::NO_DIFF_EXPECTED_TAG;
 use orbit_types::workflow::DrainWaitingTask;
 
 use crate::OrbitRuntime;
-use crate::application::admission::auto_admission::AdmissionSelection;
-use crate::application::admission::backlog_exclusion::{BacklogSnapshot, BacklogTaskExclusion};
-use crate::application::admission::claim_holders::ClaimHolders;
-use crate::application::admission::pass_error::PassError;
 use crate::runtime::stored::locks::lock_context_files_for_task;
+use crate::unit::admission::{
+    AdmissionSelection, BacklogSnapshot, BacklogTaskExclusion, ClaimHolders, PassError,
+};
 
 /// How many excluded tasks one pass records; the total is recorded beside the
 /// list so a truncated one still reads as truncated.
 const EXCLUDED_BACKLOG_RECORDED: usize = 20;
 
 /// An exclusion's reason code, as the drain records it.
-pub(super) fn waiting_reason(
-    reason: crate::application::admission::backlog_exclusion::BacklogTaskExclusionReason,
-) -> String {
+pub(super) fn waiting_reason(reason: crate::unit::admission::BacklogTaskExclusionReason) -> String {
     orbit_common::protocol::serde_string_label(&reason).unwrap_or_else(|| "excluded".to_string())
 }
 

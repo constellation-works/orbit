@@ -10,7 +10,7 @@ doc_role: decisions
 type: design
 summary: Design decisions for predictive admission — measure each task, forecast host-wide, keep the throttle as the backstop, assume unknown work is expensive, and never exceed the operator's ceiling or cancel work; superseded consequences are marked.
 tags: [auto-concurrency, drain, capacity, decisions]
-paths: ["crates/orbit-core/src/application/admission/auto_admission.rs", "crates/orbit-runtime/src/host/resource/**"]
+paths: ["crates/orbit-core/src/unit/admission/auto_admission.rs", "crates/orbit-runtime/src/host/resource/**"]
 related_features: [auto-concurrency, distributed-drain]
 related_artifacts: [ORB-15757]
 ---
