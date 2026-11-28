@@ -112,7 +112,7 @@ A new admission exclusion, `Scheduled`, beside `ProviderBackoff`:
   `reason: "scheduled"`, the `detail` and `not_before`; a pull drain records
   the owner's hold under the same `scheduled` code. They don't keep a drain
   alive. A drain that has nothing else to do ends as it does today.
-- **Forecast:** the [backlog forecast](../backlog-forecast/1_scope.md) places
+- **Forecast:** the [backlog forecast](../backlog-forecast/1_overview.md) places
   a scheduled task no earlier than its `not_before`.
 
 ### Reading by date

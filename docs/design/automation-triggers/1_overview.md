@@ -52,7 +52,7 @@ Goals are predictable bounded work, explainable deferrals, recoverable batches,
 explicit authority, and fewer mechanical orchestration turns. Non-goals are a
 generic event bus, user scripts, arbitrary transition subscriptions, cross-host
 failover, automatic engineering decisions, or a second job scheduler. User
-expressions were a non-goal too. [Condition triggers](../condition-triggers/1_scope.md)
+expressions were a non-goal too. [Condition triggers](../condition-triggers/1_overview.md)
 reverse that for type-checked, side-effect-free predicates only, as a `condition`
 kind beside the typed kinds [ORB-19288]; scripts and the other non-goals stand.
 Delivery-triggered review is not a replacement for required PR review or QA.
@@ -86,7 +86,7 @@ review coverage remains uncovered.
 | Batched and mixed-crew pilot preparation | [Operations](./references/operations.md#state-preparation-orb-11331) | [ORB-12746] batched members; [ORB-16839] partitioned crews (done) |
 | Alternatives, proposed YAML and future coordination | [Vision](./3_vision.md), [Design](./2_design.md) | [ORB-11315] authored the proposal (done) |
 | Review-policy relationship | [Review gate](../review-gate/2_design.md) | [ORB-11333] implemented coverage exclusions (done) |
-| Condition predicates | [Condition triggers](../condition-triggers/1_scope.md) | [ORB-19288] scoped the separate feature (done) |
+| Condition predicates | [Condition triggers](../condition-triggers/1_overview.md) | [ORB-19288] scoped the separate feature (done) |
 
 Execution waited until the OpenCode prerequisite [ORB-11295] landed as
 `8da5a925f` (PR 1382), an ancestor of the inspected checkout `c286142bce`.

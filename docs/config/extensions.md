@@ -2,7 +2,7 @@
 
 ## `[experiments]` — experiments over agent treatments
 
-An experiment compares a control arm against one or more treatment arms, each an overlay of instructions, skills, tools, crew, allowlisted config or crew memory ([scope](../design/experiments/1_scope.md)). An operator defines it with `orbit experiment create`, edits it only while it is a draft, and moves it through `start`, `pause`, `resume`, `reweight`, `conclude` or `abandon`; each change is an event with its actor, time and reason, listed by `orbit experiment show`. Agents may show and list experiments but not change them. An operator dashboard session can also create, edit, start, pause and resume experiments on Analytics › Experiments (`POST /api/diagnostics/experiments`, `PATCH /api/diagnostics/experiments/<id>`, and `POST /api/diagnostics/experiments/<id>/start`, `.../pause` or `.../resume`). These routes call the same create, update, start, pause and resume as the CLI, so the rules on this page and their refusal messages apply unchanged. The form offers only `experiments.config_keys` for config overlays and the configured crews for crew pools, and every write records actor `dashboard` with the given reason. `experiments.enabled` false or three experiments already running is answered as HTTP 409 with core's message.
+An experiment compares a control arm against one or more treatment arms, each an overlay of instructions, skills, tools, crew, allowlisted config or crew memory ([design](../design/experiments/1_overview.md)). An operator defines it with `orbit experiment create`, edits it only while it is a draft, and moves it through `start`, `pause`, `resume`, `reweight`, `conclude` or `abandon`; each change is an event with its actor, time and reason, listed by `orbit experiment show`. Agents may show and list experiments but not change them. An operator dashboard session can also create, edit, start, pause and resume experiments on Analytics › Experiments (`POST /api/diagnostics/experiments`, `PATCH /api/diagnostics/experiments/<id>`, and `POST /api/diagnostics/experiments/<id>/start`, `.../pause` or `.../resume`). These routes call the same create, update, start, pause and resume as the CLI, so the rules on this page and their refusal messages apply unchanged. The form offers only `experiments.config_keys` for config overlays and the configured crews for crew pools, and every write records actor `dashboard` with the given reason. `experiments.enabled` false or three experiments already running is answered as HTTP 409 with core's message.
 
 | Key | Default | What it does |
 |---|---|---|
@@ -73,7 +73,7 @@ Every write passes the same rules and is refused whole, naming the rule, when it
 
 ## `[seeding]` — which shipped defaults a workspace carries
 
-Orbit ships default routines (`.orbit/routines/`) and auto-tasks (`.orbit/auto_tasks/`) and seeds every one into a workspace. Two keys narrow that, per workspace or globally ([design](../design/distributions/1_scope.md)):
+Orbit ships default routines (`.orbit/routines/`) and auto-tasks (`.orbit/auto_tasks/`) and seeds every one into a workspace. Two keys narrow that, per workspace or globally ([design](../design/distributions/1_overview.md)):
 
 | Key | Default | What it does |
 |---|---|---|

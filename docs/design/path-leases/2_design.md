@@ -23,7 +23,7 @@ runtime operations, CLI, MCP and loopback REST surfaces (see §6; the CLI and MC
 including poll and SSE replay on Orbit Web and the lease listener, owner-clock lifetime
 handling, the phase-4 hard-lease queue with aging and expansion, and the dashboard Leases view
 are implemented; preemption remains later work. §1 is what exists today and what the proposal reuses. It leaves the pricing of shared paths to
-[conflict-budget](../conflict-budget/1_scope.md), and open directions to
+[conflict-budget](../conflict-budget/1_overview.md), and open directions to
 [3_vision.md](./3_vision.md).
 
 ## 1. What exists today

@@ -1,4 +1,4 @@
-//! The edge rules (`docs/design/condition-triggers/1_scope.md` §3, §8): one
+//! The edge rules (`docs/design/condition-triggers/2_design.md` §3, §8): one
 //! pass over observed subjects moves each subject between armed and fired,
 //! applies holds, continuity, cooldown, caps and the storm, chain and
 //! oscillation guards, and records new fires as intents. Pure: the caller

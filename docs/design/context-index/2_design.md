@@ -500,7 +500,7 @@ Order and size:
 
 The index-seeded condition passes if exploration is lower than Unseeded with the interval excluding zero and the held-out pass rate is not lower than Dispatched beyond the interval. The readout reports every condition with its interval and prints "no difference shown" where that is the case.
 
-What replay does not measure: the pilot (replay starts after it) and collisions between concurrent tasks. The pilot effect is read from shadow mode and the pilot scorecard (§8.1), which is a before-and-after comparison, not a randomised one; the live experiment mechanism cannot randomise pilot inputs today, because it assigns arms at first delivery admission, after the pilot has run ([experiments scope](../experiments/1_scope.md)). The collision effect is estimated offline from the existing footprint-miss and lock-contention rankings of `orbit.codebase` action `analytics`: for each recorded miss, would the predicted footprint have declared the file.
+What replay does not measure: the pilot (replay starts after it) and collisions between concurrent tasks. The pilot effect is read from shadow mode and the pilot scorecard (§8.1), which is a before-and-after comparison, not a randomised one; the live experiment mechanism cannot randomise pilot inputs today, because it assigns arms at first delivery admission, after the pilot has run ([experiments scope](../experiments/1_overview.md)). The collision effect is estimated offline from the existing footprint-miss and lock-contention rankings of `orbit.codebase` action `analytics`: for each recorded miss, would the predicted footprint have declared the file.
 
 ## 12. Concerns & Honest Limitations
 

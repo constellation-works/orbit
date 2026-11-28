@@ -24,7 +24,7 @@ boundary, storage, the routine, staleness and renames.
 
 Bearing: per-task riskiness is `crates/orbit-core/src/app/codebase/risk.rs`,
 initially shipped as estimator version 1 by [ORB-18690] and consumed by the backlog forecast
-([ORB-18691], [backlog-forecast scope](../backlog-forecast/1_scope.md#per-task-riskiness-estimator)).
+([ORB-18691], [backlog-forecast scope](../backlog-forecast/2_design.md#per-task-riskiness-estimator)).
 [ORB-19361] replaced its per-file maximum with a size-based fit: declared path count
 before a diff exists, lines changed once one does. [ORB-19376] subsequently stabilized finite
 fits and advanced the estimator to version 3 without changing those bases. Lines changed per

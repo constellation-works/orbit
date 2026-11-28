@@ -62,7 +62,7 @@ Nothing here is proven yet.
 
 - [Crew Memory — Design](./2_design.md)
 - [Outcome-checked memory consolidation (proposal)](./specs/consolidation.md)
-- [Experiments scope](../experiments/1_scope.md)
+- [Experiments scope](../experiments/1_overview.md)
 - [Agent Scorecards — Design](../agent-scorecards/2_design.md)
 - [Project Learnings — Decisions](../project-learnings/4_decisions.md)
 

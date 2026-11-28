@@ -1,6 +1,6 @@
 //! The condition language's declared environment: the variables each scope
 //! binds and every field an expression may read
-//! (`docs/design/condition-triggers/1_scope.md` §2), and the typed wait
+//! (`docs/design/condition-triggers/2_design.md` §2), and the typed wait
 //! environment of a job's auto-task steps
 //! (`docs/design/activity-job/specs/auto-task-step.md` §2). Nothing outside
 //! these tables is in the schema.

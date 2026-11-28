@@ -177,7 +177,7 @@ render_guide_rows() {
 }
 
 # The root of docs/ holds the index and the two maps of old headings; every other page
-# belongs in a folder that answers one question. See docs/design/doc-layout/1_scope.md.
+# belongs in a folder that answers one question. See docs/design/doc-layout/2_design.md.
 check_docs_root() {
   local file
   local name

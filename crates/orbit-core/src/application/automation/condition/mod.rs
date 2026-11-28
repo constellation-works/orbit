@@ -1,5 +1,5 @@
 //! Condition triggers on the workspace owner
-//! (`docs/design/condition-triggers/1_scope.md`): one pass of the firing
+//! (`docs/design/condition-triggers/2_design.md`): one pass of the firing
 //! protocol per definition per clock tick, `when:` guards beside the typed
 //! kinds, the enable dry run, `clear-stall`, and the read projections that
 //! explain, lists and the dashboard show. Task and workspace scopes only.

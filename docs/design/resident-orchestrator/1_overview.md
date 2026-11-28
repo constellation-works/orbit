@@ -55,7 +55,7 @@ opened."
 
 Two things push this into Orbit rather than into a constellation script. First, the parts already
 exist: the clock and routines ([routines](../routines/1_overview.md)), typed state triggers and
-condition triggers ([condition-triggers](../condition-triggers/1_scope.md)), the activity and job
+condition triggers ([condition-triggers](../condition-triggers/1_overview.md)), the activity and job
 machinery ([activity-job](../activity-job/1_overview.md)), the human decision channel
 ([human-decision-channel](../human-decision-channel/1_scope.md)), fleet notices
 ([fleet-notices](../fleet-notices/1_overview.md), [ORB-21207]) and `orbit attention`
