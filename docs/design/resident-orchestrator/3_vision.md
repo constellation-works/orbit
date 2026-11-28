@@ -40,7 +40,7 @@ may be distinctive about it. Nothing here is committed scope.
    ([owner-failover](../owner-failover/1_overview.md)), the mandate's lease and cadence need to move
    with it. The stateless cycle makes this mostly free; the lease handover is not designed.
 6. **Precedent-answered escalations.** A current corpus rule the operator marked auto can answer
-   a decision request that names it ([workspace-agent-corpus](../workspace-agent-corpus/1_scope.md));
+   a decision request that names it ([workspace-agent-corpus](../workspace-agent-corpus/1_overview.md));
    model-answered categories were removed with decision assistance in [ORB-22808]. Whether
    resident escalations may be answered from precedent is a human call, made after the reversal
    metric has data.

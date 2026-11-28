@@ -4,11 +4,9 @@ type: design
 title: "Project Learnings — Decisions"
 owner: claude
 created_date: 2026-05-09
-updated_date: 2026-10-10
+updated_date: 2026-11-28
 last_validated: 2026-10-10
 status: Accepted
-stage: parked
-next: "Retired by decision (ORB-10736); candidate to move under _archived"
 feature: project-learnings
 doc_role: decisions
 tags: ["project-learnings"]
@@ -16,7 +14,7 @@ tags: ["project-learnings"]
 
 # Project Learnings — Decisions
 
-The native project-learning subsystem is retired. This file keeps only the two decisions that still govern behavior: why the subsystem was removed and how leftover files are treated. The earlier design decisions it superseded are in git history.
+The native project-learning subsystem is retired; [1_overview.md](./1_overview.md) states the feature's parked stage and [2_design.md](./2_design.md) what remains of it. This file keeps only the two decisions that still govern behavior: why the subsystem was removed and how leftover files are treated. The earlier design decisions it superseded are in git history.
 
 ## Remove the native project-learning subsystem
 

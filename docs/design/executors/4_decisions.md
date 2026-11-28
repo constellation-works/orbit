@@ -2,11 +2,9 @@
 title: Executors — Decisions
 owner: claude
 created_date: 2026-06-13
-updated_date: 2026-08-11
+updated_date: 2026-11-28
 last_validated: 2026-10-12
 status: Draft
-stage: shipped
-next: "—"
 feature: executors
 doc_role: decisions
 type: design
@@ -19,13 +17,10 @@ related_artifacts: [ORB-00384, ORB-00400, ORB-10395, ORB-11294]
 
 # Executors — Decisions
 
-Layout note: as of [ORB-00400], this folder is intentionally decisions+specs-only.
-The External Executor Protocol retirement decision below (ORB-10395) records why that
-surface was removed; placeholder
-`1_overview.md`, `2_design.md`, and `3_vision.md` docs would imply a broader
-executor feature narrative that this work has not established. Add numbered docs
-only when a future executor-architecture task owns that narrative, and retire
-this exception in the same PR.
+The folder's overview and design are [1_overview.md](./1_overview.md) and
+[2_design.md](./2_design.md). [ORB-00400] once recorded this folder as a
+decisions+specs-only layout exception; the STD-06@5 scaffold migration retired that
+exception.
 
 ---
 

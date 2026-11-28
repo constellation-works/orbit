@@ -39,7 +39,7 @@ It does not:
   whatever the confidence (§Risk tiers);
 - turn its own answers into precedent without human confirmation (§Feedback);
 - replace the existing curated-rule auto-answer
-  ([workspace agent corpus](../../../workspace-agent-corpus/1_scope.md#curated-decision-rules)),
+  ([workspace agent corpus](../../../workspace-agent-corpus/2_design.md#5-curated-decision-rules)),
   which keeps running first;
 - show its prediction to the human in a category under measurement, because a
   visible prediction would bias the label it is scored against.
