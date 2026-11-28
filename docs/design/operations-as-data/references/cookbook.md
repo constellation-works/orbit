@@ -377,7 +377,7 @@ runtime need all come from the spec.
   delivery shell carries the managed-worker variables (`ORBIT_MANAGED_RUN_CONTEXT`,
   `ORBIT_WORKER_CONTEXT_REQUIRED` and the task and run IDs), and tests that
   open a runtime refuse with "managed worker runtime binding unavailable".
-  Follow [Safe Mutable CLI Fixtures](../../../DEVELOPMENT.md#safe-mutable-cli-fixtures):
+  Follow [Safe Mutable CLI Fixtures](../../../development/qa.md#safe-mutable-cli-fixtures):
   clear inherited authority on the child before setting its disposable home
   and workspace. Core's `run_isolated_test` and the CLI suites' `run_in_child`
   helpers do this before fixture setup.

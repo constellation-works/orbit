@@ -11,7 +11,7 @@ Gate time is a finite budget. Optimize the suite for the critical failures it ca
 
 ## Quality and the 400-second budget
 
-The complete **Check / Clippy / Test** CI job must finish in **at most 400 seconds of elapsed wall time at p90 over PR runs**. Measure from the job's start to completion, including setup, compilation, checks, linting, tests and required capability checks. Report queue wait separately: the wait before the Check job starts, and the part of its elapsed time the awaited jobs spent queued after it started. The workspace tests run in separate jobs (a test build and parallel nextest shards, [DEVELOPMENT.md](../DEVELOPMENT.md#hosted-ci)) that the Check job waits for, so its elapsed time covers them, including their runners' queue wait. Its `ci-await:` lines give each awaited job's start and completion. A pull request run tests only the affected crates and the always-run security and recovery crates ([PR test selection](../DEVELOPMENT.md#pr-test-selection)); the `agent-main` push run after the merge tests every crate. A local filtered run, a smaller test count or a sum of parallel testcase durations does not establish that the hosted job meets this budget. This is an acceptance requirement; documenting it does not claim the current suite already meets it.
+The complete **Check / Clippy / Test** CI job must finish in **at most 400 seconds of elapsed wall time at p90 over PR runs**. Measure from the job's start to completion, including setup, compilation, checks, linting, tests and required capability checks. Report queue wait separately: the wait before the Check job starts, and the part of its elapsed time the awaited jobs spent queued after it started. The workspace tests run in separate jobs (a test build and parallel nextest shards, [development reference](../development/hosted-ci.md#hosted-ci)) that the Check job waits for, so its elapsed time covers them, including their runners' queue wait. Its `ci-await:` lines give each awaited job's start and completion. A pull request run tests only the affected crates and the always-run security and recovery crates ([PR test selection](../development/hosted-ci.md#pr-test-selection)); the `agent-main` push run after the merge tests every crate. A local filtered run, a smaller test count or a sum of parallel testcase durations does not establish that the hosted job meets this budget. This is an acceptance requirement; documenting it does not claim the current suite already meets it.
 
 Every test must protect a named observable guarantee. Prioritize severity and likelihood of failure, the uniqueness of the test's coverage, and its diagnostic value relative to runtime. Prove behavior through the public boundary callers use, retain meaningful negative cases, and use deterministic fault injection where a failure or race cannot be reached reliably otherwise. The current agent guide governs admission of new tests; the historical unit-test admission records below do not authorize new tests of private implementation functions.
 
@@ -179,7 +179,7 @@ The mean total fell from 387 to 337 s, about 13%. Three more candidate runs that
 
 A fourth pass on 2026-10-18 split the test gate across runners. The base Check job took 770 s on a hosted runner (run 39119665438): setup about 48 s, then guardrails 714 s, of which formatting 8, workflow test build 221 and nextest 480 at 95.5% CPU busy. Production Clippy, doctests and documentation overlapped nextest. The tests were CPU-bound on one runner, so the change runs them on several:
 
-- `Test build` compiles once and archives the test binaries. `Test shard 1/3` to `3/3` each run one nextest count partition from that archive. The Check job runs the checks without the test build and waits for those jobs ([DEVELOPMENT.md](../DEVELOPMENT.md#hosted-ci)). A partition guard in the build job fails unless the three shards together select every test the full list selects, each exactly once. No test was retired, skipped, ignored, retried or weakened, and no time bound changed.
+- `Test build` compiles once and archives the test binaries. `Test shard 1/3` to `3/3` each run one nextest count partition from that archive. The Check job runs the checks without the test build and waits for those jobs ([development reference](../development/hosted-ci.md#hosted-ci)). A partition guard in the build job fails unless the three shards together select every test the full list selects, each exactly once. No test was retired, skipped, ignored, retried or weakened, and no time bound changed.
 - nextest's count partitioning assigns tests round-robin within each binary, so the shards stay balanced as tests are added: 844, 828 and 817 tests, 433, 484 and 467 summed seconds in the sample below.
 
 The local samples ran on one host pinned to four cores (`taskset -c 0-3`, `CARGO_INCREMENTAL=0`, `CARGO_PROFILE_DEV_DEBUG=0`, `CARGO_PROFILE_TEST_DEBUG=0`, nextest profile `ci`). Other jobs shared the host. The full suite took 216 s of nextest wall time in one process: 2489 tests passed in 1259.6 summed seconds. From the archive, each shard ran alone on the same four cores in 72, 86 and 78 s, and all 2489 tests passed. The archive took 1–2 s after the folded build and the partition guard 12 s. On the same four cores, `ci-guardrails.sh --checks` took 273 s from a cold target. Formatting took 5 s. The guard pool and exclusive lane took 104 s, beside the idle-priority chain of production Clippy (155 s), doctests (103 s) and documentation (10 s). That sandbox could not lock the advisory database, so the supply-chain gate did not run there. Without the folded test build, the doctests compile the workspace libraries themselves. So the Check job's own chain, rather than the build and its shards, may set its elapsed time on some runners. If it does, the doctests are the next phase to move. The hosted after column is owed by the pull request and the following `agent-main` runs. Each shard uploads its JUnit report as `nextest-junit-k`, so the hosted per-test durations can be read from the run.
@@ -219,7 +219,7 @@ The 30 slowest tests of the full run, with their durations in the sharded run, i
 | 29 | `orbit-mcp::boundary` | `ssh_reuse::ssh_transports_reuse_private_bounded_sockets_and_respect_native_config` | 4.93 | 5.08 | 2 |
 | 30 | `orbit-cli::process` | `update::local_candidate::local_candidate_contracts_1` | 4.89 | 6.88 | 2 |
 
-Per-test durations did not fall, and none was trimmed. The sharded run's per-test sum was 10% higher than the full run's. Other jobs shared the host, and individual tests moved both ways between the two runs. The slowest tests are scenario tables and process-lifecycle contracts. Their time goes to per-row fixtures (runtime roots, Git checkouts and remotes), real detached workers, and production budgets they wait out on purpose, such as the owner-store busy budget and signal-forwarding bounds. Row profiles show no fixed wait to remove. For example, the slowest row of `published_completion_scenarios` takes 4.4 s across its drift cases, and the slowest row of `same_pr_publication_scenarios` takes 5.7 s across 18 fixture cases whose retry wait is already substituted. Under sharding, no single test bounds a shard: the slowest takes 19 s of an 86 s shard. Each shard kept all six slots busy until its last 0.5–6.3 s. The 6.3 s tail is `replay_returns_a_durable_receipt_while_the_job_runs_in_a_detached_worker`, whose job sleeps longer than the HTTP client's five-second timeout by design ([DEVELOPMENT.md](../DEVELOPMENT.md)). It guards a known incident and was left unchanged.
+Per-test durations did not fall, and none was trimmed. The sharded run's per-test sum was 10% higher than the full run's. Other jobs shared the host, and individual tests moved both ways between the two runs. The slowest tests are scenario tables and process-lifecycle contracts. Their time goes to per-row fixtures (runtime roots, Git checkouts and remotes), real detached workers, and production budgets they wait out on purpose, such as the owner-store busy budget and signal-forwarding bounds. Row profiles show no fixed wait to remove. For example, the slowest row of `published_completion_scenarios` takes 4.4 s across its drift cases, and the slowest row of `same_pr_publication_scenarios` takes 5.7 s across 18 fixture cases whose retry wait is already substituted. Under sharding, no single test bounds a shard: the slowest takes 19 s of an 86 s shard. Each shard kept all six slots busy until its last 0.5–6.3 s. The 6.3 s tail is `replay_returns_a_durable_receipt_while_the_job_runs_in_a_detached_worker`, whose job sleeps longer than the HTTP client's five-second timeout by design ([development reference](../development/README.md)). It guards a known incident and was left unchanged.
 
 The split costs runner time for wall time. A pull request run now uses seven jobs instead of three. The shards set up while the build runs and then wait for it, and the build job keeps its own Rust dependency cache beside the Check job's.
 
@@ -458,7 +458,7 @@ Hosted busy time was 88.7% and no cause beyond breadth was confirmed, so no buil
 partition change has evidence behind it yet.
 
 Operator handoff: after merge, once runs carry this revision, follow the
-[hosted CI budget handoff](../DEVELOPMENT.md#hosted-ci-budget-handoff) for the latest
+[hosted CI budget handoff](../development/hosted-ci.md#hosted-ci-budget-handoff) for the latest
 20 completed `pull_request` `ci.yml` runs with
 `python3 scripts/ci-p90.py --limit 20 --budget-seconds 400`. Retain full SHAs, run
 IDs and raw job and step timestamps; report executed, skipped, cancelled and missing
@@ -531,7 +531,7 @@ measured no wall gain from removing that crate's self dev-dependency, and splitt
 could not be read here (no authenticated artifact download on this lane), so whether the
 hosted 220–288 s full list-builds have the same shape is still an inference. The p90 after
 merge is the operator's measurement under the
-[hosted CI budget handoff](../DEVELOPMENT.md#hosted-ci-budget-handoff): the latest 20
+[hosted CI budget handoff](../development/hosted-ci.md#hosted-ci-budget-handoff): the latest 20
 completed `pull_request` `ci.yml` runs with `python3 scripts/ci-p90.py --limit 20
 --budget-seconds 400`. Report the full Check job wall time; executed, failed, skipped,
 cancelled and missing runs separately; the queue before Check and the awaited jobs' queue
@@ -594,7 +594,7 @@ runner remains an operator decision, not part of this leaf.
 
 Operator handoff: after merge, once runs carry this revision, measure the latest 20
 completed `pull_request` `ci.yml` runs under the
-[hosted CI budget handoff](../DEVELOPMENT.md#hosted-ci-budget-handoff) with
+[hosted CI budget handoff](../development/hosted-ci.md#hosted-ci-budget-handoff) with
 `python3 scripts/ci-p90.py --limit 20 --budget-seconds 400`:
 
 - Report the full Check job elapsed time, with the nearest-rank p90 against 400 s, the
@@ -651,7 +651,7 @@ claims the budget is restored.
 
 Operator handoff: after merge, once runs carry this revision, measure the latest 20
 completed `pull_request` `ci.yml` runs under the
-[hosted CI budget handoff](../DEVELOPMENT.md#hosted-ci-budget-handoff) with
+[hosted CI budget handoff](../development/hosted-ci.md#hosted-ci-budget-handoff) with
 `python3 scripts/ci-p90.py --limit 20 --budget-seconds 400`. Report executed, failed,
 skipped, cancelled and missing runs separately, the nearest-rank p90 against 400 s,
 which runs executed the self-tests, and the cache, scope and CPU strata. That
@@ -726,7 +726,7 @@ all five count partitions, digest verification, namespace preparation and
 the shard-1 sandbox gate retain their existing guarantees.
 
 After merge the operator owns a fresh hosted measurement; see
-[hosted CI measurement](../DEVELOPMENT.md#hosted-ci-budget-handoff). A rolling
+[hosted CI measurement](../development/hosted-ci.md#hosted-ci-budget-handoff). A rolling
 sample containing old workflow revisions cannot establish the candidate's
 p90. Report exact run/head identities, executed/skipped/cancelled/missing
 counts, failures, queue gaps and the nearest-rank p90 against **400 s**.
@@ -1013,7 +1013,7 @@ repair and ineffective core self-dependency/lint experiments are not repeated.
 Runner class, cost and setup overlap remain unchanged. After publication,
 once the latest 20 completed PR `ci.yml` runs carry this candidate, the
 operator should run `python3 scripts/ci-p90.py --limit 20 --budget-seconds 400`
-under the [hosted CI budget handoff](../DEVELOPMENT.md#hosted-ci-budget-handoff).
+under the [hosted CI budget handoff](../development/hosted-ci.md#hosted-ci-budget-handoff).
 Retain full heads, run IDs and job timestamps; report full-job nearest-rank
 p90, median, maximum, failures and skipped/cancelled/missing Checks, plus
 pre-Check delay and awaited-job queue delay separately. Preserve unavailable
@@ -1078,7 +1078,7 @@ test-tail lever is uneven count partitions, and the larger one is still the
 build. **The 400 s budget is not restored by this pass.** After publication,
 once the latest 20 completed PR `ci.yml` runs carry this revision, the
 operator runs `python3 scripts/ci-p90.py --limit 20 --budget-seconds 400`
-under the [hosted CI budget handoff](../DEVELOPMENT.md#hosted-ci-budget-handoff),
+under the [hosted CI budget handoff](../development/hosted-ci.md#hosted-ci-budget-handoff),
 reporting coverage, gaps (skipped, cancelled, missing) and queue time
 separately.
 
@@ -1164,7 +1164,7 @@ open.** The largest measured lever is still the `orbit-core` chain above.
 After publication, once the latest 20 completed PR `ci.yml` runs carry this
 revision, the operator runs
 `python3 scripts/ci-p90.py --limit 20 --budget-seconds 400` under the
-[hosted CI budget handoff](../DEVELOPMENT.md#hosted-ci-budget-handoff). They
+[hosted CI budget handoff](../development/hosted-ci.md#hosted-ci-budget-handoff). They
 report executed, failed, skipped, cancelled and missing counts, nearest-rank
 p90, median and maximum, and Check's queue wait and awaited jobs' queue
 overlap separately from elapsed time. They also report each `Test build` run's
@@ -1267,7 +1267,7 @@ partition remain outside this change.
 **Hosted compliance remains open.** After publication, once the latest 20 completed
 PR `ci.yml` runs carry this revision, the operator runs
 `python3 scripts/ci-p90.py --limit 20 --budget-seconds 400` under the
-[hosted CI budget handoff](../DEVELOPMENT.md#hosted-ci-budget-handoff). They
+[hosted CI budget handoff](../development/hosted-ci.md#hosted-ci-budget-handoff). They
 report executed, failed, skipped, cancelled and missing Check counts, nearest-rank
 p90, median and maximum, the CI guardrails job's elapsed time and the tally of runs
 in which it was the last awaited job, which runs executed the self-tests, and the
@@ -1341,7 +1341,7 @@ of 0.113 s and 0.236 s; the change adds no step, sleep or transfer.
 stalled-attempt cost; it claims no restored budget. After publication, once the latest 20
 completed PR `ci.yml` runs carry this revision, the operator runs
 `python3 scripts/ci-p90.py --limit 20 --budget-seconds 400` under the
-[hosted CI budget handoff](../DEVELOPMENT.md#hosted-ci-budget-handoff), and reads each
+[hosted CI budget handoff](../development/hosted-ci.md#hosted-ci-budget-handoff), and reads each
 shard's first-download step elapsed against the 31.8 s maximum above: a first attempt
 that times out at one minute while healthy would show as repeated attempts.
 
@@ -1452,7 +1452,7 @@ designed to do. Nothing avoidable was found, and the cache identity is
 unchanged. The list-build now prints
 `check-ci-macos: workspace units rebuilt=N fresh=M rebuilt_packages=…`
 from Cargo's JSON messages, so the next watch can attribute list-build time
-per run ([DEVELOPMENT.md](../DEVELOPMENT.md)).
+per run ([development reference](../development/README.md)).
 
 No test, check, assertion or required check name changed, and none was
 retired. The shard-1 sandbox gate, the always-run set, the archive digest
@@ -1464,7 +1464,7 @@ selections. **The 400 s budget is not restored by this pass.** After
 publication, once the latest 20 completed PR `ci.yml` runs carry this
 revision, the operator runs
 `python3 scripts/ci-p90.py --limit 20 --budget-seconds 400` under the
-[hosted CI budget handoff](../DEVELOPMENT.md#hosted-ci-budget-handoff). They
+[hosted CI budget handoff](../development/hosted-ci.md#hosted-ci-budget-handoff). They
 report executed, failed, skipped, cancelled and missing Check counts,
 nearest-rank p90, median and maximum, queue wait separately, the tally of
 last-awaited jobs (now including `Test partition 13`), the `rebuilt=` lines
@@ -1598,7 +1598,7 @@ the operator runs:
 python3 scripts/ci-p90.py --limit 20 --budget-seconds 400
 ```
 
-under the [hosted CI budget handoff](../DEVELOPMENT.md#hosted-ci-budget-handoff),
+under the [hosted CI budget handoff](../development/hosted-ci.md#hosted-ci-budget-handoff),
 reporting executed, failed, skipped, cancelled and missing Check counts,
 nearest-rank p90, median and maximum, pre-Check and awaited-job queue wait
 separately from elapsed time, cache (`hit`/`miss`), scope (`full`/`affected`),
@@ -1626,7 +1626,7 @@ Warmups (excluded): baseline 9.26 s, candidate 7.23 s; the control series ran wi
 
 **Verification.** `cargo nextest show-config test-groups --profile ci` parses the config (exit 0). `scripts/check-nextest-partitions.py --shards 13 -- cargo nextest list --workspace --locked --profile ci` reports 4,383 tests, each selected exactly once. `cargo nextest run --locked --profile ci -p orbit-cli -p orbit-web -E 'package(=orbit-web) & binary(=http_api) & test(/^agents_implementers::/)'` passes 13 of 13.
 
-**Hosted compliance is not restored by this change, and is owed after merge.** The operator runs `python3 scripts/ci-p90.py --limit 20 --budget-seconds 400` once the latest 20 completed PR `ci.yml` runs carry this revision, under the [hosted CI budget handoff](../DEVELOPMENT.md#hosted-ci-budget-handoff), and reports executed, skipped, cancelled and missing counts separately from elapsed time.
+**Hosted compliance is not restored by this change, and is owed after merge.** The operator runs `python3 scripts/ci-p90.py --limit 20 --budget-seconds 400` once the latest 20 completed PR `ci.yml` runs carry this revision, under the [hosted CI budget handoff](../development/hosted-ci.md#hosted-ci-budget-handoff), and reports executed, skipped, cancelled and missing counts separately from elapsed time.
 
 ### Direct fixture lookups and smaller Test build cache (2026-11-24)
 
@@ -1860,7 +1860,7 @@ revision, the operator runs:
 python3 scripts/ci-p90.py --limit 20 --budget-seconds 400
 ```
 
-under the [hosted CI budget handoff](../DEVELOPMENT.md#hosted-ci-budget-handoff).
+under the [hosted CI budget handoff](../development/hosted-ci.md#hosted-ci-budget-handoff).
 The result is the nearest-rank Check p90 over those 20 runs against the 400 s
 budget. Report executed, failed, skipped, cancelled and missing counts
 separately (the coverage gap: skipped and cancelled runs carry no Check
@@ -1954,7 +1954,7 @@ Measured local reductions apply on `4`-thread `taskset` slices for ratchet-PR
 shard scope and `Test build` proof overlap; hosted `400 s` `Check` p90
 restoration is **not run, owed after publication**. Once 20 completed PR CI
 runs carry the merged revision, the operator measures compliance under the
-[hosted CI budget handoff](../DEVELOPMENT.md#hosted-ci-budget-handoff) with:
+[hosted CI budget handoff](../development/hosted-ci.md#hosted-ci-budget-handoff) with:
 
 ```bash
 python3 scripts/ci-p90.py --limit 20 --budget-seconds 400
@@ -2371,8 +2371,8 @@ Cargo links each top-level `crates/<crate>/tests/<name>.rs` file and each `crate
 - Add a new case to an existing area binary, or a new module to it for a new surface.
 - Start a new binary only for a genuinely separate area, or for a test that must own its process because it installs signal handlers or mutates the environment outside `orbit_common::test_env`'s lock. Say why in its header.
 - A test that re-runs itself as a child (`current_exe()` with `--exact <name>`) must pass the module-qualified name, run the child through `orbit_common::test_env::run_child_test` (a load-tolerant hang guard that reports the child's output on overrun), and verify execution with `orbit_common::test_env::assert_child_test_passed`, which rejects libtest's successful zero-test exit. For children intentionally killed or kept alive, use `assert_child_test_exists` before spawning and verify the child's readiness sentinel or handshake. Select ignored child entry points with `--ignored`.
-- Fixtures that mutate Orbit state still run in an isolated child process ([DEVELOPMENT.md](../DEVELOPMENT.md#safe-mutable-cli-fixtures)).
-- Waits and process guards follow STD-03 §R17 to §R20. Size them for a loaded host, not an idle one ([DEVELOPMENT.md](../DEVELOPMENT.md#fixtures-on-a-loaded-host)).
+- Fixtures that mutate Orbit state still run in an isolated child process ([development reference](../development/qa.md#safe-mutable-cli-fixtures)).
+- Waits and process guards follow STD-03 §R17 to §R20. Size them for a loaded host, not an idle one ([development reference](../development/testing.md#fixtures-on-a-loaded-host)).
 - Shell fixtures must not poll markers by forking `sleep` in `while`/`until` loops. Use a FIFO/pipe handshake or an in-process wait with a deadline. `make ci-fast` scans Rust strings in test paths, including scripts assembled across literals. A necessary bounded exception belongs in `test-shell-waits-allowlist.json` in the scripts directory with its path, exact loop header and a reason; unused exceptions fail the guard.
 - A test that builds a `Command` from `std::env::current_exe()` or `env!("CARGO_BIN_EXE_*")` and waits with `.output()`, `.status()`, `.spawn()`, `.wait()`, or `.wait_with_output()` must use `orbit_common::test_env::run_child_test` (or `run_child_test_within`). `make ci-guards` scans Rust test sources for that raw wait. A necessary exception belongs in `scripts/test-child-runner-allowlist.json` with its path, function, call, ordinal and a reason; unused exceptions fail the guard.
 - A refusal fixture asserts the exact authorization cause, such as the refusal kind and the tool, grant or ceiling it names. A bare failure lets a bootstrap or sandbox error pass as the policy refusal.

@@ -428,4 +428,4 @@ They do not establish the unexercised manual checks above.
 - [Linux sandbox onboarding and diagnostics](linux-sandbox.md)
 - [Configuration reference](../CONFIG.md) — `machine.worker_containment`
 - [Setup skill: Windows through WSL2](../../crates/orbit-core/assets/skills/orbit-setup/references/windows-wsl2.md)
-- [Windows support](../DEVELOPMENT.md#windows)
+- [Windows support](../development/toolchain.md#windows)

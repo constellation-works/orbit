@@ -179,7 +179,7 @@ Require a nonempty list; an unknown filter can exit zero with no tests. Add a
 new provider's fixture as a module registered in `tests/provider/main.rs`
 before calling the lane supported. These Cargo filters are not provider CLI
 flags. For a managed change, follow the current
-[validation and CI guidance](../DEVELOPMENT.md#validation-and-ci): run
+[validation and CI guidance](../development/validation-and-ci.md#validation-and-ci): run
 `make ci-guards` as the early static check, then the focused formatting, lint,
 and behavior checks the change needs. The pipeline runs configured
 final-validation commands on the final candidate. `make ci-fast`,

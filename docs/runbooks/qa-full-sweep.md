@@ -778,7 +778,7 @@ Before task handoff, report `make ci-fast`, `make ci-test-affected`,
 `make ci-lint`, and `make goldens` as passed, failed, or not run with reasons.
 `make ci-fast` runs no Rust tests; the affected-test gate covers complete
 test targets of changed crates and their workspace dependents
-([validation and CI](../DEVELOPMENT.md#validation-and-ci)). Full `make ci`
+([validation and CI](../development/validation-and-ci.md#validation-and-ci)). Full `make ci`
 runs on PRs.
 
 For a subcommand grammar audit, run

@@ -8,12 +8,12 @@
 # NOT consulted by `make ci-fast` (which stays no-compile).
 #
 # Adding an advisory exception or a new license requires review — see the
-# "Supply-chain" section of docs/DEVELOPMENT.md for the process (justification +
+# "Supply-chain" section of docs/development/toolchain.md for the process (justification +
 # expiry).
 
 [advisories]
 # Deny crates with an open RUSTSEC advisory (the default) and yanked crates.
-# Time-boxed exceptions live in `ignore` with a rationale; see docs/DEVELOPMENT.md.
+# Time-boxed exceptions live in `ignore` with a rationale; see docs/development/toolchain.md.
 # Each entry below has no available safe upgrade at time of writing and is
 # tagged with a re-review date — drop it once an upstream fix lands.
 yanked = "deny"
@@ -29,7 +29,7 @@ ignore = [
     # patched standalone release is reported by these advisories. The ignore
     # mechanism is ID-wide: review any new occurrence outside these chains.
     # Owner: Orbit desktop maintainers (dependency/CI PR reviewers). Remove
-    # each entry as soon as its upstream constraint is lifted; see DEVELOPMENT.md.
+    # each entry as soon as its upstream constraint is lifted; see docs/development/toolchain.md.
     { id = "RUSTSEC-2024-0370", reason = "Desktop Linux: orbit-desktop -> tauri 2.12.4 -> gtk 0.18.2 -> gtk3-macros 0.18.2 and glib 0.18.5 -> glib-macros 0.18.5 -> proc-macro-error 1.0.4. Tauri still requires gtk ^0.18; gtk 0.19 is incompatible. This is a build-time macro diagnostic dependency; accept maintenance risk pending upstream migration, not a vulnerability waiver. Owner: Orbit desktop maintainers. Re-review 2027-04-19." },
     { id = "RUSTSEC-2026-0371", reason = "Desktop Linux: orbit-desktop -> notify-rust 4.18.2 / tauri-plugin-opener 2.7.2 -> zbus 5.19.0 (also via zbus_macros 5.19.0) -> zbus_names 4.3.5. Latest parents require zbus ^5 / ^5.9; maintained names moved into incompatible zbus 6. Accept standalone-crate maintenance risk until both parents migrate; no exploit reported. Owner: Orbit desktop maintainers. Re-review 2027-04-19." },
     { id = "RUSTSEC-2026-0370", reason = "Desktop Linux: orbit-desktop -> notify-rust 4.18.2 / tauri-plugin-opener 2.7.2 -> zbus 5.19.0 -> zvariant 5.15.1 (also through zbus_macros 5.19.0 / zbus_names 4.3.5). Latest parents require zbus ^5 / ^5.9; maintained wire format moved into incompatible zbus 6. Accept standalone-crate maintenance risk until both parents migrate; no exploit reported. Owner: Orbit desktop maintainers. Re-review 2027-04-19." },

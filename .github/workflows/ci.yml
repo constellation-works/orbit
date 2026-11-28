@@ -12,7 +12,7 @@ on:
 # narrowing must account for an untested previous tip (see the scope job).
 # A workflow_dispatch run falls through to the per-run group below, so a
 # deploy-candidate dispatch for a chosen SHA is never queued behind, replaced
-# or cancelled by later agent-main pushes (see docs/DEVELOPMENT.md, Hosted CI).
+# or cancelled by later agent-main pushes (see docs/development/hosted-ci.md).
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.event_name == 'push' && format('push-{0}', github.ref) || format('run-{0}', github.run_id) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}

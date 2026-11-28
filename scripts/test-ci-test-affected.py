@@ -452,6 +452,7 @@ exit "${GUARD_TEST_MACOS_EXIT:-0}"
             "scripts/release-readiness-adapter.py": sorted({*self.core_dependents, "orbit-engine"}),
             "docs/development/examples/release-readiness/scripts/release-readiness.yaml": sorted({*self.core_dependents, "orbit-engine"}),
             "docs/design/auto-tasks/1_overview.md": self.core_dependents,
+            "docs/development/qa.md": ["orbit-cli"],
             "plugin/skills/orbit-setup/references/auto-tasks-authoring.md": self.core_dependents,
             "crates/orbit-tools/tests/fixtures/plugins/uv-example/plugin.yaml": ["orbit-cli", "orbit-tools"],
         }
