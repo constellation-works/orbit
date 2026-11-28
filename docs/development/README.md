@@ -20,4 +20,3 @@ source archives without Git record a null source commit. Dirty builds
 identify their base commit but cannot prove a fix was included. Deployment
 analysis must use clean run builds and commit ancestry, never the current
 checkout, semantic version order, or today's installed binary.
-
