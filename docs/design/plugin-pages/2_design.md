@@ -2,13 +2,13 @@
 title: Plugin Pages — Design
 owner: claude
 created_date: 2026-11-27
-updated_date: 2026-11-27
-last_validated: 2026-11-27
+updated_date: 2026-11-28
+last_validated: 2026-11-28
 status: Accepted
 feature: plugin-pages
 doc_role: design
 type: design
-summary: "Approved design; the manifest key is built, then the sandboxed frame and its policy, the postMessage bridge to a plugin's own tools, the Plugins sub-tabs and pages on other hosts"
+summary: "Approved design; phase 1 (manifest, serving, bridge relay, kit and Plugins sub-tabs) is built, followed by pages on other hosts and actions"
 tags: [plugin-pages, plugins, dashboard, orbit-web]
 related_features: [plugins, user-interface, remote-access]
 related_artifacts: [ORB-29504]
@@ -19,9 +19,10 @@ related_artifacts: [ORB-29504]
 The operator approved this design on 2026-11-27 ([ORB-29504]). The page contract in sections 1
 and 2 was revised after it was measured in two browser engines ([ORB-29532]), and the operator
 approved the revision the same day ([ORB-29573]).
-Section 1, the manifest, is built ([ORB-29534]), and so are the two routes of section 2 and
-the call route and kit of section 3 ([ORB-29536]). The rest describes what the later builds
-make true. The problem, the goal and the build tasks are in the
+Section 1 (the manifest), section 2 (serving), section 3 (the bridge and kit) and section 4
+(Plugins sub-tabs, frame strip and diagnostics) are built ([ORB-29534], [ORB-29536],
+[ORB-29537]). The rest describes what later phases make true. The problem, the goal and the
+build tasks are in the
 [overview](./1_overview.md). The plugin manifest,
 grants and tool dispatch it builds on are the [plugin standard](../plugins/1_scope.md)'s.
 
@@ -284,6 +285,7 @@ whose manifest has pages lists them in the consent prompt.
 - [ORB-29504] — this design.
 - [ORB-29534] — built the manifest key, validation, the bundle digest and the listings.
 - [ORB-29536] — built the document and call routes and the kit.
+- [ORB-29537] — built the Plugins sub-tabs, the sandboxed page frame, the strip and the bridge relay.
 - [ORB-29532] — measured the initial frame policy in Chromium and WebKit, then validated the one-document policy in Chromium, WebKit and Firefox.
 - [ORB-29573] — revised the page contract to one document after that measurement.
 

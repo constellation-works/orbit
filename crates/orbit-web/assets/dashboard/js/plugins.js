@@ -1,15 +1,16 @@
-// Plugins tab: installed plugins, their declared panels, and their link
-// tiles [§4.7].
+// Plugins tab: installed plugins, their declared panels, link tiles [§4.7],
+// and secondary sub-tabs for declared plugin pages (plugin-pages design §4).
 //
-// One generic renderer serves every plugin. A panel names a render mode in
-// its manifest (`kv`, `table`, `markdown`, `json`) and the server returns the
-// source tool's JSON; nothing here knows a plugin's name, and no plugin ships
-// JavaScript. Markdown goes through the same sanitizing wrapper the rest of
-// the dashboard uses, so plugin-authored text cannot introduce script or
-// event handlers.
+// One generic renderer serves every plugin panel. A panel names a render mode
+// in its manifest (`kv`, `table`, `markdown`, `json`) and the server returns
+// the source tool's JSON; markdown goes through the same sanitizing wrapper
+// the rest of the dashboard uses, so plugin-authored text cannot introduce
+// script or event handlers. Declared pages render in their own sandboxed frame
+// via `plugin-page.js`.
 
 import { el, fetchJson, getWorkspace, getWorkspaceRevision, hostWriteRefusal, isAggregateView, isHttpUrl, onWorkspaceChange, postJson, renderPanelPlaceholder, requestPanel, syncNodes } from './common.js';
 import { renderMarkdown } from './markdown.js';
+import { buildPluginPageHash, getActivePluginPage, updatePluginPageCatalog } from './plugin-page.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -28,29 +29,154 @@ let lastPlugins = [];
 let lastPluginsRevision = null;
 const pendingChanges = new Set();
 const changeErrors = new Map();
-onWorkspaceChange(() => changeErrors.clear());
+let onTabsChange = () => {};
+let lastTabsSignature = null;
+
+export function initPlugins({ onTabsChange: listener = () => {} } = {}) {
+  onTabsChange = typeof listener === 'function' ? listener : () => {};
+}
+
+function enabledPluginPages(plugins) {
+  const entries = [];
+  for (const plugin of Array.isArray(plugins) ? plugins : []) {
+    if (plugin?.status !== 'active') continue;
+    for (const page of plugin.pages || []) {
+      if (!page?.id) continue;
+      entries.push({
+        namespace: plugin.name,
+        pageId: page.id,
+        title: page.title || page.id,
+        route: `plugins/${encodeURIComponent(plugin.name)}/${encodeURIComponent(page.id)}`,
+      });
+    }
+  }
+  return entries;
+}
+
+/// Sync the Plugins secondary tab bar and rail views from the active workspace's
+/// plugins. Hidden when no enabled plugin declares a page and Installed is open,
+/// so plugins with panels alone keep the existing Plugins tab unchanged.
+export function syncPluginTabs(activePage = getActivePluginPage()) {
+  const plugins = lastPluginsRevision === getWorkspaceRevision() ? lastPlugins : [];
+  const pages = enabledPluginPages(plugins);
+  const showBar = pages.length > 0 || Boolean(activePage);
+  const activeKey = activePage ? `${activePage.namespace}\0${activePage.page}` : '';
+  const signature = JSON.stringify({
+    showBar,
+    activeKey,
+    pages: pages.map(entry => [entry.namespace, entry.pageId, entry.title]),
+  });
+
+  const bar = $('plugins-subtabs');
+  const rail = $('plugins-rail-subtabs');
+  if (bar) bar.hidden = !showBar;
+  if (signature === lastTabsSignature) {
+    onTabsChange();
+    return;
+  }
+  lastTabsSignature = signature;
+
+  if (bar) {
+    if (!showBar) {
+      bar.replaceChildren();
+    } else {
+      const buttons = [
+        pluginTabButton({
+          label: 'Installed',
+          route: 'plugins',
+          active: !activePage,
+          inRail: false,
+        }),
+        ...pages.map(entry => pluginTabButton({
+          label: entry.title,
+          route: entry.route,
+          active: activeKey === `${entry.namespace}\0${entry.pageId}`,
+          inRail: false,
+        })),
+      ];
+      bar.replaceChildren(...buttons);
+    }
+  }
+
+  if (rail) {
+    if (!pages.length) {
+      rail.replaceChildren();
+    } else {
+      const buttons = [
+        pluginTabButton({
+          label: 'Installed',
+          route: 'plugins',
+          active: !activePage,
+          inRail: true,
+        }),
+        ...pages.map(entry => pluginTabButton({
+          label: entry.title,
+          route: entry.route,
+          active: activeKey === `${entry.namespace}\0${entry.pageId}`,
+          inRail: true,
+        })),
+      ];
+      rail.replaceChildren(...buttons);
+    }
+  }
+  onTabsChange();
+}
+
+function pluginTabButton({ label, route, active, inRail }) {
+  const button = el('button', {
+    class: active ? 'subtab active' : 'subtab',
+    type: 'button',
+    'data-route': route,
+    'aria-current': active ? 'page' : 'false',
+  }, inRail ? [el('span', { class: 'rail-label', text: label })] : [label]);
+  return button;
+}
+
+onWorkspaceChange(() => {
+  changeErrors.clear();
+  lastPlugins = [];
+  lastPluginsRevision = null;
+  lastTabsSignature = null;
+  syncPluginTabs();
+});
 
 export async function fetchAndRenderPlugins() {
+  const revision = getWorkspaceRevision();
   if (isAggregateView()) {
     renderPanelPlaceholder('plugins-body');
     $('plugins-count').textContent = '—';
+    lastPlugins = [];
+    lastPluginsRevision = revision;
+    syncPluginTabs();
+    updatePluginPageCatalog([], { revision, aggregate: true });
     return;
   }
-  await requestPanel(
-    'plugins-body',
-    `plugins:${getWorkspace() || ''}`,
-    () => fetchJson('/api/plugins'),
-    payload => {
-      lastPlugins = Array.isArray(payload) ? payload : [];
-      lastPluginsRevision = getWorkspaceRevision();
-      panelBodies.clear();
-      render(lastPlugins);
-      for (const plugin of lastPlugins) {
-        for (const panel of plugin.panels || []) loadPanel(plugin, panel);
-      }
-    },
-    'plugins-count',
-  );
+  try {
+    await requestPanel(
+      'plugins-body',
+      `plugins:${getWorkspace() || ''}`,
+      () => fetchJson('/api/plugins'),
+      payload => {
+        lastPlugins = Array.isArray(payload) ? payload : [];
+        lastPluginsRevision = getWorkspaceRevision();
+        panelBodies.clear();
+        syncPluginTabs();
+        updatePluginPageCatalog(lastPlugins, { revision: lastPluginsRevision });
+        render(lastPlugins);
+        if (!getActivePluginPage()) {
+          for (const plugin of lastPlugins) {
+            for (const panel of plugin.panels || []) loadPanel(plugin, panel);
+          }
+        }
+      },
+      'plugins-count',
+    );
+  } catch (error) {
+    if (revision === getWorkspaceRevision()) {
+      updatePluginPageCatalog(null, { revision, error });
+    }
+    throw error;
+  }
 }
 
 function render(plugins) {
@@ -108,6 +234,25 @@ function pluginCard(plugin) {
   if (changeErrors.has(plugin.name)) card.appendChild(el('p', { class: 'plugin-change-error', text: changeErrors.get(plugin.name) }));
   const tools = plugin.tools || [];
   if (tools.length) card.appendChild(toolInventory(plugin, tools));
+  const pages = (plugin.pages || []).filter(page => page && page.id);
+  if (pages.length) {
+    card.appendChild(el('div', { class: 'plugin-pages' }, pages.map(page => {
+      const inactive = page.state !== 'active';
+      const tile = el('a', {
+        class: `plugin-page-tile${inactive ? ' is-inactive' : ''}`,
+      }, [
+        el('span', { class: 'plugin-page-tile-title', text: page.title || page.id }),
+        inactive ? el('span', { class: 'badge', 'data-tone': 'warning', text: page.state || 'inactive' }) : null,
+      ].filter(Boolean));
+      tile.href = buildPluginPageHash(plugin.name, page.id);
+      return tile;
+    })));
+    if (plugin.status === 'active') {
+      for (const page of pages) {
+        if (page.diagnostic) card.appendChild(el('p', { class: 'plugin-diagnostic', text: page.diagnostic }));
+      }
+    }
+  }
   // The manifest refuses non-http(s) links at validation; this is the second
   // half of that rule, for a record written before it or by a hand-edited store.
   const links = (plugin.links || []).filter(link => isHttpUrl(link.url));

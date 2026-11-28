@@ -2,11 +2,11 @@
 title: Plugin Pages — Overview
 owner: claude
 created_date: 2026-11-27
-updated_date: 2026-11-27
-last_validated: 2026-11-27
+updated_date: 2026-11-28
+last_validated: 2026-11-28
 status: Accepted
 stage: building
-next: "Add the Plugins sub-tabs, the page frame and the bridge relay [ORB-29537]"
+next: "Show another host's pages through the forwarder [ORB-29538]"
 feature: plugin-pages
 doc_role: overview
 type: design
@@ -26,7 +26,8 @@ without plugin code ever running
 with the dashboard's authority. The operator approved the design on 2026-11-27
 ([ORB-29504]). The manifest key, its validation, the bundle digest and the listings are
 built ([ORB-29534]). The server writes an active page as one document under its frame policy
-and runs the read-only tool calls it declares ([ORB-29536]); the dashboard draws no page yet.
+and runs the read-only tool calls it declares ([ORB-29536]), and the dashboard renders enabled
+pages as sub-tabs under Plugins inside the sandboxed frame with its bridge relay ([ORB-29537]).
 
 ## 1. Motivation
 
@@ -78,7 +79,7 @@ rest of the plugin standard are unchanged, and plugins still add no top-level de
 ## 3. At a Glance
 
 The table maps each concern to the design section that owns it and the phase that delivers
-it. Only the first row is built.
+it. Phase 1 (the first four rows) is built.
 
 | Concern | Design section | Phase |
 |---|---|---|
