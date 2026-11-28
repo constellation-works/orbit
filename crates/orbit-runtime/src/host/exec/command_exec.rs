@@ -40,7 +40,10 @@ use orbit_types::tool::ExecutionResult;
 use serde_json::json;
 
 use crate::RuntimeKernel;
-use crate::stored::audit::coordination::{CoordinationAuditEvent, record_coordination_audit_event};
+use crate::stored::audit::coordination::{
+    CoordinationAuditEvent, CoordinationAuditOutcome, record_coordination_audit_event_with_outcome,
+};
+use crate::stored::audit::system::AuditExecution;
 
 const COMMAND_TOOL_NAME: &str = "orbit.command.exec";
 const COMMAND_TARGET_TYPE: &str = "command_exec";
@@ -166,12 +169,35 @@ impl RuntimeKernel {
         } else {
             AuditEventStatus::Failure
         };
+        let outcome = CoordinationAuditOutcome {
+            execution: AuditExecution {
+                exit_code: result
+                    .as_ref()
+                    .ok()
+                    .and_then(|result| result.exit_code)
+                    .unwrap_or(-1),
+                duration_ms: started.elapsed().as_millis() as u64,
+            },
+            error_message: match &result {
+                Ok(result) if result.timed_out => {
+                    Some(format!("command timed out after {timeout_ms}ms; killed"))
+                }
+                Ok(_) => None,
+                Err(error) => Some(
+                    error
+                        .to_string()
+                        .split_whitespace()
+                        .collect::<Vec<_>>()
+                        .join(" "),
+                ),
+            },
+        };
         let redaction = argv_redactor();
         let argv_redacted: Vec<String> = full_argv
             .iter()
             .map(|arg| redaction.apply_str(arg))
             .collect();
-        if let Err(audit_error) = record_coordination_audit_event(
+        if let Err(audit_error) = record_coordination_audit_event_with_outcome(
             self,
             CoordinationAuditEvent {
                 command: "command.exec",
@@ -188,6 +214,7 @@ impl RuntimeKernel {
                     "workspace": self.paths().repo_root.to_string_lossy(),
                 }),
             },
+            Some(outcome),
         ) {
             tracing::error!(
                 target: "orbit.command.exec",
