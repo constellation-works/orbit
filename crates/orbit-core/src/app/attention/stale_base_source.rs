@@ -205,12 +205,43 @@ fn has_admitted_local_setup_after_hold(
     Ok(false)
 }
 
+/// Whether the recorded checkout holds `branch` with tracked changes.
+fn tracked_changes(checkout: Option<&str>, branch: &str) -> Result<bool, OrbitError> {
+    let Some(path) = checkout else {
+        return Ok(false);
+    };
+    let holder = git2::Repository::open(path).map_err(|error| {
+        OrbitError::Execution(format!("Cannot open recorded checkout '{path}': {error}"))
+    })?;
+    let attached = holder
+        .head()
+        .map_err(|error| {
+            OrbitError::Execution(format!(
+                "Cannot read HEAD for recorded checkout '{path}': {error}"
+            ))
+        })?
+        .shorthand()
+        .ok()
+        .map(str::to_owned);
+    let mut options = git2::StatusOptions::new();
+    options.include_untracked(false);
+    Ok(attached.as_deref() == Some(branch)
+        && !holder
+            .statuses(Some(&mut options))
+            .map_err(|error| {
+                OrbitError::Execution(format!(
+                    "Cannot read tracked status for recorded checkout '{path}': {error}"
+                ))
+            })?
+            .is_empty())
+}
+
 fn observe(
     context: &AttentionSourceContext<'_>,
     run: &JobRun,
     branch: &str,
     checkout: Option<&str>,
-) -> Result<Option<AttentionItem>, OrbitError> {
+) -> Result<Option<(AttentionItem, Option<String>)>, OrbitError> {
     let repo_path = &context.runtime.paths().repo_root;
     let repo = git2::Repository::open(repo_path).map_err(|error| {
         OrbitError::Execution(format!(
@@ -235,41 +266,23 @@ fn observe(
             "Cannot compare local and origin history for {branch}: {error}"
         ))
     })?;
+    // Tracked status only decides a behind-only hold. Refs alone prove a
+    // diverged one, so an unreadable checkout keeps the alert and is reported
+    // as unavailable instead.
+    let mut tracked_status_error = None;
     let dirty = if behind > 0 {
-        if let Some(path) = checkout {
-            let holder = git2::Repository::open(path).map_err(|error| {
-                OrbitError::Execution(format!("Cannot open recorded checkout '{}': {error}", path))
-            })?;
-            let attached = holder
-                .head()
-                .map_err(|error| {
-                    OrbitError::Execution(format!(
-                        "Cannot read HEAD for recorded checkout '{}': {error}",
-                        path
-                    ))
-                })?
-                .shorthand()
-                .ok()
-                .map(str::to_owned);
-            let mut options = git2::StatusOptions::new();
-            options.include_untracked(false);
-            attached.as_deref() == Some(branch)
-                && !holder
-                    .statuses(Some(&mut options))
-                    .map_err(|error| {
-                        OrbitError::Execution(format!(
-                            "Cannot read tracked status for recorded checkout '{}': {error}",
-                            path
-                        ))
-                    })?
-                    .is_empty()
-        } else {
-            false
+        match tracked_changes(checkout, branch) {
+            Ok(dirty) => Some(dirty),
+            Err(error) if ahead > 0 => {
+                tracked_status_error = Some(error.to_string());
+                None
+            }
+            Err(error) => return Err(error),
         }
     } else {
-        false
+        Some(false)
     };
-    if behind == 0 || (ahead == 0 && !dirty) {
+    if behind == 0 || (ahead == 0 && dirty != Some(true)) {
         return Ok(None);
     }
     let mut walk = repo.revwalk().map_err(|error| {
@@ -320,16 +333,22 @@ fn observe(
         "origin_commit": remote.to_string(),
         "owner_only_commits": commits,
         "tracked_changes": dirty,
+        "tracked_status": if dirty.is_some() { "available" } else { "unavailable" },
     });
     let refs = json!({});
     let since = run.finished_at.unwrap_or(run.created_at);
+    let unavailable = if dirty.is_none() {
+        "; tracked status unavailable"
+    } else {
+        ""
+    };
     let reason = if ahead == 0 {
         format!(
             "Deliveries held: {branch} is behind {behind} of origin/{branch}; checkout has tracked changes"
         )
     } else {
         format!(
-            "Deliveries held: {branch} is ahead {ahead}, behind {behind} of origin/{branch}; owner-only commit {commit_hint}{task_hint}"
+            "Deliveries held: {branch} is ahead {ahead}, behind {behind} of origin/{branch}; owner-only commit {commit_hint}{task_hint}{unavailable}"
         )
     };
     let command = if ahead == 0 {
@@ -372,7 +391,7 @@ fn observe(
         item.severity = AttentionSeverity::High;
     }
     item.fingerprint = cursor::attention_fingerprint(&item, detail);
-    Ok(Some(item))
+    Ok(Some((item, tracked_status_error)))
 }
 
 pub(super) fn read(
@@ -441,7 +460,16 @@ pub(super) fn read(
             }
             if !has_admitted_local_setup_after_hold(context, &hold)? {
                 match observe(context, run, hold.branch, hold.checkout) {
-                    Ok(Some(item)) => return Ok((Some(item), observation_failures)),
+                    Ok(Some((item, tracked_error))) => {
+                        if let Some(message) = tracked_error {
+                            observation_failures.push(ObservationFailure {
+                                branch: hold.branch.to_owned(),
+                                checkout: hold.checkout.map(str::to_owned),
+                                message,
+                            });
+                        }
+                        return Ok((Some(item), observation_failures));
+                    }
                     Ok(None) => {}
                     Err(error) => observation_failures.push(ObservationFailure {
                         branch: hold.branch.to_owned(),

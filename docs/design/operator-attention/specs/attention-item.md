@@ -122,7 +122,7 @@ Notes that bind implementations:
   latest recorded step in `current_step_id` and `current_step_status` (null when none), so a
   caller without the operator-only run read can tell an active run from an abandoned one.
 
-`delivery_stale_base` observes recorded owner-base refusals and local refs without fetching or modifying the checkout. It reports one item per workspace, with `detail.base`, `ahead`, `behind`, `owner_only_commits` (up to 20 entries with SHA, summary and task marker if known), and `tracked_changes`. The `ahead` count preserves the total number of owner-only commits. It clears when the observed base is admissible or a later setup admits the same base. Missing or stale remote-tracking refs limit the observation; setup remains authoritative.
+`delivery_stale_base` observes recorded owner-base refusals and local refs without fetching or modifying the checkout. It reports one item per workspace, with `detail.base`, `ahead`, `behind`, `owner_only_commits` (up to 20 entries with SHA, summary and task marker if known), and `tracked_changes`. The `ahead` count preserves the total number of owner-only commits. It clears when the observed base is admissible or a later setup admits the same base. When the recorded checkout cannot be read, a diverged base (owner-only commits, behind origin) still reports: `tracked_changes` is `null`, `tracked_status` is `unavailable`, and a `source_unavailable` degraded entry names the checkout. A behind-only base whose checkout cannot be read has no ref-proven alert and stays degraded only. Missing or stale remote-tracking refs limit the observation; setup remains authoritative.
 
 ### Runtime liveness and locality
 
