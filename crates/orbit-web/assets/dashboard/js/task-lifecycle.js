@@ -65,9 +65,14 @@ export function buildTaskMeta(task, context, { editor, showsEditor, drain }) {
     });
   } else {
     const crew = explicitCrewValue(task);
-    controls.appendChild(el("span", { class: "task-chip task-chip-crew", title: "Crew" }, [
+    // The name sits in its own shrinkable span so a narrow row can ellipsize
+    // it; the chip's title and the row hint keep the full name reachable.
+    const name = el("span", { class: "task-crew-name" }, crew
+      ? [crew]
+      : [resolvedCrewName(task), el("span", { class: "fact-note", text: " · default" })]);
+    controls.appendChild(el("span", { class: "task-chip task-chip-crew", title: `Crew: ${name.textContent}` }, [
       el("span", { class: "visually-hidden", text: "Crew: " }),
-      ...(crew ? [crew] : [resolvedCrewName(task), el("span", { class: "fact-note", text: " · default" })]),
+      name,
     ]));
   }
   const hostPill = buildHostPill(task);
@@ -100,7 +105,7 @@ function fitTaskLevers(controls) {
     if (!controls.isConnected) return;
     controls.dataset.fit = "full";
     const crew = controls.querySelector(".task-crew-select");
-    const fullCrew = crew?.selectedOptions?.[0]?.textContent || controls.querySelector(".task-chip-crew")?.textContent.trim() || "";
+    const fullCrew = crew?.selectedOptions?.[0]?.textContent || controls.querySelector(".task-crew-name")?.textContent.trim() || "";
     const complexity = controls.querySelector(".task-complexity-select")?.selectedOptions?.[0]?.textContent || "";
     const host = controls.querySelector(".task-os-readout")?.textContent || "";
     const risk = controls.querySelector(".task-chip-risk")?.getAttribute("aria-label") || "";
