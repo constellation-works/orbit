@@ -402,9 +402,11 @@ spec:
       the list does not name. Still run any listed command the workspace guide
       names as a pre-handoff check for a diff (such as `make ci-guards`) and
       fix its findings before handoff; the pipeline still runs every listed
-      command on the committed candidate. Record each listed command as `not_run`
-      (pipeline final validation), never as passed — a pre-handoff run of the
-      same command does not count as final validation. A clean no-op or
+      command on the committed candidate. Record the actual pre-handoff
+      command and outcome separately from each listed command recorded as
+      `not_run` (pipeline final validation). The
+      same command can appear in both phases; a pre-handoff pass does not
+      count as a committed-candidate validation pass. A clean no-op or
       already-landed handoff skips pipeline validation, so there you run and
       record every required check. Without the field, you own every check.
     - Before handing off a diff, also run the pre-handoff checks the
@@ -502,8 +504,8 @@ spec:
       `orbit.task.update` (claimed mode: the `execution_summary` output).
       Gates read artifacts and task state, never the summary, so the summary
       is the audit trail. Map criteria to results; list validation commands
-      as passed, failed or not run, with reasons; record the reconciliation
-      (delivery paths, paths outside the task's selectors, cleanup outcome,
+      as passed, failed or not run, with reasons and phase; record the
+      reconciliation (delivery paths, paths outside the task's selectors, cleanup outcome,
       leftovers); disclose risks and deviations. Never claim a skipped check
       passed or incomplete work succeeded.
     - Return a short result `summary`; include `diff` only when cheap and
