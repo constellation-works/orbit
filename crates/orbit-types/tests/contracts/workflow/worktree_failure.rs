@@ -1,4 +1,6 @@
-use orbit_types::workflow::activity_job::worktree_failure_message;
+use orbit_types::workflow::activity_job::{
+    worktree_failure_display_message, worktree_failure_message,
+};
 use serde_json::{Value, json};
 
 const DRIFT: &str = "Run failed because the primary checkout changed during execution.";
@@ -23,7 +25,7 @@ fn drift_diagnostic(
 }
 
 fn drift_message(diagnostic: &Value) -> String {
-    worktree_failure_message("primary_checkout_drift", diagnostic)
+    worktree_failure_display_message("primary_checkout_drift", diagnostic)
 }
 
 fn fixed_drift_message() -> String {
@@ -122,7 +124,14 @@ fn diagnostics_without_path_or_head_fields_keep_the_fixed_message() {
 fn other_codes_keep_their_fixed_message() {
     let diagnostic = drift_diagnostic(("aaa111", None), ("bbb222", None), json!(["0"]));
     assert_eq!(
-        worktree_failure_message("worktree_content_conflict", &diagnostic),
+        worktree_failure_display_message("worktree_content_conflict", &diagnostic),
         CONTENT_CONFLICT
     );
+}
+
+#[test]
+fn fixed_message_api_keeps_its_static_return_type_and_wording() {
+    let diagnostic = drift_diagnostic(("aaa111", None), ("bbb222", None), json!(["0"]));
+    let message: &'static str = worktree_failure_message("primary_checkout_drift", &diagnostic);
+    assert_eq!(message, fixed_drift_message());
 }

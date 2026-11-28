@@ -70,7 +70,9 @@ pub use trusted_host::{
     TRUSTED_HOST_ADMISSION_KEY, TrustedHostActivityError, TrustedHostAdmission,
     run_input_declares_trusted_host, strip_trusted_host_admission, validate_trusted_host_activity,
 };
-pub use worktree_failure::{legacy_worktree_failure, worktree_failure_message};
+pub use worktree_failure::{
+    legacy_worktree_failure, worktree_failure_display_message, worktree_failure_message,
+};
 
 /// `activity:<name>` prefix for the `target:` field on a TargetRef.
 pub const ACTIVITY_REF_PREFIX: &str = "activity:";

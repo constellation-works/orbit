@@ -9,18 +9,24 @@ const PRIMARY_PATH_LIMIT: usize = 5;
 /// Bytes of one named primary path before the message cuts it short.
 const PRIMARY_PATH_BYTES: usize = 120;
 
-/// A concise action for a worktree failure. Paths, identifiers and the full
-/// reason remain in the diagnostic, including diagnostics from older runs.
-/// A `primary_checkout_drift` also names a bounded list of its changed primary
-/// paths and whether the primary HEAD moved, when the diagnostic carries those
+/// The fixed action for a worktree failure. Dynamic drift details belong in
+/// [`worktree_failure_display_message`].
+pub fn worktree_failure_message(code: &str, diagnostic: &Value) -> &'static str {
+    fixed_worktree_failure_message(code, diagnostic)
+}
+
+/// A concise display message for a worktree failure. Paths, identifiers and
+/// the full reason remain in the diagnostic, including diagnostics from older
+/// runs. A `primary_checkout_drift` names a bounded list of changed primary
+/// paths and whether the primary HEAD moved when the diagnostic carries those
 /// fields.
-pub fn worktree_failure_message(code: &str, diagnostic: &Value) -> String {
+pub fn worktree_failure_display_message(code: &str, diagnostic: &Value) -> String {
     if code == "primary_checkout_drift"
         && let Some(message) = primary_drift_message(diagnostic)
     {
         return message;
     }
-    fixed_worktree_failure_message(code, diagnostic).to_string()
+    worktree_failure_message(code, diagnostic).to_string()
 }
 
 fn fixed_worktree_failure_message(code: &str, diagnostic: &Value) -> &'static str {
@@ -140,5 +146,8 @@ pub fn legacy_worktree_failure(message: &str) -> Option<(String, Value)> {
     if !diagnostic.is_object() {
         return None;
     }
-    Some((worktree_failure_message(code, &diagnostic), diagnostic))
+    Some((
+        worktree_failure_display_message(code, &diagnostic),
+        diagnostic,
+    ))
 }

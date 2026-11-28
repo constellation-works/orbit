@@ -534,7 +534,8 @@ impl DispatchError {
 
 fn worktree_dispatch_message(code: &str, diagnostic: &str) -> String {
     let value = serde_json::from_str(diagnostic).unwrap_or(Value::Null);
-    let message = orbit_types::workflow::activity_job::worktree_failure_message(code, &value);
+    let message =
+        orbit_types::workflow::activity_job::worktree_failure_display_message(code, &value);
     match stored_output_cite(&value) {
         Some(cite) => format!("{message} ({cite})"),
         None => message,
