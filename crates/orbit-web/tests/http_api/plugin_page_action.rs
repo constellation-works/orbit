@@ -536,7 +536,10 @@ fn an_invalid_action_run_body_spends_its_confirmation_and_is_audited() {
             refused(
                 run(
                     &server,
-                    json!({"input": {"value": 1}, "confirmation": missing_tool_token}),
+                    json!({
+                        "input": {"value": 1},
+                        "confirmation": missing_tool_token
+                    }),
                 ),
                 403,
                 "confirmation_refused",
@@ -545,7 +548,11 @@ fn an_invalid_action_run_body_spends_its_confirmation_and_is_audited() {
             refused(
                 run(
                     &server,
-                    json!({"tool": "mutate", "input": {"value": 1}, "confirmation": missing_tool_token}),
+                    json!({
+                        "tool": "mutate",
+                        "input": {"value": 1},
+                        "confirmation": missing_tool_token
+                    }),
                 ),
                 403,
                 "confirmation_refused",
@@ -557,7 +564,11 @@ fn an_invalid_action_run_body_spends_its_confirmation_and_is_audited() {
             refused(
                 run(
                     &server,
-                    json!({"tool": 123, "input": {"value": 1}, "confirmation": non_string_tool_token}),
+                    json!({
+                        "tool": 123,
+                        "input": {"value": 1},
+                        "confirmation": non_string_tool_token
+                    }),
                 ),
                 403,
                 "confirmation_refused",
@@ -566,7 +577,11 @@ fn an_invalid_action_run_body_spends_its_confirmation_and_is_audited() {
             refused(
                 run(
                     &server,
-                    json!({"tool": "mutate", "input": {"value": 1}, "confirmation": non_string_tool_token}),
+                    json!({
+                        "tool": "mutate",
+                        "input": {"value": 1},
+                        "confirmation": non_string_tool_token
+                    }),
                 ),
                 403,
                 "confirmation_refused",
