@@ -240,11 +240,16 @@ spec:
        Auto-fix check repair sections.
 
        Before handing off a diff, also run the pre-handoff checks the workspace
-       guide names for a diff (static guards, formatter, linters for what you
-       changed) and fix what they report. They do not replace
-       `task.final_validation_commands`, which comes only from the injected
-       execution envelope, is absent when empty, and is not an
-       `orbit.task.show` field.
+       guide requires for a diff, including any command also listed in
+       `task.final_validation_commands`, and fix what they report. Respect the
+       workspace guide's applicable no-diff, light-delivery and platform
+       exceptions. That list comes only from the injected execution envelope,
+       is absent when empty, and is not an `orbit.task.show` field. In `summary`,
+       record each actual pre-handoff command and outcome separately from each
+       listed command as `not_run` (pipeline final validation), even when they
+       are the same command. The later
+       pipeline run is on the exact committed candidate; neither this local
+       result nor existing review or pipeline evidence substitutes for it.
 
     5. For an already-terminal run, follow Terminal source run. Use Direct
        delivery only as the last resort that section describes.
@@ -280,7 +285,8 @@ spec:
       same tests).
     - Follow the workspace guide; for example apply the formatter the command
       names. Confirm with the pre-handoff checks, and run the failing command
-      yourself only when the injected envelope list does not reserve it.
+      yourself when the injected envelope list does not reserve it, or when
+      the workspace guide requires it as a pre-handoff check for the diff.
     - Orbit refuses to commit the repair, and skips the retry, when it changes
       Git or `.orbit` metadata or an environment file, leaves a symlink or
       gitlink, or would move a head already under before-PR review.

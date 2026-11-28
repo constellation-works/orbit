@@ -124,9 +124,13 @@ When the envelope lists it, the delivery pipeline runs those commands
 on the final candidate after base synchronization. For a diff, leave them to it,
 except the pre-handoff checks the workspace guide requires for a diff (such as
 `make ci-guards`): run those before handoff even when the list names them, and
-run focused checks plus every required check the list omits. A pre-handoff run
-does not count as pipeline final validation. A clean no-op or already-landed
-handoff skips that validation, so it still runs every required check.
+run focused checks plus every required check the list omits. Record each
+pre-handoff command and its actual outcome separately from the listed command's
+`not_run` entry for pipeline final validation; the same command can appear in
+both phases. A pre-handoff run does not count as pipeline final validation.
+Respect the workspace guide's applicable no-diff, light-delivery and platform
+exceptions. A clean no-op or already-landed handoff skips that validation, so it
+still runs every required check.
 
 For a task tagged `no-diff-expected`, in owner or claimed mode,
 run no workspace gates or required validation commands and attach no
