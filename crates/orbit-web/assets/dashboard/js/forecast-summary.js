@@ -580,19 +580,22 @@ function wholeUsd(value) {
 /// freshness label for all the snapshot's figures. Counts and exact cost are
 /// in its tooltip and accessible text. When the adjusted forecast is
 /// unavailable the pre-regression baseline rows are muted without a visible
-/// label, or there are no rows; the reason and the baseline's caveat stay in
-/// the tooltip and accessible text [ORB-20453].
+/// label, or there are no rows; the reason, the snapshot's freshness (stored
+/// age or live, absent for a transport failure) and the baseline's caveat stay
+/// in the tooltip and accessible text [ORB-20453].
 export function drainBacklogForecastLink(summary) {
   const unavailable = !summary || Boolean(summary.unavailable);
   const link = el("a", { class: unavailable ? "drain-backlog-forecast unavailable" : "drain-backlog-forecast" });
   link.href = scopedHashHref("#analytics/forecast");
   if (unavailable) {
     const reason = summary?.reason || "Backlog forecast unavailable";
-    const detail = [reason, summary?.detail, summary?.baselineText, summary?.counts, ...(summary?.scope?.lines || [])].filter(Boolean).join(" ");
+    const freshness = summary?.freshness && `${summary.freshness}.`;
+    const detail = [reason, summary?.detail, freshness, summary?.baselineText, summary?.counts, ...(summary?.scope?.lines || [])].filter(Boolean).join(" ");
     link.title = `${detail}\nAnalytics › Forecast`;
     if (summary) link.dataset.forecastReason = summary.reasonKind || "unknown";
     // No visible label or arrow here: with no drawable baseline the row is
-    // blank, and the reason stays in the tooltip and accessible text [ORB-20453].
+    // blank, and the reason and freshness stay in the tooltip and accessible
+    // text [ORB-20453].
     const bars = backlogBarList(summary?.baselineBars, null, "pre-regression baseline");
     if (bars) {
       bars.classList.add("baseline");
