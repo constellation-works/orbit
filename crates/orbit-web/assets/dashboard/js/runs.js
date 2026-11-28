@@ -878,16 +878,17 @@ function applyRunQuery(raw) {
 }
 
 // The Running header: tasks with work in flight and the runs behind them.
-// The limit line below the filters already states how many of the total are
-// shown, so the truncated header states only the totals: each count appears
-// once, labelled as what it counts (STD-07).
+// With a truncated result, only the run total is global; omit the page-local
+// task count so the header doesn't imply it covers every in-flight run.
 function formatInFlightCount(runs, meta) {
-  const tasks = new Set(runs.flatMap(runTaskIds)).size;
   const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
   if (!runs.length) return "nothing in flight";
-  if (meta && meta.truncated && Number.isFinite(meta.total)) {
-    return `${plural(tasks, "task")} · ${plural(meta.total, "run")} in flight`;
+  if (meta && meta.truncated) {
+    return Number.isFinite(meta.total)
+      ? `${plural(meta.total, "run")} in flight`
+      : "in-flight runs truncated";
   }
+  const tasks = new Set(runs.flatMap(runTaskIds)).size;
   return `${plural(tasks, "task")}, ${plural(runs.length, "run")} in flight`;
 }
 
