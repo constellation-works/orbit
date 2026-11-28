@@ -554,7 +554,10 @@ separate grant; populated selectors or a successful wrapper are insufficient.
 
 A pilot warning finding (an unenforced prerequisite, a conflict, or a holding
 surface, utility or validation-tool warning) withholds a proposed task's
-promotion until an operator decides it. The `pilot_warnings_held` trigger and
+promotion. An unenforced prerequisite stops holding promotion automatically
+when its named task finishes or a dependency edge enforces it; any warnings
+that remain continue to hold promotion until an operator decides them. The
+`pilot_warnings_held` trigger and
 its seeded `pilot_warning_triage` routine are retired [ORB-22844]: a definition
 on the kind loads as retired and names the dashboard's Triage action
 (`POST /tasks/{id}/triage`), which still runs `escalation_triage_pipeline` for
