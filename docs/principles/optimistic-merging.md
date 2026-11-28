@@ -14,7 +14,7 @@ Public write-up: [Delivery philosophy: optimistic merging](https://danieljhk.com
 
 ## Why: throughput
 
-Orbit schedules declared file footprints by conflict-free availability, as [declared footprints](declared-footprints.md) sets out: a task with a nonempty `context_files` footprint is admitted when its selectors do not overlap active reservations, and a selector-free task has no file reservation.
+Orbit ordinarily schedules declared file footprints by conflict-free availability, as [declared footprints](declared-footprints.md) sets out: a task with a nonempty `context_files` footprint is admitted when its selectors do not overlap active reservations. A named operator CLI ship can override a local context-lock wait when its reservation conflicts with existing holders; the separate live execution-claim guard still applies. A selector-free task has no file reservation.
 
 A long review gate keeps a declared file reservation held while nothing is changing. Every queued task with an overlapping declared footprint waits, concurrency drops, and the queue stalls behind review latency rather than implementation time.
 
