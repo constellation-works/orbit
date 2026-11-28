@@ -117,9 +117,14 @@ The alternative, running replay candidates in the live workspace at `low` priori
 
 ### 3.2 Base commit
 
-The base is the first parent of the commit the task landed as. Orbit already records both: `landed_diff_stats` holds `landed_commit` and `base_commit` per task (`LandedDiffStats`, `crates/orbit-store/src/contract/landed_diff_stats.rs:62-85`), and the writer defines `base_commit` as the landed commit's first parent, because pull requests land by squash or merge commit (`crates/orbit-core/src/app/codebase/diff_stat.rs:7-18`). Tasks without a row fall back to the landing receipt in task history, read by `crates/orbit-core/src/app/codebase/landed.rs`.
+The reference range is the recorded landing range, which takes one of two shapes. Orbit already records both in `landed_diff_stats` (`landed_commit` and `base_commit` per task, `LandedDiffStats`, `crates/orbit-store/src/contract/landed_diff_stats.rs:61-85`):
 
-This agrees with the starting view. It is deliberately not the base the original run started from, which is older whenever the branch was rebased before landing: the reference diff and the held-out tests are only known to work on the merge parent.
+- **Local fast-forward.** A local single-task fast-forward records the full `before_commit..after_commit` range the branch moved across (`try_record_direct_landing`, `crates/orbit-core/src/app/codebase/diff_stat.rs:258-324`; the single-task case at `:278-295`, the multi-task split at `:297-304`), and `write_row` stores the provided `before_commit` as the base (`:305-321`, `:432-455`). The replay base for such a row is that recorded `before_commit` as-is: substituting the landed commit's first parent would drop the first commit of a local fast-forward over two commits.
+- **Receipt-derived landing.** A task's transition into done with a landing receipt in its history (a pull request merged by the pipeline, an owner handoff landing, or a pull request merged outside Orbit) diffs the landed commit against its first parent (`record_landing` with no stored base, `crates/orbit-core/src/app/codebase/diff_stat.rs:405-430`; `diff_counts` resolves a missing base to the first parent at `:656-666`). Pull requests land by squash or merge commit, so the first parent is the base they landed on and refreshes merged into the branch are not counted (`crates/orbit-core/src/app/codebase/diff_stat.rs:12-18`). A rebase merge of several commits counts only its last (`:17`).
+
+**Eligibility and fallback.** An entry's reference range is the recorded row's `base_commit..landed_commit`, whichever shape above produced it. Tasks without a row fall back to the landing receipt in task history (`receipt`, `crates/orbit-core/src/app/codebase/landed.rs:97-112`, or the delivery run's observed landing at `:72-87`), whose base is the landed commit's first parent. A task with neither a row nor a receipt-derived commit is not eligible (§3.1, `refused[]` in §11).
+
+This agrees with the starting view. It is deliberately not the base the original run started from, which is older whenever the branch was rebased before landing: the reference diff and the held-out tests are only known to work on the recorded base.
 
 ### 3.3 The snapshot
 
@@ -331,7 +336,7 @@ For every candidate, winner or not, the plugin keeps: the arm, the head commit, 
 
 Each pick feeds replay in two ways:
 
-1. **A ready eval entry.** Once the winner merges, `eval.set-build --from-bakeoffs` offers T as an entry: the snapshot is exact, the base is the winner's merge parent, the reference is the winner's merged diff, and it goes through the same fail-then-pass admission as any entry if it carries tests.
+1. **A ready eval entry.** Once the winner merges, `eval.set-build --from-bakeoffs` offers T as an entry: the snapshot is exact, the base is the winner's recorded landing base (§3.2), the reference is the winner's merged diff, and it goes through the same fail-then-pass admission as any entry if it carries tests.
 2. **Calibration for the blind judge.** A pick says "this diff over those, for this task". Replaying the judge over stored bake-offs and counting how often it ranks the picked diff first gives the judge an agreement rate with a person. That number decides whether the blind review signal (§5.3) can be trusted as a headline score, and whether a judge could ever pick.
 
 Losing candidates are not a regression record and not an escaped defect. They are excluded from scorecards (core addition 3 of §1.4).
@@ -473,7 +478,7 @@ Two reads need a decision in task 2 of §13 because they are not exposed as tool
 
 Not filed. Each line is one implementation task: outcome, then what it depends on. Tasks 1 to 5 deliver a first replay; 6 to 8 deliver bake-off; the rest follow evidence.
 
-1. **Spike: one replay candidate end to end, by hand.** In a scratch workspace, a hand-written job runs one closed bug task's snapshot at its merge parent with an explicit crew and captures the diff, using the local-branch base workaround. Outcome: a written list of what failed, which settles whether core addition 1 is needed. Depends on: Q1.
+1. **Spike: one replay candidate end to end, by hand.** In a scratch workspace, a hand-written job runs one closed bug task's snapshot at its recorded landing base (§3.2) with an explicit crew and captures the diff, using the local-branch base workaround. Outcome: a written list of what failed, which settles whether core addition 1 is needed. Depends on: Q1.
 2. **Core: `base_sha` on `worktree_setup`, and read tools for the dispatched task scope and a task's landed diff.** Outcome: a job can start a worktree at a commit; a plugin can read both records without a store grant. Depends on: 1 (drop the first half if the workaround holds).
 3. **Plugin skeleton and eval sets.** Repository, manifest, `set-build` with the fail-then-pass admission, `set-show`, export and import. Outcome: a frozen 25-task set for `orbit`. Depends on: 2.
 4. **Replay job with held-out tests and free metrics.** `eval_replay_candidate`, `candidate-capture`, `candidate-score`, `replay-start`, `replay-advance` with the spend cap, `replay-status`. Outcome: a replay of the set over two crews completes under a cap. Depends on: 3, and the evaluation workspace existing (Q1, Q2).
