@@ -68,6 +68,7 @@ pub(crate) use inspect::{
 pub(crate) use install::install_plugin_reporting_enable;
 pub(crate) use lifecycle::{
     PluginEnableResult, PluginSyncOutcome, enable_plugin_from_dashboard, migrate_plugin_sidecars,
+    workspace_plugin_toggles,
 };
 pub(crate) use mcp_surface::{
     FileIdentity, FileStamp, global_only_config, global_only_config_with_env,

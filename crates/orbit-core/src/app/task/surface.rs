@@ -364,7 +364,8 @@ pub(super) fn decision_fields(
         | DecisionVerb::Show
         | DecisionVerb::Raise
         | DecisionVerb::Submit
-        | DecisionVerb::Digest => ToolInvocationPort::run_tool_with_context(
+        | DecisionVerb::Digest
+        | DecisionVerb::PluginRaise => ToolInvocationPort::run_tool_with_context(
             runtime,
             verb.spec().tool_name,
             fields,

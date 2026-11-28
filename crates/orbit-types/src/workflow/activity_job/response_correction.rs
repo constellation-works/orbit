@@ -28,6 +28,7 @@ pub const MUTATING_TOOLS: &[&str] = &[
     "orbit.auto_task:update",
     "orbit.command.exec",
     "orbit.decision.digest",
+    "orbit.decision.plugin_raise",
     "orbit.decision.submit",
     "orbit.decision:raise",
     "orbit.drain.claim.bind",

@@ -68,6 +68,9 @@ pub(super) fn dispatch(
             value["deduplicated"] = json!(raised.deduplicated);
             Ok(value)
         }
+        DecisionVerb::PluginRaise => runtime.raise_plugin_decision(input.as_value(), |plugin| {
+            Ok(crate::app::plugin::workspace_plugin_toggles(runtime)?.get(plugin) != Some(&false))
+        }),
         DecisionVerb::Digest => {
             let caller = submit_caller(runtime, session_context, agent, model)?;
             let digest =

@@ -71,6 +71,17 @@ pub enum DecisionBinding {
         /// of the requested set.
         capabilities: String,
     },
+    /// One plugin object at the revision and manifest digest seen at raise.
+    PluginObject {
+        /// Owning plugin namespace.
+        plugin: String,
+        /// Stable object identifier within the plugin.
+        subject: String,
+        /// Opaque revision supplied by the plugin.
+        revision: String,
+        /// Installed manifest digest at raise.
+        manifest_digest: String,
+    },
 }
 
 impl DecisionBinding {
@@ -123,6 +134,13 @@ impl DecisionBinding {
                 digest,
                 capabilities,
             } => format!("script_grant:{script}:{digest}:{capabilities}"),
+            Self::PluginObject {
+                plugin,
+                subject,
+                revision,
+                manifest_digest,
+            } => serde_json::json!(["plugin_object", plugin, subject, revision, manifest_digest])
+                .to_string(),
         }
     }
 }

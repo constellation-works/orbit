@@ -167,6 +167,7 @@ pub(super) fn resident_guard_class(action: OrbitBuiltinAction, input: &Value) ->
             | DecisionVerb::RuleAuto
             | DecisionVerb::Consolidate
             | DecisionVerb::Submit
+            | DecisionVerb::PluginRaise
             | DecisionVerb::ChannelRegister
             | DecisionVerb::ChannelRevoke
             | DecisionVerb::ChannelRotateKey => Refused,

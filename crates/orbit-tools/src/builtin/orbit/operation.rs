@@ -47,6 +47,11 @@ pub(super) trait GuardedModes: OperationVerb {
         false
     }
 
+    /// Override the noun's registration for a tool with no MCP scope.
+    fn tool_only_registration(self) -> Option<ToolOnlyRegistration> {
+        None
+    }
+
     /// Normalize a noun's legacy wire shapes before strict spec parsing.
     /// Guarded modes have already taken ownership of their input contract.
     fn normalize_input(self, _input: &mut Value) {}
@@ -214,7 +219,11 @@ where
         let tool = OperationTool(spec);
         match spec.mcp_scope {
             Some(scope) => registry.register_mcp(tool, scope),
-            None => match noun.tool_only_registration {
+            None => match spec
+                .verb
+                .tool_only_registration()
+                .unwrap_or(noun.tool_only_registration)
+            {
                 ToolOnlyRegistration::Active => registry.register(tool),
                 ToolOnlyRegistration::Inactive => registry.register_inactive(tool),
             },

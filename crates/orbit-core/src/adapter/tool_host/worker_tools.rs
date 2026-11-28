@@ -5,6 +5,7 @@ use orbit_common::governance::agents::AgentsVerb;
 use orbit_common::governance::auto_task::AutoTaskVerb;
 use orbit_common::governance::automation::AutomationVerb;
 use orbit_common::governance::codebase::CodebaseVerb;
+use orbit_common::governance::decision::DecisionVerb;
 use orbit_common::governance::drain::DrainVerb;
 use orbit_common::governance::friction::FrictionVerb;
 use orbit_common::governance::operation::OperationVerb;
@@ -12,7 +13,7 @@ use orbit_common::governance::search::SearchVerb;
 use orbit_common::governance::task::{TASK_CLI_OPTIONS_PARAM, TaskVerb};
 use orbit_common::governance::workflow::WorkflowVerb;
 use orbit_common::governance::workspace_claim::WorkspaceClaimVerb;
-use orbit_common::{ClaimRefusalKind, OrbitError};
+use orbit_common::{ClaimRefusalKind, DecisionRefusalCode, OrbitError};
 use orbit_store::contract::{
     ClaimEvidence, ClaimInvocation, ClaimMutation, ClaimRun, ClaimSteeringRecord, ClaimWorkerUpdate,
 };
@@ -162,6 +163,16 @@ pub(crate) fn execute(
     action: OrbitBuiltinAction,
     input: &Value,
 ) -> Result<Option<Value>, OrbitError> {
+    if matches!(
+        action,
+        OrbitBuiltinAction::Decision(DecisionVerb::PluginRaise)
+    ) && session.worker_invocation.is_some()
+    {
+        return Err(OrbitError::decision_refused(
+            DecisionRefusalCode::HostNotOwner,
+            "a claimed worker cannot raise a plugin decision request",
+        ));
+    }
     let Some(route) = worker_route(action) else {
         return Ok(None);
     };

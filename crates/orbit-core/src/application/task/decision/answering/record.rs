@@ -433,6 +433,10 @@ impl OrbitRuntime {
                 )?;
                 Ok(DecisionAnswerEffects::default())
             }
+            DecisionGate::PluginRequest => Err(OrbitError::decision_refused(
+                DecisionRefusalCode::AnswerNotApplicable,
+                "applying answers to plugin decision requests is unavailable in this version",
+            )),
             DecisionGate::ScriptGrant => {
                 self.answer_script_grant_decision(request, answer_id, actor_label, via)?;
                 Ok(DecisionAnswerEffects::default())

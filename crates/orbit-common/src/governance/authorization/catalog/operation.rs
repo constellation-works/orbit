@@ -407,6 +407,12 @@ pub const GOVERNED_OPERATIONS: &[GovernedOperation] = &[
         allowed: &[McpCapability::Operator],
         rationale: "the decision digest raises approval requests for a human to answer, so only the operator — or the registered channel's own plugin callback, which the handler binds to the registration — may call it; an agent session never raises requests for a human",
     },
+    GovernedOperation {
+        id: crate::governance::decision::PLUGIN_RAISE_TOOL,
+        surface: OperationSurface::Tool,
+        allowed: &[McpCapability::Operator],
+        rationale: "only an authenticated plugin callback can raise or withdraw a decision for an object that the plugin owns",
+    },
     // Experiments: every write is the operator's; agents may show and list.
     GovernedOperation {
         id: "orbit.experiment.create",

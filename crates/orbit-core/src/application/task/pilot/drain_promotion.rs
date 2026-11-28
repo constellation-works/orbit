@@ -41,7 +41,7 @@ use crate::application::task::{
 use super::apply::admission::{AppliedTaskMaterial, PreparedTaskSnapshot, ValidatedTask};
 use super::persist::{assessed_material_drift, with_task_locks};
 use super::promotion::{
-    FOOTPRINT_UNRESOLVED, PromotionFindings, auto_approval_hold_classification,
+    DECISION_PENDING, FOOTPRINT_UNRESOLVED, PromotionFindings, auto_approval_hold_classification,
     auto_approval_opted_out, footprint_hold, promotion_findings, promotion_task_ids, warning_text,
 };
 
@@ -552,6 +552,11 @@ pub(super) fn approve(
             .warnings;
             approval = Some(if task.status != TaskStatus::Proposed {
                 Approval::NotProposed
+            } else if runtime.has_open_plugin_decision(&task)? {
+                Approval::Held {
+                    classification: DECISION_PENDING,
+                    evidence: Value::Null,
+                }
             } else if auto_approval_opted_out(&task.tags) {
                 Approval::Held {
                     classification: auto_approval_hold_classification(&task.tags),
@@ -724,6 +729,15 @@ pub(super) fn classify_reuse(
     hold_live_pilot: bool,
     promotion_policy: PromotionPolicy,
 ) -> Result<ExplicitAssessmentReuse, OrbitError> {
+    if promotion_policy == PromotionPolicy::Drain
+        && task.status == TaskStatus::Proposed
+        && runtime.has_open_plugin_decision(task)?
+    {
+        return Ok(ExplicitAssessmentReuse::Hold {
+            reason: DECISION_PENDING,
+            detail: None,
+        });
+    }
     let comments = match promotion_policy {
         PromotionPolicy::Drain => runtime.get_task_pilot_comments(&task.id)?,
         PromotionPolicy::ResidentHeld => runtime.get_task_comments(&task.id)?,

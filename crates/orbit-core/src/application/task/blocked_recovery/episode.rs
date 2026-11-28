@@ -3,7 +3,8 @@
 use chrono::{DateTime, Duration, SecondsFormat, Utc};
 use orbit_engine::{WORKFLOW_RUN_FAILED_EVENT, WORKFLOW_RUN_INTERRUPTED_EVENT};
 use orbit_types::task::{
-    ArtifactManifestFileV2, Task, TaskComment, TaskDecision, TaskHistoryEntry, TaskStatus,
+    ArtifactManifestFileV2, DECISION_REQUESTED_EVENT, DECISION_WITHDRAWN_EVENT, Task, TaskComment,
+    TaskDecision, TaskHistoryEntry, TaskStatus,
 };
 use orbit_types::workflow::RecoveryFault;
 
@@ -267,6 +268,14 @@ pub(super) fn later_touch(
     let later_actor = history
         .iter()
         .filter(|entry| entry.at > since)
+        // A plugin can surface or withdraw a question about the episode
+        // without taking over recovery from the operator.
+        .filter(|entry| {
+            !matches!(
+                entry.event.as_str(),
+                DECISION_REQUESTED_EVENT | DECISION_WITHDRAWN_EVENT
+            ) || !entry.by.starts_with("plugin:")
+        })
         .map(|entry| entry.by.as_str())
         .chain(
             comments

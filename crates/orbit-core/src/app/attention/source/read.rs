@@ -360,7 +360,20 @@ pub(in super::super) fn read_attention_sources(
                 K::ReviewWaiting => Some(DecisionGate::ReviewApproval),
                 _ => None,
             };
-            let request = requests.iter().find(|request| Some(request.gate) == gate);
+            let request = gate.and_then(|gate| {
+                requests
+                    .iter()
+                    .find(|request| {
+                        request.gate == DecisionGate::PluginRequest
+                            && request.plugin_apply.as_ref().is_some_and(|apply| {
+                                !crate::application::task::is_plugin_decision_holder(
+                                    &task,
+                                    &apply.plugin,
+                                )
+                            })
+                    })
+                    .or_else(|| requests.iter().find(|request| request.gate == gate))
+            });
             let spent = elapsed.entry(kind.as_str().into()).or_default();
             if *spent >= Duration::from_secs(super::super::ATTENTION_SOURCE_TIMEOUT_SECONDS) {
                 if !result

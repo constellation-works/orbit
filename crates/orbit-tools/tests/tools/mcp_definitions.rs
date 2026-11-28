@@ -5,6 +5,7 @@
 use std::sync::Arc;
 
 use orbit_common::OrbitError;
+use orbit_common::governance::decision::PLUGIN_RAISE_TOOL;
 use orbit_tools::plugin::PluginToolBinding;
 use orbit_tools::{
     Tool, ToolContext, ToolExecutionKind, ToolRegistry, builtin_mcp_rules,
@@ -110,6 +111,10 @@ impl Tool for ReadOnlyPlugin {
 fn canonical_builtin_definitions_preserve_the_exact_workspace_surface() {
     let definitions =
         canonical_builtin_mcp_tool_definitions().expect("builtin MCP definitions are valid");
+    let mut registry = ToolRegistry::new();
+    registry.register_builtins();
+    assert!(registry.is_active(PLUGIN_RAISE_TOOL));
+    assert_eq!(registry.mcp_scope(PLUGIN_RAISE_TOOL), None);
     assert_eq!(
         definitions
             .iter()
@@ -483,6 +488,10 @@ fn every_builtin_id_route_is_declared_and_preserves_the_former_tables() {
     let experiment = "an experiment id is workspace-local and carries no host prefix";
     let run = "a run id is host-local: a run executes where it was admitted";
     let notice = "a notice id is workspace-local and carries no host prefix";
+    assert_eq!(
+        builtin_mcp_rules(PLUGIN_RAISE_TOOL).id_route,
+        McpIdRoute::Unspecified
+    );
     let workspace_local: [(&str, &str); 26] = [
         ("orbit.friction.show", friction),
         ("orbit.friction.update", friction),

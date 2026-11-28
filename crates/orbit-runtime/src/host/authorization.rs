@@ -1,9 +1,10 @@
 //! Tool-surface authorization and activity-policy denial recording on [`RuntimeKernel`].
 
-use orbit_common::OrbitError;
 use orbit_common::governance::authorization::{
     CallerCapabilities, CallerEnvelope, OperationSurface, governed_plugin_tool, governed_tool,
 };
+use orbit_common::governance::decision::PLUGIN_RAISE_TOOL;
+use orbit_common::{DecisionRefusalCode, OrbitError};
 use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::tool::ToolSessionContext;
 
@@ -53,8 +54,15 @@ impl RuntimeKernel {
         // the handler's registration binding (and, for submission, token
         // verification). Every other caller, agent sessions included, is
         // held to the row.
-        if (tool_name == DECISION_SUBMIT_OPERATION_ID || tool_name == DECISION_DIGEST_OPERATION_ID)
-            && session_context.worker_invocation.is_none()
+        // Authenticated raises also use the callback path. The handler
+        // verifies manifest and workspace ownership, including the typed
+        // owner refusal for a claimed callback.
+        let plugin_raise = tool_name == PLUGIN_RAISE_TOOL;
+        if (plugin_raise
+            || (matches!(
+                tool_name,
+                DECISION_SUBMIT_OPERATION_ID | DECISION_DIGEST_OPERATION_ID
+            ) && session_context.worker_invocation.is_none()))
             && matches!(
                 orbit_tools::plugin::resolve_plugin_callback_session(
                     self.env(),
@@ -77,6 +85,16 @@ impl RuntimeKernel {
             CapabilityEnforcement::McpSessionOnly => CallerEnvelope::mcp_session(session_context),
         };
         self.decide_with_envelope(operation, envelope)
+            .map_err(|error| {
+                if plugin_raise {
+                    OrbitError::decision_refused(
+                        DecisionRefusalCode::CallerNotAllowed,
+                        error.to_string(),
+                    )
+                } else {
+                    error
+                }
+            })
     }
 
     /// Keep activity-policy refusals queryable through the same authorization

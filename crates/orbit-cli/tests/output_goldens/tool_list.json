@@ -922,6 +922,59 @@
     "mcp_toolset": "decision-channel"
   },
   {
+    "name": "orbit.decision.plugin_raise",
+    "description": "Raise or withdraw a human decision request for a plugin object. Requires an authenticated callback from the owning plugin.",
+    "enabled": true,
+    "active": true,
+    "status": "active",
+    "builtin": true,
+    "parameters": [
+      {
+        "name": "task_id",
+        "description": "The task to attach the request to. Omit for a plugin holder task.",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "subject",
+        "description": "The plugin's stable object identifier.",
+        "param_type": "string",
+        "required": true
+      },
+      {
+        "name": "summary",
+        "description": "The question the operator should answer.",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "answers",
+        "description": "Two to four answer objects with id, label and consequence.",
+        "param_type": "object_array",
+        "required": false
+      },
+      {
+        "name": "recommended",
+        "description": "The id of the recommended answer.",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "apply",
+        "description": "The plugin's tool, pinned input and object revision.",
+        "param_type": "object",
+        "required": false
+      },
+      {
+        "name": "withdraw",
+        "description": "Supersede the open request for the subject.",
+        "param_type": "boolean",
+        "required": false
+      }
+    ],
+    "mcp_toolset": "local"
+  },
+  {
     "name": "orbit.decision.submit",
     "description": "Submit a human's answer to one open decision request through a registered decision channel. Refusal codes, DKIM rules and retry: the orbit skill's references/tool-surface-decisions.md, section `Decision requests`.",
     "enabled": true,

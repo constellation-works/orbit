@@ -85,7 +85,7 @@ impl OrbitRuntime {
             .map(|name| {
                 DecisionGate::from_name(name).ok_or_else(|| {
                     OrbitError::InvalidInput(format!(
-                        "unknown decision gate `{name}`; expected agent_request, block_triage, model_answer_review, pilot_admission, proposed_approval, resident_authority, review_approval or script_grant"
+                        "unknown decision gate `{name}`; expected agent_request, block_triage, model_answer_review, pilot_admission, plugin_request, proposed_approval, resident_authority, review_approval or script_grant"
                     ))
                 })
             })
@@ -121,7 +121,7 @@ impl OrbitRuntime {
         let mut tools = self.allowlist_known_tool_names();
         tools.sort();
         orbit_common::security::release::sha256_hex(
-            json!(["decision-projection-v2", std::env::consts::OS, tools])
+            json!(["decision-projection-v3", std::env::consts::OS, tools])
                 .to_string()
                 .as_bytes(),
         )
@@ -195,10 +195,10 @@ impl OrbitRuntime {
                 stamp == Some(&snapshot.stamp)
                     && snapshot.projection_key == projection_key
                     && now >= snapshot.observed_at
-                    && snapshot
-                        .requests
-                        .iter()
-                        .all(|request| request.state != DecisionRequestState::Open)
+                    && snapshot.requests.iter().all(|request| {
+                        request.state != DecisionRequestState::Open
+                            && request.gate != DecisionGate::PluginRequest
+                    })
             });
             let requests = match cached {
                 Some(snapshot) => snapshot.requests,

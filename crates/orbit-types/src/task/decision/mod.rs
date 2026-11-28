@@ -26,7 +26,8 @@ mod run_transition;
 
 pub use agent_request::{
     AGENT_DECISION_MAX_OPTIONS, AGENT_DECISION_MIN_OPTIONS, AgentDecisionOptionInput,
-    AgentDecisionRequestError, agent_decision_answers, normalize_agent_decision_topic,
+    AgentDecisionRequestError, agent_decision_answers, decision_answer_line,
+    normalize_agent_decision_topic,
 };
 pub use ci_evidence::{CiFailureIdentity, CiFailureIdentityError, CiFailureSource};
 pub use code_scanning::{CodeScanningAlertEvidence, CodeScanningAlertEvidenceError};
@@ -50,15 +51,15 @@ pub use recovery::{
 pub use request::{
     ACCEPT_FINDINGS_ANSWER_ID, DECISION_ANSWERED_EVENT, DECISION_DIGEST_EXPIRY_WINDOW_HOURS,
     DECISION_MODEL_CONFIRMED_EVENT, DECISION_REOPENED_EVENT, DECISION_REQUESTED_EVENT,
-    DECISION_TOKEN_CONSUMED_EVENT, DEFAULT_DECISION_REQUEST_TTL_HOURS, DecisionAction,
-    DecisionAnswer, DecisionBinding, DecisionGate, DecisionOption, DecisionOptionError,
-    DecisionOptionInput, DecisionRequest, DecisionRequestState, DecisionResolution,
-    DecisionRewrite, DecisionRiskTier, MODEL_ANSWER_ACTOR, MODEL_ANSWER_CONFIRM, MODEL_ANSWER_VETO,
-    ModelAnswerCitation, ModelAnswerConfirmation, ModelAnswerEnablement, ModelCitedPrecedent,
-    PRECEDENT_ACTOR, PRECEDENT_BOOKKEEPING_NOTE, PrecedentCitation, PrecedentSource,
-    RESIDENT_AUTHORITY_GRANT, RESIDENT_AUTHORITY_REJECT, SCRIPT_GRANT_GRANT, SCRIPT_GRANT_REJECT,
-    current_candidate_identity, decision_option_answers, decision_requests_from_history,
-    is_precedent_bookkeeping,
+    DECISION_TOKEN_CONSUMED_EVENT, DECISION_WITHDRAWN_EVENT, DEFAULT_DECISION_REQUEST_TTL_HOURS,
+    DecisionAction, DecisionAnswer, DecisionBinding, DecisionGate, DecisionOption,
+    DecisionOptionError, DecisionOptionInput, DecisionRequest, DecisionRequestState,
+    DecisionResolution, DecisionRewrite, DecisionRiskTier, MODEL_ANSWER_ACTOR,
+    MODEL_ANSWER_CONFIRM, MODEL_ANSWER_VETO, ModelAnswerCitation, ModelAnswerConfirmation,
+    ModelAnswerEnablement, ModelCitedPrecedent, PRECEDENT_ACTOR, PRECEDENT_BOOKKEEPING_NOTE,
+    PluginApply, PrecedentCitation, PrecedentSource, RESIDENT_AUTHORITY_GRANT,
+    RESIDENT_AUTHORITY_REJECT, SCRIPT_GRANT_GRANT, SCRIPT_GRANT_REJECT, current_candidate_identity,
+    decision_option_answers, decision_requests_from_history, is_precedent_bookkeeping,
 };
 
 pub use review_settlement::{

@@ -114,7 +114,7 @@ pub(crate) use corpus_port::TaskCorpusPort;
 pub use decision::DecisionListProfile;
 #[cfg(feature = "test-support")]
 pub use decision::answer_checkpoint::with_decision_answer_checkpoint;
-pub(crate) use decision::decision_request_json;
+pub(crate) use decision::{decision_request_json, is_plugin_decision_holder};
 pub use decision_channel::dkim::DkimTxtResolver;
 #[cfg(feature = "test-support")]
 pub use decision_channel::dkim::test_support::with_decision_dkim_resolver;

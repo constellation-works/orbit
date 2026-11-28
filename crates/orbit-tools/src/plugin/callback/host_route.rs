@@ -195,7 +195,7 @@ mod unix {
                 PluginHostRouteReply::unanswered(&OrbitError::PolicyDenied(format!(
                     "the plugin host route admits only {} and, for an application-bound host \
                      session, application callback operations; '{tool}' is refused",
-                    DECISION_CHANNEL_CALLBACK_TOOLS.join(" and ")
+                    DECISION_CALLBACK_TOOLS.join(" and ")
                 )))
             }
             Ok((tool, input)) => {
@@ -450,10 +450,12 @@ pub use self::unix::forward_host_routed_callback;
 /// confined child cannot do.
 pub const PLUGIN_HOST_ROUTE_FD: i32 = 4;
 
-/// Decision-channel callbacks: always host-routed, because they read the
-/// channel store no plugin child may read.
-const DECISION_CHANNEL_CALLBACK_TOOLS: [&str; 2] =
-    ["orbit.decision.digest", "orbit.decision.submit"];
+/// Decision callbacks run on the host, which owns channel and task state.
+const DECISION_CALLBACK_TOOLS: [&str; 3] = [
+    "orbit.decision.digest",
+    "orbit.decision.submit",
+    orbit_common::governance::decision::PLUGIN_RAISE_TOOL,
+];
 
 /// Largest request frame the host reads. A submission's raw message is
 /// bounded at 256 KiB before JSON escaping.
@@ -750,10 +752,10 @@ impl From<PluginHostRouteReply> for HostRouteOutcome {
 }
 
 /// Whether `tool` is a callback the host route may run on the host: a
-/// decision-channel callback, or a tool an application consent may list as a
+/// decision callback, or a tool an application consent may list as a
 /// callback.
 pub fn is_host_routed_callback_tool(tool: &str) -> bool {
-    DECISION_CHANNEL_CALLBACK_TOOLS.contains(&tool)
+    DECISION_CALLBACK_TOOLS.contains(&tool)
         || orbit_common::governance::authorization::application_callback_tool(tool)
 }
 
@@ -762,7 +764,7 @@ pub fn is_host_routed_callback_tool(tool: &str) -> bool {
 /// without one, a plugin granted the tool keeps calling it in its own
 /// sandbox, as before.
 pub(super) fn routes_on_host(record: &SessionRecord, tool: &str) -> bool {
-    DECISION_CHANNEL_CALLBACK_TOOLS.contains(&tool)
+    DECISION_CALLBACK_TOOLS.contains(&tool)
         || (record.application.is_some()
             && orbit_common::governance::authorization::application_callback_tool(tool))
 }

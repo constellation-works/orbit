@@ -97,6 +97,7 @@ const GOVERNED_TOOL_PLACEMENT: &[(&str, Placement)] = &[
     ("orbit.automation.clear_stall", Placement::Unadvertised),
     ("orbit.command.exec", Placement::Advertised),
     ("orbit.decision.digest", Placement::Advertised),
+    ("orbit.decision.plugin_raise", Placement::Unadvertised),
     ("orbit.decision.submit", Placement::Advertised),
     ("orbit.drain.claim.bind", Placement::Unadvertised),
     ("orbit.drain.claim.effort", Placement::Unadvertised),

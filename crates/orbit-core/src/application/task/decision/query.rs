@@ -173,6 +173,7 @@ impl OrbitRuntime {
         };
         let mut requests =
             orbit_types::task::decision_requests_from_history(task, history, pilot_operation, now);
+        self.refresh_plugin_decision_states(&mut requests)?;
         self.add_handoff_landing_answers_with(task, &mut requests, manifest, observational)?;
         self.add_candidate_disposition_answers_with(
             task,

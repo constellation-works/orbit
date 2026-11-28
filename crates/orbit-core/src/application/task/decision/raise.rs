@@ -63,7 +63,7 @@ const MAX_OPEN_AGENT_DECISIONS_PER_WORKSPACE: usize = 20;
 /// Most open agent-raised decision requests one filer holds.
 const MAX_OPEN_AGENT_DECISIONS_PER_FILER: usize = 5;
 /// Longest question, in characters.
-const MAX_QUESTION_CHARS: usize = 600;
+pub(super) const MAX_QUESTION_CHARS: usize = 600;
 /// The `raised_by` mechanism name an agent-raised request carries.
 const AGENT_REQUEST_MECHANISM: &str = "agent_request";
 

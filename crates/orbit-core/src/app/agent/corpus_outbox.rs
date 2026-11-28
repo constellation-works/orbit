@@ -264,6 +264,7 @@ pub(super) fn decision_corpus_append(
             request.gate,
             orbit_types::task::DecisionGate::ModelAnswerReview
                 | orbit_types::task::DecisionGate::ResidentAuthority
+                | orbit_types::task::DecisionGate::PluginRequest
                 | orbit_types::task::DecisionGate::ScriptGrant
         )
     {

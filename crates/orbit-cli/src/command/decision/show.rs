@@ -51,6 +51,9 @@ fn show_blocks(value: &Value) -> Vec<Block> {
     if let Some(grant) = value.get("script_grant").filter(|value| value.is_object()) {
         script_grant_section(&mut out, grant);
     }
+    if let Some(apply) = value.get("plugin_apply").filter(|value| value.is_object()) {
+        let _ = write!(out, "\nplugin apply: {apply}");
+    }
     if let Some(resolution) = value.get("resolution").filter(|value| !value.is_null()) {
         let _ = write!(
             out,

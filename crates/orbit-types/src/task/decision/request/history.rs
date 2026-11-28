@@ -1,5 +1,7 @@
 //! Effective decision-request states folded from task history.
 
+use std::collections::{BTreeMap, BTreeSet};
+
 use serde::{Deserialize, Serialize};
 
 use crate::task::{Task, TaskHistoryEntry, TaskStatus};
@@ -9,8 +11,8 @@ use super::binding::{self, DecisionBinding};
 use super::gates::DecisionGate;
 use super::model::{
     DECISION_ANSWERED_EVENT, DECISION_MODEL_CONFIRMED_EVENT, DECISION_REOPENED_EVENT,
-    DecisionRequest, DecisionRequestState, DecisionResolution, MODEL_ANSWER_ACTOR,
-    ModelAnswerConfirmation, PRECEDENT_ACTOR,
+    DECISION_WITHDRAWN_EVENT, DecisionRequest, DecisionRequestState, DecisionResolution,
+    MODEL_ANSWER_ACTOR, ModelAnswerConfirmation, PRECEDENT_ACTOR,
 };
 
 /// Note body of a [`DECISION_REOPENED_EVENT`].
@@ -25,9 +27,10 @@ struct DecisionReopenNote {
 /// answer (or its own resolution records one), `expired` once its expiry
 /// passes, and `superseded` when its binding is no longer current or a newer
 /// request for the same task follows it. At most one request per task reads
-/// as `open`, besides a [`DecisionGate::ModelAnswerReview`] request, which is
-/// current while the model answer it reviews stands and never supersedes or
-/// is superseded by another request. A [`DECISION_MODEL_CONFIRMED_EVENT`]
+/// as `open` in gates that share a task-wide binding. Plugin requests are
+/// scoped by plugin and subject. A [`DecisionGate::ModelAnswerReview`]
+/// request stays current while the model answer it reviews stands and never
+/// supersedes or is superseded by another request. A [`DECISION_MODEL_CONFIRMED_EVENT`]
 /// written by a human sets the reviewed answer's derived `confirmation`. An
 /// approval ([`DecisionBinding::TaskRevision`]) is superseded
 /// for good by a description or criteria edit, status move or, for a review
@@ -51,7 +54,17 @@ pub fn decision_requests_from_history(
     // answer. Anything else leaves the latest of the two in place.
     let mut folded: std::collections::BTreeMap<String, (DecisionResolution, bool)> =
         std::collections::BTreeMap::new();
+    let mut withdrawn = BTreeSet::new();
+    let mut last_close = None;
     for entry in history {
+        if entry.to_status.is_some_and(TaskStatus::is_terminal) {
+            last_close = Some(entry.at);
+        }
+        if entry.event == DECISION_WITHDRAWN_EVENT
+            && let Some(id) = entry.note.as_deref()
+        {
+            withdrawn.insert(id);
+        }
         if entry.event == DECISION_ANSWERED_EVENT {
             let Some(note) = entry.note.as_deref() else {
                 continue;
@@ -158,6 +171,10 @@ pub fn decision_requests_from_history(
                             TaskStatus::Done | TaskStatus::Archived | TaskStatus::Rejected
                         )
                 }
+                DecisionBinding::PluginObject { .. } => {
+                    !task.status.is_terminal()
+                        && !last_close.is_some_and(|at| at >= request.raised_at)
+                }
                 // Current while the holder task stays open; a newer script
                 // grant request on it supersedes this one (below), and the
                 // answer path checks the script's live digest.
@@ -181,6 +198,7 @@ pub fn decision_requests_from_history(
             DecisionGate::ModelAnswerReview
                 | DecisionGate::ResidentAuthority
                 | DecisionGate::ScriptGrant
+                | DecisionGate::PluginRequest
         )
     };
     // A script grant request is superseded by any later script grant request
@@ -193,6 +211,27 @@ pub fn decision_requests_from_history(
         .iter()
         .map(|request| (!rides_beside(request.gate)).then(|| request.task_id.clone()))
         .collect();
+    // Keep the common binding of later raises for each object, or None if
+    // their revisions or digests differ. An identical re-raise after expiry
+    // leaves the expired request's state intact.
+    let mut plugin_bindings = BTreeMap::new();
+    let mut replaced = BTreeSet::new();
+    for (index, request) in requests.iter().enumerate().rev() {
+        if let DecisionBinding::PluginObject {
+            plugin,
+            subject,
+            revision,
+            manifest_digest,
+        } = &request.binding
+        {
+            let binding = Some((revision, manifest_digest));
+            let later = plugin_bindings.entry((plugin, subject)).or_insert(binding);
+            if *later != binding {
+                replaced.insert(index);
+                *later = None;
+            }
+        }
+    }
     for (index, request) in requests.iter_mut().enumerate() {
         if let Some((resolution, reopened)) = folded.get(&request.id) {
             if *reopened {
@@ -206,7 +245,9 @@ pub fn decision_requests_from_history(
             request.state = DecisionRequestState::Answered;
             continue;
         }
-        if !binding_current(request)
+        if withdrawn.contains(request.id.as_str())
+            || replaced.contains(&index)
+            || !binding_current(request)
             || binding::task_revision_changed_since(request, history)
             || (!rides_beside(request.gate)
                 && task_ids
