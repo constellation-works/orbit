@@ -72,7 +72,7 @@ Every numbered design doc starts with the YAML frontmatter carried by the [`_tem
 
 `paths` and the `related_*` fields are optional; add them only when they help.
 
-The generated feature board in [`docs/design/FEATURES.md`](./FEATURES.md) reads `title`, `owner`, `stage` and `next` from each active feature's `1_overview.md` and groups features by `stage`; archived folders keep the entry doc they were archived with. `scripts/generate-doc-indexes.sh` derives a missing title from the document and defaults a missing owner. It fails when an active feature has no `1_overview.md`, or when a `1_overview.md` that Git sees has a `stage` that is missing or unknown (§11 lists the checks); it does not otherwise validate a design-frontmatter schema. Run `make docs-index` and `scripts/generate-doc-indexes.sh --check` after changing board inputs. The other fields are descriptive metadata that the board does not query. When using `related_artifacts`, follow the reference forms below as a writing convention, not an enforced schema. Decisions are addressed by their titles and links, not artifact IDs, so they do not need artifact references.
+The generated feature board in [`docs/design/FEATURES.md`](./FEATURES.md) reads `title`, `owner`, `stage` and `next` from each Git-visible active feature's `1_overview.md` and groups features by `stage`; archived folders keep the entry doc they were archived with. `scripts/generate-doc-indexes.sh` derives a missing title from the document and defaults a missing owner. It fails when a Git-visible active feature folder has no `1_overview.md`, or when a `1_overview.md` that Git sees has a `stage` that is missing or unknown (§11 lists the checks and the Git-visibility rule that scopes them); it does not otherwise validate a design-frontmatter schema. Run `make docs-index` and `scripts/generate-doc-indexes.sh --check` after changing board inputs. The other fields are descriptive metadata that the board does not query. When using `related_artifacts`, follow the reference forms below as a writing convention, not an enforced schema. Decisions are addressed by their titles and links, not artifact IDs, so they do not need artifact references.
 
 ---
 
@@ -215,10 +215,10 @@ A feature that is gone for good (nothing worth keeping as reference) may still b
 
 Two kinds of rule apply. The generator gate is mechanical. Everything else is review-only: reviewers check it against this doc and [STD-06@5](../standards/STD-06-design-docs-and-feature-tracking/STD-06.md) when a change touches it.
 
-**Generator gate.** `make ci-guards` runs `scripts/generate-doc-indexes.sh --check`, and `make docs-index` regenerates the same output. The generator fails when:
+**Generator gate.** `make ci-guards` runs `scripts/generate-doc-indexes.sh --check`, and `make docs-index` regenerates the same output. Git visibility scopes the gate. Git sees a file when it is tracked, or untracked and not Git-ignored, and sees a folder when at least one file in it is. The generator fails when:
 
-- a folder directly under `docs/design/`, other than `_templates/` and `_archived/`, has no `1_overview.md`. This holds whether or not Git tracks the folder (STD-06 §R2).
-- a `1_overview.md` that Git sees (tracked, or untracked and not ignored) has a `stage` that is missing or not one of `idea`, `designing`, `building`, `shipped` or `parked` (STD-06 §R5). Git-ignored overviews skip this check.
+- a folder directly under `docs/design/`, other than `_templates/` and `_archived/`, that Git sees has no `1_overview.md` (STD-06 §R2). This is the discovery rule. A folder Git does not see is local-only and exempt: every file in it is Git-ignored, or it holds no file. The generator skips it, so it needs no overview and never reaches the board. A Git-visible folder whose `1_overview.md` is Git-ignored but present passes this check, and the stage check below skips it.
+- a `1_overview.md` that Git sees (tracked, or untracked and not ignored) has a `stage` that is missing or not one of `idea`, `designing`, `building`, `shipped` or `parked` (STD-06 §R5). This overview stage check is separate from the discovery rule above. It runs only on overviews Git sees, so Git-ignored overviews skip it.
 - an `_archived/` folder has no top-level Markdown file.
 - `docs/design/FEATURES.md` or `docs/INDEX.md` is stale against what the generator renders (STD-06 §R9).
 
