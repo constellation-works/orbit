@@ -715,7 +715,10 @@ package and that exact filter. A leading repository-owned scheduling wrapper
 runs, and other target selectors (`--bins`, `--all-targets`, `--lib --test`)
 stay uncovered. A `--test`
 requirement does not cover a library or package-wide run, and a `--lib`
-requirement does not cover a `--test` run. When a Cargo library deferral pair
+requirement does not cover a `--test` run. A recognized consolidated
+scenario row is the exception: it never enters the library pair, even when a
+package-wide run defers it, and routes to the `unreconciled_scenario_deferral`
+escalation below instead. When a Cargo library deferral pair
 cannot be safely reconciled, the certificate escalation names the unresolved
 record and gives a runnable native command or fresh-review route.
 An opaque required command such as `CI_TEST_BASE=<sha> make ci-test-affected`

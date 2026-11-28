@@ -882,7 +882,10 @@ settlement itself routes it to the host-owed run [ORB-24656], whether or
 not the reviewer named it: it derives a Linux `host_sandbox_test`
 requirement for the test the notice names — from a reviewer-named Linux
 requirement that runs the record's own package and target with that test as
-its filter (as `covers_deferral` requires), else from the record's Cargo
+its filter (on a supported single-package record the adoption accepts the
+exact test or a qualified filter ending in `::<test>`, per `gate/owed.rs`;
+the general `covers_deferral` reconciliation in `evidence.rs` is stricter
+and requires the filter to equal the test literally), else from the record's Cargo
 scope: `cargo test -p <package> --test <target> <test>` for an integration
 record, or `cargo test -p <package> --lib <test>` for a single-package library
 or package-wide record — adds its required `not_run` record, clears the
@@ -932,7 +935,10 @@ requirement covers a notice only when its command is admitted as
 `cargo test -p <crate> --test <target> <test>`, with the broader run's one
 package and one target and a filter equal to the test the notice names
 (`<prefix> <test>: <detail>`, for a Bubblewrap, Seatbelt or ps-denied
-notice). A requirement without a filter, a module filter, another package or
+notice). This is the strict `covers_deferral` rule for general host evidence
+reconciliation (`evidence.rs`): unlike the synthesis-time adoption above, it
+does not accept a qualified filter ending in `::<test>`. A requirement
+without a filter, a module filter, another package or
 target, or a command outside the grammar covers nothing. The broader run may
 also carry `--locked`, `--frozen`, `--offline`, `--no-fail-fast`, `-q` or
 `--quiet`, which select no target and change no build. An additional target
@@ -966,8 +972,18 @@ selectors (`--bins`, `--all-targets`, `--lib --test`) stay uncovered. A
 `--test` requirement does not cover a library or package-wide record, and a
 `--lib` requirement does not cover an integration record. A requirement for
 a different package or a filter that names only the test's module also covers
-nothing. When a required library or package-wide record's deferral cannot be
-safely matched to named evidence, the `unreconciled_library_deferral`
+nothing. A recognized consolidated scenario row never reaches the library
+diagnostic: `evidence.rs` excludes row notices from its uncovered set, so a
+row deferred by a package-wide `cargo test -p <crate>` run (which can include
+integration scenarios) routes to `unreconciled_scenario_deferral`
+(`scenario_row.rs`) instead — naming the enclosing libtest as
+`cargo test -p <package> --test <target> <module>::<table>` to run natively
+with its `qa-scenario-pass: <row>` marker when the row has one home in the
+candidate, or the uncovered command with a fresh-review route when it has
+none. See the scenario-row escalation in the
+[review-gate runbook](../../runbooks/review-gate.md#host-sandbox-tests).
+When a required library or package-wide record's remaining (non-row) deferral
+cannot be safely matched to named evidence, the `unreconciled_library_deferral`
 diagnostic identifies the record and uncovered tests and gives a runnable
 native command outside the sandbox or a fresh-review route with supported
 single-package Cargo records.
