@@ -92,13 +92,23 @@ returns.
     at once.
 - The leaf's agent runs in claimed mode: the sandbox denies `~/.ssh`, so it
   has no direct route to the owner. The run broker carries only a closed list
-  of owner calls: reads (`orbit.search`, `orbit.task.list`, `orbit.task.show`,
-  and `orbit.task.artifact` `get`) that may name any task in the claimed
-  workspace, and writes and notices bound to the claimed task and run. The
+  of owner calls, each bound to the claimed task, its workspace or its run:
+  - Reads: `orbit.task.show`, `orbit.task.list`, `orbit.search` and
+    `orbit.task.artifact` `get`. They may name any task in the claimed
+    workspace. `orbit.search` and `orbit.task.list` refuse federated scopes,
+    and an artifact `get` is subject to the cross-task refusal: a `review-*`
+    artifact of another task is refused for every activity.
+  - Writes: `orbit.task.artifact` `put` on the claimed task, `orbit.friction`
+    `add` for the claimed task, and `orbit.task.add` of a task `spawned_from`
+    the claimed task and related to nothing else. A finding from a claimed
+    review auto-task may also name its culprit as `regression_from`.
+  - Notices: `orbit.notice.post`, `orbit.notice.show` and `orbit.notice.close`,
+    bound to the claimed task and run.
+  Any other owner call is refused. The agent is denied `orbit.task.update` and
+  returns its execution summary as step output; `claim_handoff` carries it to
+  the owner's `execution_summary`. The
   [claimed-mode steps](../task-execution-steps.md#step-5--summarize-and-hand-off)
-  list each call; the agent is denied `orbit.task.update` and returns its
-  execution summary as step output. `claim_handoff` carries it to the owner's
-  `execution_summary`.
+  cover the handoff.
   Never loosen the sandbox to give an agent direct owner access.
 - A leaf that fails before handing off settles its claim as a failure: the
   owner's task moves to `blocked` with the leaf run, failed step and error in
