@@ -233,8 +233,9 @@
   align-items: flex-end;
   gap: var(--space-2);
   min-width: 0;
-  position: relative;
-  z-index: 4;
+  /* Not positioned and no z-index: the strip paints in normal flow beneath the
+     sticky pane head, the sticky action footer and expanded comment heads. Only
+     the open More menu is positioned, and it sits above them (see below). */
   margin: 0 calc(-1 * var(--space-20));
   /* The 1px bottom padding is the band's edge: it is drawn here, inside the
      strip, so the active tab can overlap it. */
@@ -253,9 +254,12 @@
 .detail-tabs[data-tight] .detail-tab { padding-inline: var(--space-6); }
 .detail-tabs[data-condensed] .detail-tab { padding-inline: var(--space-4); }
 .detail-tabs[data-condensed] .detail-tab-count { display: none; }
+/* z 3 puts the open menu above the sticky action footer (2), expanded comment
+   heads (2) and panel content, and below the sticky pane head (4), so a menu
+   opened under the head is clipped by it rather than drawn over it. */
 .detail-tabs-menu {
   position: absolute;
-  z-index: 4;
+  z-index: 3;
   right: 0;
   top: 100%;
   display: grid;
