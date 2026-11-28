@@ -181,7 +181,7 @@ pub(super) fn delivery(
 ) -> Result<Value, OrbitError> {
     if requested_fields(object) != [TASK_SHOW_DELIVERY_FIELD] {
         return Err(OrbitError::InvalidInput(format!(
-            "`{TASK_SHOW_DELIVERY_FIELD}` cannot be combined with other fields"
+            "`{TASK_SHOW_DELIVERY_FIELD}` cannot be combined with other fields; pass `field: \"{TASK_SHOW_DELIVERY_FIELD}\"` alone. Optional `run_id` is allowed only with this selection."
         )));
     }
     require_leaf_delivery_run(object, binding)?;
