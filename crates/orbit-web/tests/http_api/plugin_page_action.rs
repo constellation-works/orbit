@@ -13,7 +13,7 @@ use orbit_core::app::plugin;
 use orbit_types::telemetry::{AuditEvent, AuditEventStatus};
 use serde_json::{Value, json};
 
-use super::support::{Fixture, Server, error_code, isolated, json_ok};
+use super::support::{Fixture, Server, isolated, json_ok};
 
 const WS: &str = "workspace=ws_http_fixture";
 
@@ -140,8 +140,11 @@ fn confirmation(server: &Server, input: Value) -> String {
 /// The refusal's body, after checking its status and code; `case` names
 /// the attempt in a failure.
 fn refused(response: reqwest::blocking::Response, status: u16, code: &str, case: &str) -> Value {
-    eprintln!("checking refusal: {case}");
-    error_code(response, status, code)
+    let actual = response.status().as_u16();
+    let value: Value = response.json().unwrap();
+    assert_eq!(actual, status, "{case}: {value}");
+    assert_eq!(value["code"], json!(code), "{case}: {value}");
+    value
 }
 
 fn run_count(control: &Path) -> usize {

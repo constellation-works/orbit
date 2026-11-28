@@ -275,7 +275,7 @@ async fn resident_write(
 ) -> Response {
     let caller = dashboard_caller(state, None, "");
     match blocking(label, move || {
-        exec(&core, Command::Dashboard(caller, write))
+        exec(&core, Command::Dashboard(caller, Box::new(write)))
     })
     .await
     {
