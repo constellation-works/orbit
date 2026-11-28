@@ -338,6 +338,7 @@ pub(crate) fn build_context_from_roots(
                 operation,
                 mid_run_steering: runtime_config.snapshot.mid_run_steering(),
                 tag_instructions: runtime_config.tag_instructions.clone(),
+                pilot_notes: runtime_config.pilot_notes.clone(),
                 review_skip_tags: runtime_config.review_skip_tags.clone(),
                 tag_label_requirements: runtime_config
                     .snapshot

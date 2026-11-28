@@ -48,6 +48,7 @@ pub(crate) struct WorkflowRuntimeSettings {
     pub(crate) operation: orbit_config::OperationPolicy,
     pub(crate) mid_run_steering: orbit_config::MidRunSteeringSettings,
     pub(crate) tag_instructions: orbit_config::TagInstructionSettings,
+    pub(crate) pilot_notes: orbit_config::PilotNoteSettings,
     pub(crate) review_skip_tags: orbit_config::ReviewSkipSettings,
     pub(crate) tag_label_requirements: orbit_types::task::TagLabelRequirements,
     pub(crate) activity_timeouts: std::collections::BTreeMap<String, u64>,
@@ -151,6 +152,9 @@ pub struct OrbitRuntimeSettings {
     /// `[workflow.tag_instructions]`: the files that replace or disable
     /// Orbit's shipped per-tag instructions.
     tag_instructions: orbit_config::TagInstructionSettings,
+    /// `[workflow.pilot_notes]`: repository instruction files mapped for the
+    /// `task_pilot` prompt.
+    pilot_notes: orbit_config::PilotNoteSettings,
     /// `[workflow.review_skip_tags]`: mapped tags whose candidates may
     /// skip agent review under their own paths and guard.
     review_skip_tags: orbit_config::ReviewSkipSettings,
@@ -243,6 +247,7 @@ impl OrbitRuntimeSettings {
             ),
             mid_run_steering: workflow.mid_run_steering,
             tag_instructions: workflow.tag_instructions,
+            pilot_notes: workflow.pilot_notes,
             review_skip_tags: workflow.review_skip_tags,
             tag_label_requirements: workflow.tag_label_requirements,
             unlocked_context_paths: path_policy.unlocked_context_paths,
@@ -275,6 +280,10 @@ impl OrbitRuntimeSettings {
 
     pub(crate) fn machine_labels(&self) -> &[String] {
         &self.machine_labels
+    }
+
+    pub(crate) fn pilot_notes(&self) -> &orbit_config::PilotNoteSettings {
+        &self.pilot_notes
     }
 
     pub(crate) fn set_machine_labels(&mut self, labels: Vec<String>) {

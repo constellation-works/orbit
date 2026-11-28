@@ -77,6 +77,7 @@
 //!   `resolved/config.rs` with crew admission, compatibility checks and environment
 //!   projection in sibling named modules.
 //! - `persistence` — artifact path resolution from the two roots.
+//! - `pilot_note` — `[workflow.pilot_notes.<label>]` per-task pilot-note mappings.
 //! - `plugin_enablement` — the workspace `[plugin_enablement]` toggles.
 //! - `tag_instructions` — trusted tag instructions and activity corpus mappings.
 //! - `experiment_keys` — typed workflow keys admitted for task-local experiments.
@@ -104,6 +105,9 @@ mod lock_modes;
 mod memory_limit;
 mod operation;
 mod persistence;
+
+mod pilot_note;
+
 mod plugin_enablement;
 mod plugins;
 mod provider_limit;
@@ -153,6 +157,7 @@ pub use operation::{
     ReviewCrewPool, ReviewTimingSetting,
 };
 pub use persistence::PersistenceConfig;
+pub use pilot_note::PilotNoteSettings;
 pub use plugin_enablement::{
     MisplacedGlobalPluginEnablement, global_plugin_enablement_fix,
     load_workspace_plugin_enablement, misplaced_global_plugin_enablement, plugin_enablement_key,

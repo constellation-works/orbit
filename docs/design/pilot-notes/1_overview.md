@@ -6,7 +6,7 @@ updated_date: 2026-11-28
 last_validated: 2026-11-28
 status: Accepted
 stage: building
-next: "Land config & prompt section [ORB-29586] (in review), then build assessment & readout [ORB-29588]"
+next: "Add notes to the pilot assessment schema, apply checks and readouts [ORB-29588]"
 feature: pilot-notes
 doc_role: overview
 type: design
@@ -23,8 +23,9 @@ workspace asked. The workspace maps a label to an instruction file. The pilot re
 instruction with its own, and returns a note under that label for each task it assesses. Orbit
 keeps the note with the assessment and shows it on the task. Orbit never reads a note's
 meaning and never acts on it: a note is for whoever asked the question, usually a plugin. The
-operator approved the design on 2026-11-27 ([ORB-29567]). Nothing is merged to `agent-main`
-yet; [ORB-29586] is in review and [ORB-29588]–[ORB-29590] are in the backlog.
+operator approved the design on 2026-11-27 ([ORB-29567]). Slice 1 ([ORB-29586]) adds the config
+table, prompt section, audit event and `doctor` check. Assessment output and readouts
+follow in [ORB-29588].
 
 ## 1. Motivation
 
@@ -88,13 +89,13 @@ the draft and were approved with the recommendation. Both are recorded in the
 
 | Phase | Task |
 |---|---|
-| 1. Local notes | [ORB-29586] (in review) adds the config table, the pilot's prompt section, the audit event and the `doctor` finding; [ORB-29588] (backlog) adds `notes` to the assessment, the checks in apply and the readouts |
+| 1. Local notes | [ORB-29586] adds the config table, the pilot's prompt section, the audit event and the `doctor` finding; [ORB-29588] (backlog) adds `notes` to the assessment, the checks in apply and the readouts |
 | 2. Claimed pilots and the dashboard | [ORB-29589] (backlog) shows notes on a task's detail; [ORB-29590] (backlog) gives a claimed pilot the owner's captured instructions |
 
 ## Task References
 
 - [ORB-29567] — this design.
-- [ORB-29586] — in review; adds `[workflow.pilot_notes.<label>]`, the prompt section, the audit event and the `doctor` finding.
+- [ORB-29586] — adds `[workflow.pilot_notes.<label>]`, the prompt section, the audit event and the `doctor` finding.
 - [ORB-29588] — backlog; adds `notes` to the assessment, the checks in apply and the `pilot_notes` readout.
 - [ORB-29589] — backlog; shows pilot notes on the dashboard's task detail.
 - [ORB-29590] — backlog; gives a claimed pilot the owner's captured note instructions.

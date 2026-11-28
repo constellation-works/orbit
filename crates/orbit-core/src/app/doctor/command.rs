@@ -81,6 +81,74 @@ pub(crate) const WORKSPACE_PROBES: &[DoctorProbe] = &[
     DoctorProbe::one("mid-run-steering", |probe| {
         doctor_check_mid_run_steering(probe.runtime)
     }),
+    DoctorProbe::one("pilot-notes", |probe| {
+        const CHECK: &str = "pilot-notes";
+        let runtime = probe.runtime;
+        let settings = runtime.pilot_note_settings();
+        if settings.is_empty() {
+            return check(
+                CHECK,
+                WorkspaceDoctorStatus::Skipped,
+                "no [workflow.pilot_notes] configured".to_string(),
+            );
+        }
+        let branch = runtime.workspace_base_branch();
+        let revision = match runtime.workspace_base_revision() {
+            Ok(revision) => revision,
+            Err(reason) => {
+                let details = settings
+                    .entries()
+                    .map(|(label, path)| format!("{label} ({path}): {reason}"))
+                    .collect::<Vec<_>>()
+                    .join("; ");
+                return actionable_check(
+                    CHECK,
+                    WorkspaceDoctorStatus::Warning,
+                    format!("cannot resolve base branch '{branch}' for pilot notes: {details}"),
+                    format!(
+                        "Ensure base branch '{branch}' resolves to a commit containing each mapped \
+                         instruction file, or update [workflow.pilot_notes] in config.toml."
+                    ),
+                );
+            }
+        };
+        let short_rev = revision.get(..12).unwrap_or(&revision);
+        let mut findings = Vec::new();
+        for (label, path) in settings.entries() {
+            if let Err(reason) = crate::application::pilot_note::resolve_pilot_note_at(
+                &runtime.paths().repo_root,
+                &revision,
+                label,
+                path,
+            ) {
+                findings.push(format!("{label} ({path}): {reason}"));
+            }
+        }
+        if findings.is_empty() {
+            check(
+                CHECK,
+                WorkspaceDoctorStatus::Ok,
+                format!(
+                    "{} pilot note instruction file(s) readable at {short_rev} ({branch})",
+                    settings.len()
+                ),
+            )
+        } else {
+            actionable_check(
+                CHECK,
+                WorkspaceDoctorStatus::Warning,
+                format!(
+                    "{} pilot note file(s) unusable at {short_rev} ({branch}): {}",
+                    findings.len(),
+                    findings.join("; ")
+                ),
+                format!(
+                    "Commit a non-empty UTF-8 file of at most 4 KiB at each path on '{branch}', \
+                     or switch off the affected [workflow.pilot_notes.<label>] entry in config.toml."
+                ),
+            )
+        }
+    }),
     DoctorProbe::one("orphan-task-stores", |probe| {
         doctor_check_orphan_task_stores(probe.runtime, probe.host)
     }),

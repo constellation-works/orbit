@@ -1,7 +1,7 @@
 ---
 type: context
 summary: Architecture map for orbit-config: what it owns, main modules, dependencies and entry points.
-last_validated: 2026-11-25
+last_validated: 2026-11-27
 tags: [architecture, orbit-config]
 ---
 
@@ -13,7 +13,7 @@ Owner of `config.toml`: key registry, global-over-workspace layering, provenance
 
 ## Main modules and types
 
-`registry` (`ConfigSnapshot`), `layering`, `store` (`ConfigStore` in `crates/orbit-config/src/store/persistence.rs`), `crew`, `operation`, `provider_limit`, `document` (`paths`, `io`, `parse`), `crew_defaults`. See ``crates/orbit-config/src/lib.rs``.
+`registry` (`ConfigSnapshot`), `layering`, `store` (`ConfigStore` in `crates/orbit-config/src/store/persistence.rs`), `crew`, `operation`, `provider_limit`, `pilot_note`, `document` (`paths`, `io`, `parse`), `crew_defaults`. See ``crates/orbit-config/src/lib.rs``.
 
 ## Dependencies
 
@@ -41,6 +41,7 @@ Design intent: [docs/design/orbit-core/](../../docs/design/orbit-core/) — this
 - `lock_modes`: Ordered per-path footprint lock modes (`workflow.lock_modes`); imports `orbit-common` and `serde` only.
 - `memory_limit`: Grammar and parser for worker memory limits (`machine.worker_memory_*`); imports `std` and `serde` only.
 - `operation`: Typed review timing and operation preferences; imports `alias`, `document`, `orbit-common`, and `orbit-types`.
+- `pilot_note`: Admission of `[workflow.pilot_notes.<label>]` instruction-file mappings; imports `document`, `tag_instructions`, `orbit-common`, and `orbit-types`.
 - `persistence`: Resolved persistent artifact store paths derived from explicit roots; imports `orbit-types` and `serde_json` only.
 - `plugin_enablement`: Workspace-scoped `[plugin_enablement]` toggle admission; imports `roots`, `document`, `orbit-common`, and `orbit-types`.
 - `plugins`: Dynamically named `[plugins.<ns>]` configuration section admission; imports `jsonschema`, `orbit-common`, and `serde_json` only.

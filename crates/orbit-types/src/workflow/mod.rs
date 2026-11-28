@@ -20,6 +20,9 @@ pub mod handoff;
 mod host_evidence;
 mod image_input;
 mod job;
+
+mod pilot_note;
+
 mod post_deploy;
 mod pr_recovery;
 mod reconciliation;
@@ -67,6 +70,7 @@ pub use fleet_notice_brief::*;
 pub use host_evidence::*;
 pub use image_input::*;
 pub use job::*;
+pub use pilot_note::*;
 pub use post_deploy::*;
 pub use pr_recovery::*;
 pub use reconciliation::*;

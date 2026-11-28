@@ -8,7 +8,7 @@ status: Accepted
 feature: pilot-notes
 doc_role: design
 type: design
-summary: "Approved design, in build ([ORB-29586] in review): a config table that maps a note label to an instruction file, the section the pilot's prompt gains, `notes` in the assessment and what apply does with them, and where a note is read"
+summary: "Approved design in build: a config table that maps a note label to an instruction file, the section the pilot's prompt gains, `notes` in the assessment and what apply does with them, and where a note is read"
 tags: [pilot-notes, task-pilot]
 related_features: [task-pilot, plugins, workspace-agent-corpus]
 related_artifacts: [ORB-29567]
@@ -17,8 +17,8 @@ related_artifacts: [ORB-29567]
 # Pilot Notes — Design
 
 Read the [overview](./1_overview.md) first. The operator approved this design on 2026-11-27
-([ORB-29567]); [ORB-29586] is in review and [ORB-29588]–[ORB-29590] are in the backlog
-(nothing is merged to `agent-main` yet). It adds to the [task pilot](../task-pilot/1_overview.md),
+([ORB-29567]). [ORB-29586] adds the config table and prompt section. The design extends
+the [task pilot](../task-pilot/1_overview.md),
 whose assessment artifact and readout it reuses, and it borrows the file-reading rules of tag
 instructions ([`workflow.tag_instructions.<tag>`](../../config/workflow-tags.md#workflowtag_instructionstag--extra-instructions-for-tagged-tasks)).
 
@@ -150,7 +150,7 @@ by what it has installed is out of scope.
 ## 7. Phasing
 
 1. **Local notes.** The config table and its validation, the prompt section, the audit event and
-   the `doctor` finding ([ORB-29586], in review); `notes` in the output schema, the checks in
+   the `doctor` finding ([ORB-29586]); `notes` in the output schema, the checks in
    apply, and the readouts in `orbit.task.show`, `orbit.task.list` and `orbit task show`
    ([ORB-29588], backlog).
 2. **Claimed pilots and the dashboard.** The notes on the task's detail ([ORB-29589], backlog),
@@ -188,8 +188,17 @@ by what it has installed is out of scope.
 - **Re-check runs are not settled.** A re-check re-examines earlier holding findings and does
   not assess afresh. Whether it carries the earlier notes forward or returns its own is to be
   fixed in the first build task, from how the re-check assessment is stored.
-- **That a plugin's read-only tool reaches the pilot is read from the code, not run.** The
-  first build task proves it with a test before anything relies on it.
+- **Plugin tool access from the pilot is verified in an isolated fixture ([ORB-29586]).** A real
+  `task_pilot_pipeline` run in a disposable workspace with an enabled fixture plugin (`qaplugin@0.1.0`
+  exposing `qaplugin.probe` as `read_only` and `qaplugin.mutate` as `mutating`, not
+  `agent_callable`) proved both properties through the pilot's `orbit tool run` path: `qaplugin.probe`
+  succeeded (exit 0) and invoked the backend once, while `qaplugin.mutate` was refused before the
+  backend ran (`capability_denied`: `plugin.tool.mutating` requires `operator` or `runner`, while the
+  pilot resolved as `agent-envelope` holding `[agent]`). Because `task_pilot` uses a deny list,
+  registered non-disallowed plugin tools still appear in the envelope's `tools` list and enforcement
+  for ordinary mutating plugin tools happens at the capability chokepoint; a plugin tool explicitly
+  marked `agent_callable: true` with operator `agent_tools` consent would be reachable unless added
+  to `tool_disallow_list`.
 - **The claimed path is read from tests, not traced end to end.** Apply accepts pilot results
   under a claim; where the leaf's pilot prompt is prepared, and so where the capture has to be
   applied, is for the phase 2 task to establish.
@@ -199,7 +208,7 @@ by what it has installed is out of scope.
 ## Task References
 
 - [ORB-29567] — this design.
-- [ORB-29586] — in review; adds `[workflow.pilot_notes.<label>]`, the prompt section, the audit event and the `doctor` finding.
+- [ORB-29586] — adds `[workflow.pilot_notes.<label>]`, the prompt section, the audit event and the `doctor` finding, and verifies plugin tool access in an isolated fixture.
 - [ORB-29588] — backlog; adds `notes` to the assessment, the checks in apply and the `pilot_notes` readout.
 - [ORB-29589] — backlog; shows pilot notes on the dashboard's task detail.
 - [ORB-29590] — backlog; gives a claimed pilot the owner's captured note instructions.

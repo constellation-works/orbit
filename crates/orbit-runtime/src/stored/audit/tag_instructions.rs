@@ -1,10 +1,13 @@
-//! Which tag instructions and live experiment arms each activity of a run
-//! received, read back from the `activity.tag_instructions_applied` and
-//! `activity.experiment_overlay_applied` rows its dispatches wrote.
+//! Which tag instructions, pilot notes and live experiment arms each activity
+//! of a run received, read back from the `activity.tag_instructions_applied`,
+//! `activity.pilot_notes_applied` and `activity.experiment_overlay_applied`
+//! rows its dispatches wrote.
 
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
-use orbit_types::workflow::{ExperimentOverlayRecord, TagInstructionRecord, V2AuditEventKind};
+use orbit_types::workflow::{
+    ExperimentOverlayRecord, PilotNoteAuditRecord, TagInstructionRecord, V2AuditEventKind,
+};
 use serde_json::{Value, json};
 
 use crate::RuntimeKernel;
@@ -35,8 +38,17 @@ pub struct RunExperimentOverlayDispatch {
     pub overlays: Vec<ExperimentOverlayRecord>,
 }
 
-/// The tag instructions and live experiment arms a run's activities
-/// received, oldest dispatch first.
+/// One `task_pilot` dispatch's mapped pilot-note evaluations.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RunPilotNotesDispatch {
+    pub at: DateTime<Utc>,
+    pub step_id: String,
+    pub activity_name: String,
+    pub notes: Vec<PilotNoteAuditRecord>,
+}
+
+/// The tag instructions, pilot notes and live experiment arms a run's
+/// activities received, oldest dispatch first.
 ///
 /// `unavailable` means the run has no v2 audit evidence; `none` means its
 /// trail records no dispatch that received any.
@@ -45,6 +57,7 @@ pub struct RunTagInstructions {
     pub state: &'static str,
     pub dispatches: Vec<RunTagInstructionDispatch>,
     pub experiment_overlays: Vec<RunExperimentOverlayDispatch>,
+    pub pilot_notes: Vec<RunPilotNotesDispatch>,
     pub truncated: bool,
 }
 
@@ -54,6 +67,7 @@ impl RunTagInstructions {
             state: "unavailable",
             dispatches: Vec::new(),
             experiment_overlays: Vec::new(),
+            pilot_notes: Vec::new(),
             truncated: false,
         }
     }
@@ -78,15 +92,58 @@ impl RunTagInstructions {
                 "task_id": dispatch.task_id,
                 "overlays": dispatch.overlays,
             })).collect::<Vec<_>>(),
+            "pilot_notes": self.pilot_notes.iter().map(|dispatch| json!({
+                "at": dispatch.at.to_rfc3339(),
+                "step_id": dispatch.step_id,
+                "activity_name": dispatch.activity_name,
+                "notes": dispatch.notes,
+            })).collect::<Vec<_>>(),
         })
     }
 
     /// One line per dispatch for the run header, e.g.
     /// `Tag instructions: implement (agent_implement): ui (Orbit default)`,
-    /// then one per applied experiment arm, e.g.
-    /// `Experiment applied: implement (agent_implement): exp-1a2b / treatment
-    /// segment 1, digest sha256:…`.
+    /// then one per `task_pilot` pilot-notes dispatch, then one per applied
+    /// experiment arm.
     pub fn header_lines(&self) -> Vec<String> {
+        let pilot_notes = self.pilot_notes.iter().map(|dispatch| {
+            format!(
+                "Pilot notes: {} ({}): {}",
+                dispatch.step_id,
+                dispatch.activity_name,
+                dispatch
+                    .notes
+                    .iter()
+                    .map(|note| {
+                        let location = match &note.revision {
+                            Some(revision) => {
+                                format!(
+                                    "{} at {}",
+                                    note.path,
+                                    revision.get(..12).unwrap_or(revision)
+                                )
+                            }
+                            None => note.path.clone(),
+                        };
+                        if let Some(reason) = &note.disabled_reason {
+                            format!("{} ({}, switched off: {})", note.label, location, reason)
+                        } else {
+                            let sha = note
+                                .sha256
+                                .as_deref()
+                                .map(|sha| sha.get(..12).unwrap_or(sha))
+                                .unwrap_or("?");
+                            let bytes = note.bytes.unwrap_or(0);
+                            format!(
+                                "{} ({}, sha256 {}, {} bytes)",
+                                note.label, location, sha, bytes
+                            )
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        });
         let arms = self.experiment_overlays.iter().flat_map(|dispatch| {
             dispatch.overlays.iter().map(move |overlay| {
                 let mut line = format!(
@@ -141,14 +198,16 @@ impl RunTagInstructions {
                         .join(", ")
                 )
             })
+            .chain(pilot_notes)
             .chain(arms)
             .collect()
     }
 }
 
 impl RuntimeKernel {
-    /// The tag instructions `run_id`'s activities received, from its audit
-    /// trail, reading at most [`MAX_TAG_INSTRUCTION_DISPATCHES`] + 1 rows.
+    /// The tag instructions, pilot notes and experiment overlays `run_id`'s
+    /// activities received, from its audit trail, reading at most
+    /// [`MAX_TAG_INSTRUCTION_DISPATCHES`] + 1 rows.
     pub fn collect_run_tag_instructions(
         &self,
         run_id: &str,
@@ -168,6 +227,7 @@ impl RuntimeKernel {
             source: Some("v2_envelope".to_string()),
             body_kinds: vec![
                 "tag_instructions_applied".to_string(),
+                "pilot_notes_applied".to_string(),
                 "experiment_overlay_applied".to_string(),
             ],
             oldest_first: true,
@@ -178,6 +238,7 @@ impl RuntimeKernel {
         rows.truncate(MAX_TAG_INSTRUCTION_DISPATCHES);
         let mut dispatches = Vec::new();
         let mut experiment_overlays = Vec::new();
+        let mut pilot_notes = Vec::new();
         for row in rows {
             let Ok(event) =
                 serde_json::from_str::<orbit_types::workflow::V2AuditEvent>(&row.payload_json)
@@ -197,6 +258,16 @@ impl RuntimeKernel {
                     task_id,
                     instructions,
                 }),
+                V2AuditEventKind::PilotNotesApplied {
+                    step_id,
+                    activity_name,
+                    notes,
+                } => pilot_notes.push(RunPilotNotesDispatch {
+                    at: event.envelope.ts,
+                    step_id,
+                    activity_name,
+                    notes,
+                }),
                 V2AuditEventKind::ExperimentOverlayApplied {
                     step_id,
                     activity_name,
@@ -213,13 +284,17 @@ impl RuntimeKernel {
             }
         }
         Ok(RunTagInstructions {
-            state: if dispatches.is_empty() && experiment_overlays.is_empty() {
+            state: if dispatches.is_empty()
+                && experiment_overlays.is_empty()
+                && pilot_notes.is_empty()
+            {
                 "none"
             } else {
                 "observed"
             },
             dispatches,
             experiment_overlays,
+            pilot_notes,
             truncated,
         })
     }

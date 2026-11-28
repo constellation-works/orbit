@@ -1,7 +1,7 @@
 use orbit_common::OrbitError;
 use orbit_tools::ToolContext;
 use orbit_types::workflow::{
-    DeferralProbe, ExperimentActivityOverlay, NamespaceProbe, TagInstruction,
+    DeferralProbe, ExperimentActivityOverlay, NamespaceProbe, PilotNotesResolution, TagInstruction,
 };
 use serde_json::Value;
 use std::collections::HashMap;
@@ -184,6 +184,18 @@ pub trait Dispatch: Send + Sync {
         activity_name: &str,
         input: &Value,
     ) -> Result<Vec<TagInstruction>, DispatchError>;
+
+    /// Mapped `[workflow.pilot_notes.<label>]` instructions for `task_pilot`,
+    /// read from the commit the pilot is prepared against, never a worktree.
+    /// Returns `None` for any other activity or when no pilot notes are mapped.
+    /// An unusable file switches off only its own label; this never fails the
+    /// pilot dispatch.
+    fn pilot_notes_for_activity(
+        &self,
+        run_id: &str,
+        activity_name: &str,
+        input: &Value,
+    ) -> Option<PilotNotesResolution>;
 
     /// Pinned generated corpus rows selected by exact activity name.
     /// Hosts without this capability answer with no guidance.

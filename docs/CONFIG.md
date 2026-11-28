@@ -44,6 +44,7 @@ See the [configuration reference index](config/README.md#orbit-configuration) fo
 ### [Retired explorer configuration](config/workflow.md#retired-explorer-configuration)
 ### [`[workflow.agent_corpus]` — activity-scoped workspace knowledge](config/workflow.md#workflowagent_corpus--activity-scoped-workspace-knowledge)
 ### [`[workflow.tag_instructions.<tag>]` — extra instructions for tagged tasks](config/workflow-tags.md#workflowtag_instructionstag--extra-instructions-for-tagged-tasks)
+### [`[workflow.pilot_notes.<label>]` — per-task notes for the task pilot](config/workflow-tags.md#workflowpilot_noteslabel--per-task-notes-for-the-task-pilot)
 ### [`[workflow.validation_env]` — the toolchain required validation runs with](config/workflow-validation.md#workflowvalidation_env--the-toolchain-required-validation-runs-with)
 #### [Workspace build output](config/workflow-validation.md#workspace-build-output)
 #### [Incremental compilation](config/workflow-validation.md#incremental-compilation)

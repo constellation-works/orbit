@@ -107,6 +107,7 @@ Completed moves include `gc` to `app::gc` (above task), `landing` to `unit::land
 | `host_labels.rs` | `unit::host_labels` | leaf |
 | `job` | `app::run`; its `crew_pools` module goes to `unit::crew_pool` (between task and run) | 2 |
 | `operator_input.rs` | `app::review` | 4 |
+| `pilot_note.rs` | `unit::tag_instructions` | above task |
 | `pull_drain` | `unit::pull_drain` | 6 |
 | `review` | `app::review` | 4 |
 | `seeding_policy.rs` | `unit::seeding_policy` | above task |
