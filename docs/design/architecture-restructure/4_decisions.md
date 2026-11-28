@@ -453,7 +453,7 @@ Other phase 5 landings also raised the count by hand; `git log -p -- scripts/arc
 - Cost: until Pass B, the baseline admits 353 more functions with an `&OrbitRuntime` parameter than the 1171 at `a19679759` (1524 now), and the ratchet does not catch regrowth up to that number.
 - Alternative not taken: leave each moved method in its `impl` block until Pass B could narrow it in the same change. That keeps the baseline flat, but §11 orders the passes so the move comes first.
 
-### Lint exemptions for test-support-only items keep the dead-code allow until a caller exists
+## Lint exemptions for test-support-only items keep the dead-code allow until a caller exists
 
 **Recorded:** 2026-11-27 · [ORB-29440] for [ORB-28427], landed at `4022037bf`
 **Code anchors:** `crates/orbit-core/src/app/crew_memory/proposal.rs::crew_memory_proposal_board`, `crates/orbit-core/src/app/crew_memory/space.rs::crew_memory_write`, `crates/orbit-core/src/app/crew_memory/record.rs::decide_proposal`, `crates/orbit-core/src/app/evolution/ledger.rs::reconcile_evolution_checkpoint`
