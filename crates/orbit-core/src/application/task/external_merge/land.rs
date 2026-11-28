@@ -163,7 +163,7 @@ impl OrbitRuntime {
                 format_args!("it is '{}'; only a task in review lands", task.status),
             ));
         }
-        let carried = self.live_leaf_task_ids()?;
+        let carried = crate::app::port::TaskWorkspaceAuto(self).live_leaf_task_ids()?;
         let candidate = self
             .settlement_candidate(task, &carried)
             .map_err(|reason| landing_refused(id, reason))?;
@@ -242,7 +242,10 @@ impl OrbitRuntime {
         pull: &crate::runtime::task_pr_forge::HandoffLandingPullRequest,
     ) -> Result<(), OrbitError> {
         let candidate = self
-            .settlement_candidate(task.clone(), &self.live_leaf_task_ids()?)
+            .settlement_candidate(
+                task.clone(),
+                &crate::app::port::TaskWorkspaceAuto(self).live_leaf_task_ids()?,
+            )
             .map_err(|reason| landing_refused(&task.id, reason))?;
         if candidate.revoked.is_some() {
             return Err(landing_refused(

@@ -95,7 +95,7 @@ fn readiness(
     runtime: &OrbitRuntime,
     task_ids: &[String],
 ) -> Result<Value, orbit_common::OrbitError> {
-    runtime.workspace_auto_readiness(task_ids, None, 50, &[])
+    orbit_core::unit::workspace_auto::workspace_auto_readiness(runtime, task_ids, None, 50, &[])
 }
 
 fn entry<'a>(readiness: &'a Value, task: &str) -> &'a Value {
@@ -125,13 +125,13 @@ fn fleet_readiness_batches_backlog_commit_lock_acquisitions() {
             &["file:README.md"],
         );
     }
-    let facts = runtime.fleet_readiness_facts();
-    runtime.workspace_fleet_readiness(&facts).unwrap();
+    let facts = orbit_core::unit::workspace_auto::fleet_readiness_facts(&runtime);
+    orbit_core::unit::workspace_auto::workspace_fleet_readiness(&runtime, &facts).unwrap();
     let acquisitions = Arc::new(AtomicU64::new(0));
     let subscriber =
         tracing_subscriber::registry().with(ReadinessCommitAcquisitions(Arc::clone(&acquisitions)));
     let payload = tracing::subscriber::with_default(subscriber, || {
-        runtime.workspace_fleet_readiness(&facts).unwrap()
+        orbit_core::unit::workspace_auto::workspace_fleet_readiness(&runtime, &facts).unwrap()
     });
     assert_eq!(payload["tasks"].as_array().unwrap().len(), 8);
     let taken = acquisitions.load(Ordering::Relaxed);

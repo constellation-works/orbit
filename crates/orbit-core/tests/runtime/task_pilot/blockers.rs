@@ -35,10 +35,14 @@ fn apply(workspace: &Workspace, task: &Task, warnings: &[String]) -> Value {
 }
 
 fn readiness(workspace: &Workspace, task: &Task) -> Value {
-    let result = workspace
-        .runtime
-        .workspace_auto_readiness(&[], None, 50, &[])
-        .unwrap();
+    let result = orbit_core::unit::workspace_auto::workspace_auto_readiness(
+        &workspace.runtime,
+        &[],
+        None,
+        50,
+        &[],
+    )
+    .unwrap();
     result["tasks"]
         .as_array()
         .unwrap()

@@ -24,9 +24,9 @@ fn readiness_counts_live_agents_by_activity() {
     .unwrap();
     let runtime = OrbitRuntime::from_roots(&root, &root).unwrap();
 
-    let idle = runtime
-        .workspace_auto_readiness(&[], Some(1), 1, &[])
-        .unwrap();
+    let idle =
+        orbit_core::unit::workspace_auto::workspace_auto_readiness(&runtime, &[], Some(1), 1, &[])
+            .unwrap();
     assert_eq!(
         idle["live_agents"],
         json!({"pilots": 0, "recovery": 0, "reviewers": 0}),
@@ -111,9 +111,9 @@ fn readiness_counts_live_agents_by_activity() {
         false,
     );
 
-    let payload = runtime
-        .workspace_auto_readiness(&[], Some(1), 1, &[])
-        .unwrap();
+    let payload =
+        orbit_core::unit::workspace_auto::workspace_auto_readiness(&runtime, &[], Some(1), 1, &[])
+            .unwrap();
     assert_eq!(
         payload["live_agents"],
         json!({"pilots": 3, "recovery": 3, "reviewers": 2}),

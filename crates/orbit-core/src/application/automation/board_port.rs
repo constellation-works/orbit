@@ -3,13 +3,13 @@
 //! `board.eligible` is the drain's own admission view and
 //! `board.drain_running` its live coordinator. `workspace_auto` owns both and
 //! sits above automation, so a direct call from here would be an upward
-//! edge. This port is the way in: `workspace_auto` implements it on
-//! [`OrbitRuntime`](crate::OrbitRuntime), so composing the runtime binds it.
+//! edge. This port is the way in: `unit::workspace_auto` implements it on its
+//! runtime-backed `AutomationPort`, bound in `app::port`.
 
 use orbit_common::OrbitError;
 
-/// Drain reads condition explain makes, implemented by `workspace_auto`.
-pub(in crate::application) trait AutomationBoardPort {
+/// Drain reads condition explain makes, implemented by `unit::workspace_auto`.
+pub(crate) trait AutomationBoardPort {
     /// Backlog tasks the drain's admission view would admit now, observed
     /// without its commit boundary: scheduled, held and excluded tasks are
     /// not listed.

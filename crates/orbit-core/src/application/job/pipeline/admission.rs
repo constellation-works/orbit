@@ -160,7 +160,7 @@ impl OrbitRuntime {
             delivery::normalize_delivery_input(spec, &mut input)?;
         }
         let reuse_admission = resume.is_some() && !source_repair;
-        self.install_auto_concurrency(
+        crate::app::port::JobAutoConcurrency(self).install_auto_concurrency(
             job_name,
             &mut input,
             reuse_admission || replay_source_run_id.is_some(),

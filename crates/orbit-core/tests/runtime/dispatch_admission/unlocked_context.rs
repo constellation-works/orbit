@@ -83,9 +83,9 @@ fn shared_markdown_beside_distinct_code_admits_both_and_stays_in_context() {
         json!([first, second]),
         "a shared Markdown file must not serialize the wave: {wave:#}"
     );
-    let readiness = runtime
-        .workspace_auto_readiness(&[], None, 50, &[])
-        .unwrap();
+    let readiness =
+        orbit_core::unit::workspace_auto::workspace_auto_readiness(&runtime, &[], None, 50, &[])
+            .unwrap();
     for id in [&first, &second] {
         let ready = readiness_task(&readiness, id);
         assert_eq!(ready["eligible"], true, "{ready}");

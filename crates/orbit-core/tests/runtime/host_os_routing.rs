@@ -174,7 +174,9 @@ fn a_linux_host_withholds_and_refuses_a_macos_task_and_names_the_wait() {
     assert_eq!(waiting.reason.as_deref(), Some("host_os_mismatch"));
     assert_eq!(waiting.detail.as_deref(), Some(wait));
 
-    let readiness = linux.workspace_auto_readiness(&[], None, 50, &[]).unwrap();
+    let readiness =
+        orbit_core::unit::workspace_auto::workspace_auto_readiness(&linux, &[], None, 50, &[])
+            .unwrap();
     let entry = readiness["tasks"]
         .as_array()
         .unwrap()

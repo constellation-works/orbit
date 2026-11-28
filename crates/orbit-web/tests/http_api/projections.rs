@@ -1663,7 +1663,9 @@ projections_test!(
         );
         let rt = &fixture.runtime;
         rt.write_run_state(&drain.run_id, &state).unwrap();
-        let readiness = rt.workspace_auto_readiness(&[], None, 500, &[]).unwrap();
+        let readiness =
+            orbit_core::unit::workspace_auto::workspace_auto_readiness(rt, &[], None, 500, &[])
+                .unwrap();
         let held_rows = readiness["approvals"]["held"].as_array().unwrap();
         let held = find_row(held_rows, "task_id", &id);
         check_eq!(held["findings"] => expected; "CLI readiness reads the task's latest pilot source");

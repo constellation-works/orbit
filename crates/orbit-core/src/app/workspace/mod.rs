@@ -53,7 +53,6 @@ use preset::AppliedWorkspacePreset;
 
 // Surface re-exports: what the CLI, dashboard and composition name from this subject.
 pub use crate::adapter::HubCoordinationExecutor;
-pub use crate::application::workspace_auto::FleetReadinessFacts;
 pub use crate::bootstrap::init::{
     InitOptions, allocated_task_prefix, init_global, init_workspace_at_root,
 };
@@ -62,6 +61,7 @@ pub use crate::composition::{
     Opening, WorkspaceAuthorityAdoption, adopt_workspace_layout_authority, core_for_request,
     store_opener, verify_workspace_layout_authority,
 };
+pub use crate::unit::workspace_auto::FleetReadinessFacts;
 pub use live_run::workspace_live_run_ids;
 pub use orbit_runtime::{
     WorkspaceRuntimeBinding, is_global_orbit_root, managed_workspace_selector_from_env,

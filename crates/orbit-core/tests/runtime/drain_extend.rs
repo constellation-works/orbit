@@ -205,10 +205,14 @@ fn extending_a_pull_or_owner_drain_moves_the_deadline_its_window_reads_and_never
     }
 
     // Readiness reports the owner drain's extended deadline, not the stamp.
-    let readiness = drains
-        .runtime
-        .workspace_auto_readiness(&[], None, 10, &[])
-        .unwrap();
+    let readiness = orbit_core::unit::workspace_auto::workspace_auto_readiness(
+        &drains.runtime,
+        &[],
+        None,
+        10,
+        &[],
+    )
+    .unwrap();
     let extended = drains
         .jobs
         .list_job_runs(OWNER)
@@ -302,10 +306,14 @@ fn readiness_exposes_running_drain_task_slots_separately_from_leaf_capacity() {
         ));
     });
 
-    let readiness = drains
-        .runtime
-        .workspace_auto_readiness(&[], Some(15), 10, &[])
-        .unwrap();
+    let readiness = orbit_core::unit::workspace_auto::workspace_auto_readiness(
+        &drains.runtime,
+        &[],
+        Some(15),
+        10,
+        &[],
+    )
+    .unwrap();
     assert_eq!(readiness["capacity"]["drain_run_id"], drain);
     assert_eq!(readiness["capacity"]["max_active_leaf_runs"], 15);
     assert_eq!(readiness["capacity"]["drain_concurrency"], 2);

@@ -370,10 +370,9 @@ fn auto_fix_stop_waits_for_green_on_published_head_then_resumes_completion() {
     let green = fx.pass(&drain, "done", true);
     let entry = started(&green, &leaf.task).unwrap_or_else(|| panic!("{green}"));
     assert_eq!(entry["reason"], "checks_green_after_hold");
-    let readiness = fx
-        .runtime
-        .workspace_auto_readiness(&[], None, 10, &[])
-        .unwrap();
+    let readiness =
+        orbit_core::unit::workspace_auto::workspace_auto_readiness(&fx.runtime, &[], None, 10, &[])
+            .unwrap();
     assert!(
         readiness["out_of_run_auto_fix"]
             .as_array()

@@ -47,14 +47,14 @@ pub(crate) use activity_tool_requirements::{
 pub(in crate::application) use admission_port::JobAdmissionPort;
 pub(crate) use admission_port::OPERATOR_READINESS_OVERRIDE_INPUT;
 pub use agent::{AgentInvokeResult, agent_invoke_result};
-pub(in crate::application) use auto_concurrency_port::JobAutoConcurrencyPort;
+pub(crate) use auto_concurrency_port::JobAutoConcurrencyPort;
 pub(crate) use auto_task_port::JobAutoTaskPort;
 pub(in crate::application) use automation_port::JobAutomationPort;
 pub use catalog::CatalogReferenceLayer;
 pub(crate) use catalog::{DEFAULT_JOB_FILES, seed_default_jobs};
 pub use catalog::{JobCatalogEntry, JobCatalogFilter, job_catalog_to_json_with_last_run};
 pub use crew_pools::{TaskCrewBackfill, TaskCrewChange};
-pub(in crate::application) use drain_leaf_port::JobDrainLeafPort;
+pub(crate) use drain_leaf_port::JobDrainLeafPort;
 pub(in crate::application) use drain_port::{JobDrainPort, JobPullSettlementPort};
 pub use exec::V2JobRunResult;
 pub(crate) use experiment_port::JobExperimentPort;

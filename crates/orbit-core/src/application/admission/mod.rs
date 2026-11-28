@@ -1,21 +1,38 @@
 //! Backlog admission: which backlog tasks automatic dispatch may admit, and
 //! when.
 
-pub(super) mod auto_admission;
+pub(crate) mod auto_admission;
+
 pub(crate) mod backlog_exclusion;
+
 pub(crate) mod census;
+
 pub(crate) mod claim_holders;
-pub(super) mod cpu_light;
+
+pub(crate) mod cpu_light;
+
 mod distributed_port;
+
 pub(crate) mod forecast;
-pub(super) mod gap_fit;
+
+pub(crate) mod gap_fit;
+
 mod job_port;
-pub(super) mod leaf_occupancy;
+
+pub(crate) mod leaf_occupancy;
+
 pub(crate) mod pass_error;
+
 pub(crate) mod perf_lane;
+
 mod published_delivery;
+
 mod recovery_context;
+
 pub(crate) mod scan_unresolved;
-pub(super) mod stuck_head;
+
+pub(crate) mod stuck_head;
+
 pub(super) mod surface_reservation;
-pub(super) mod unknown_footprint;
+
+pub(crate) mod unknown_footprint;

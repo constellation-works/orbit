@@ -126,7 +126,7 @@ impl OrbitRuntime {
         if tasks.is_empty() {
             return Ok(Vec::new());
         }
-        let carried = self.live_leaf_task_ids()?;
+        let carried = crate::app::port::TaskWorkspaceAuto(self).live_leaf_task_ids()?;
         let mut landed = Vec::new();
         for task in tasks {
             let id = task.id.clone();

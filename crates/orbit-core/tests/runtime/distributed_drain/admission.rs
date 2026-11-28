@@ -914,10 +914,14 @@ fn three_failed_claims_open_the_breaker_and_a_new_drain_resets_it() {
     pair.follower_jobs
         .mark_job_run_running(&drain, Utc::now(), std::process::id())
         .expect("running drain");
-    let readiness = pair
-        .follower
-        .workspace_auto_readiness(&[], None, 50, &[])
-        .expect("follower readiness");
+    let readiness = orbit_core::unit::workspace_auto::workspace_auto_readiness(
+        &pair.follower,
+        &[],
+        None,
+        50,
+        &[],
+    )
+    .expect("follower readiness");
     assert_eq!(readiness["capacity"]["pull_drain_run_id"], drain.as_str());
     assert_prefix(
         readiness["capacity"]["pull_drain_refusal"].as_str(),
@@ -2189,7 +2193,9 @@ fn a_wait_on_a_claimed_footprint_names_the_claim_and_a_starved_gate_defers() {
     );
 
     // Readiness.
-    let readiness = owner.workspace_auto_readiness(&[], None, 50, &[]).unwrap();
+    let readiness =
+        orbit_core::unit::workspace_auto::workspace_auto_readiness(owner, &[], None, 50, &[])
+            .unwrap();
     let entry = readiness["tasks"]
         .as_array()
         .unwrap()

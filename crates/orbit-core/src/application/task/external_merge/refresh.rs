@@ -160,7 +160,7 @@ impl OrbitRuntime {
                 ),
             ));
         }
-        let carried = self.live_leaf_task_ids()?;
+        let carried = crate::app::port::TaskWorkspaceAuto(self).live_leaf_task_ids()?;
         let candidate = self
             .refresh_candidate(task, &carried)
             .map_err(|reason| refresh_refused(id, reason))?;

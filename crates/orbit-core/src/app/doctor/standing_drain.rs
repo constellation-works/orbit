@@ -47,7 +47,7 @@ pub(super) fn standing_drain_row(runtime: &OrbitRuntime) -> WorkspaceDoctorResul
         }
     };
     let keeper = keeper_sentence(runtime);
-    match runtime.drain_idle_with_work(IDLE_WITH_WORK_DAYS) {
+    match crate::unit::workspace_auto::drain_idle_with_work(runtime, IDLE_WITH_WORK_DAYS) {
         // An intent this binary cannot read is never a healthy row, even when
         // the idle measure reads (ORB-26041).
         Ok(idle) => row(

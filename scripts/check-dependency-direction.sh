@@ -1678,7 +1678,7 @@ fi
 
 # These moved application subjects still reach adapters or the joiners only
 # through application-owned ports.
-for moved_subject in app/gc unit/landing unit/managed_asset unit/sweep_filing unit/backlog_forecast; do
+for moved_subject in app/gc unit/landing unit/managed_asset unit/sweep_filing unit/backlog_forecast unit/workspace_auto; do
   if ! super_chains_into "$core_src" "$moved_subject" 'crate::adapter|crate::bootstrap|crate::composition' named-path ||
     ! inherent_calls_into "$core_src" "$moved_subject" 'adapter|bootstrap|composition' '' '' "$core_src"; then
     echo "orbit-core ${moved_subject/\//::} must reach adapters, bootstrap and composition through application-owned ports"
@@ -1702,18 +1702,19 @@ fi
 
 # [ORB-17936] `task` is the lowest of the ten modules above contracts. It
 # reaches `job`, `review`, `distributed`, `pull_drain`, `admission`,
-# `unit::sweep_filing` and `workspace_auto` only through the ports it owns
-# (`TaskJobPort`, `TaskReviewPort`, `TaskDistributedPort`,
+# `unit::sweep_filing` and `unit::workspace_auto` only through the ports it
+# owns (`TaskJobPort`, `TaskReviewPort`, `TaskDistributedPort`,
 # `TaskSweepFilingPort`, `TaskWorkspaceAutoPort`), which those modules
-# implement on `OrbitRuntime` or, for `unit::sweep_filing`, on its
-# `TaskPort` bound in `app::port`. A path, a grouped tree, a `super::` chain that
+# implement on `OrbitRuntime` or, for `unit::sweep_filing` and
+# `unit::workspace_auto`, on their `TaskPort` bound in `app::port`. A path, a
+# grouped tree, a `super::` chain that
 # climbs out of `task` into one of them, or a call to an inherent method they
 # define is a reintroduced edge [ORB-17972], [ORB-22003]. The names are
 # derived from their `impl OrbitRuntime` blocks, so port methods use distinct
 # names. `tag_instructions` sits outside the module order but above `task`
 # [ORB-22289]: task reads commit-pinned files through its own
 # `task::base_revision`, never through it. `unit::backlog_forecast` is
-# above `workspace_auto` and task has no port to it [ORB-22287]; it is
+# above `unit::workspace_auto` and task has no port to it [ORB-22287]; it is
 # guarded with the other lower modules below. `app::codebase` sits above
 # `task` [ORB-22625]: task owns the
 # pure block classification (`task::classify_block`) and records a done
@@ -1731,7 +1732,7 @@ fi
 # decision rules, task history, tasks and blobs through `task::base_revision`.
 # Task reaches it only through
 # `TaskCorpusPort`, implemented on `app::agent::TaskPort` and bound in `app::port`.
-task_upper_modules='job|review|distributed|pull_drain|admission|workspace_auto|tag_instructions'
+task_upper_modules='job|review|distributed|pull_drain|admission|tag_instructions'
 # Same-named methods on other types are not upper inherent methods; only
 # these exact lines are allowed: store reads through `stores().jobs()` and
 # `stores().tasks()`.
@@ -1802,8 +1803,9 @@ fi
 # admission and the auto drain's concurrency mode and leaf settlement only
 # through the ports it owns (`ReviewAdmissionHook`, `JobAutomationPort`,
 # `JobAdmissionPort`, `JobAutoConcurrencyPort`, `JobDrainLeafPort`
-# [ORB-23198]), which `review`, `automation`, `admission` and
-# `workspace_auto` implement on `OrbitRuntime`; the job name and filing tags
+# [ORB-23198]), which `review`, `automation` and `admission` implement on
+# `OrbitRuntime` and `unit::workspace_auto` implements on its adapters bound
+# in `app::port`; the job name and filing tags
 # it shares with `review` and `sweep_filing` are contracts. A path, a grouped
 # tree, a `super::` chain out of `job` into any of them, or a call to an
 # inherent method they define (derived from their `impl OrbitRuntime`
@@ -1813,7 +1815,7 @@ fi
 # installation and claimed-leaf capture validation reach it only through
 # `JobExperimentPort`, and the pool they read is the
 # `contracts::ExperimentCrewPool` value.
-job_upper_modules='admission|automation|review|workspace_auto'
+job_upper_modules='admission|automation|review'
 if dependency_matches -n "crate::application::(${job_upper_modules})\\b" \
   "$app_src/job" -g '*.rs' -g '!**/tests/**' ||
   dependency_matches -n -U "crate::application::\\{[^}]*\\b(${job_upper_modules})\\b" \
@@ -1826,7 +1828,7 @@ fi
 
 # [ORB-17939] Above `job`, each module names only the modules below it in
 # `automation < review < distributed < pull_drain < admission <
-# workspace_auto < unit::backlog_forecast < unit::sweep_filing`. The cut edges go through ports the lower
+# unit::workspace_auto < unit::backlog_forecast < unit::sweep_filing`. The cut edges go through ports the lower
 # module owns: `automation::AutomationReviewPort` (before-PR coverage and the
 # reviewer pools, implemented by `review`), `review::ReviewDistributedPort`
 # (the owner's ship contract and machine) and `distributed::
@@ -1855,38 +1857,55 @@ guard_upper_layer() {
     fail=1
   fi
 }
-guard_upper_layer automation 'review|distributed|pull_drain|admission|workspace_auto' \
+guard_upper_layer automation 'review|distributed|pull_drain|admission' \
   'configured_pool_members|review_pool_by_os|select_review_crew|review_crew_candidates|admission_boundary'
-guard_upper_layer review 'distributed|pull_drain|admission|workspace_auto' \
+guard_upper_layer review 'distributed|pull_drain|admission' \
   'admission_boundary|owner_completion_authority|owner_ship_contract|distributed_owner_machine_id'
-guard_upper_layer distributed 'pull_drain|admission|workspace_auto' 'executor_census'
-guard_upper_layer pull_drain 'admission|workspace_auto' ''
-guard_upper_layer admission 'workspace_auto' 'read_live_leaf_runs'
+guard_upper_layer distributed 'pull_drain|admission' 'executor_census'
+guard_upper_layer pull_drain 'admission' ''
 
-# [ORB-22287] `backlog_forecast` sits above `workspace_auto` and lives at
+# `workspace_auto` sits above `admission` and lives at `unit::workspace_auto`.
+# Every application module below it reaches it only through ports the lower
+# module owns (`task::TaskWorkspaceAutoPort`, `job::JobAutoConcurrencyPort`,
+# `job::JobDrainLeafPort`, `automation::AutomationBoardPort`), bound in
+# `app::port`.
+for lower_module in contracts task job automation review distributed pull_drain admission; do
+  if ! super_chains_into "$app_src" "$lower_module" 'crate::unit::workspace_auto' named-path; then
+    echo "orbit-core ${lower_module} must not name unit::workspace_auto; reach it through a port the lower module owns"
+    fail=1
+  fi
+done
+
+# [ORB-22287] `backlog_forecast` sits above `unit::workspace_auto` and lives at
 # `unit::backlog_forecast`. It has no ports, so no application module below
 # it may name it: a path, a grouped tree or a `super::` chain into it is a
 # reintroduced edge. Its operations are functions, so a call names a path too.
-for lower_module in contracts task job automation review distributed pull_drain admission workspace_auto; do
+for lower_module in contracts task job automation review distributed pull_drain admission; do
   if ! super_chains_into "$app_src" "$lower_module" 'crate::unit::backlog_forecast' named-path; then
     echo "orbit-core ${lower_module} must not name unit::backlog_forecast"
     fail=1
   fi
 done
+if ! super_chains_into "$core_src" unit/workspace_auto 'crate::unit::backlog_forecast' named-path; then
+  echo "orbit-core unit::workspace_auto must not name unit::backlog_forecast"
+  fail=1
+fi
 
 # `sweep_filing` tops the module order and lives at `unit::sweep_filing`.
 # Every application module below it reaches it only through ports the lower
 # module owns, such as `task::TaskSweepFilingPort` bound in `app::port`.
-for lower_module in contracts task job automation review distributed pull_drain admission workspace_auto; do
+for lower_module in contracts task job automation review distributed pull_drain admission; do
   if ! super_chains_into "$app_src" "$lower_module" 'crate::unit::sweep_filing' named-path; then
     echo "orbit-core ${lower_module} must not name unit::sweep_filing; reach it through a port the lower module owns"
     fail=1
   fi
 done
-if ! super_chains_into "$core_src" unit/backlog_forecast 'crate::unit::sweep_filing' named-path; then
-  echo "orbit-core unit::backlog_forecast must not name unit::sweep_filing"
-  fail=1
-fi
+for moved_lower in unit/workspace_auto unit/backlog_forecast; do
+  if ! super_chains_into "$core_src" "$moved_lower" 'crate::unit::sweep_filing' named-path; then
+    echo "orbit-core ${moved_lower/\//::} must not name unit::sweep_filing"
+    fail=1
+  fi
+done
 
 # [ORB-23334] `app::auto_task` sits above `automation`: its scheduler
 # evaluates delivery and conditions through automation, its listing projection

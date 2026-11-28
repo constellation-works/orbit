@@ -178,7 +178,7 @@ impl OrbitRuntime {
         let mut input = input;
         self.validate_pilot_string_task_ids_input(&job_name, &spec, &input)?;
         delivery::normalize_delivery_input(&spec, &mut input)?;
-        self.install_auto_concurrency(
+        crate::app::port::JobAutoConcurrency(self).install_auto_concurrency(
             &job_name,
             &mut input,
             resume.is_some() || retry_source_run_id.is_some(),

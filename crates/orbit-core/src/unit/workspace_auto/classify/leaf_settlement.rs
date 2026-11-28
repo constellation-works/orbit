@@ -19,12 +19,15 @@ use orbit_types::workflow::{ChildDispatchPhase, JobRun};
 
 use crate::OrbitRuntime;
 use crate::application::job::JobDrainLeafPort;
-use crate::application::workspace_auto::drains::{DRAIN_JOB_NAME, LEAF_JOB_NAME};
+use crate::unit::workspace_auto::drains::{DRAIN_JOB_NAME, LEAF_JOB_NAME};
 
-impl JobDrainLeafPort for OrbitRuntime {
+/// Adapter binding [`JobDrainLeafPort`] to drain leaf settlement.
+pub(crate) struct DrainLeafPort<'a>(pub(crate) &'a OrbitRuntime);
+
+impl JobDrainLeafPort for DrainLeafPort<'_> {
     fn record_finished_drain_leaves(&self, run: &JobRun) {
         if run.job_id == DRAIN_JOB_NAME {
-            settle_terminal_leaf_dispatches(self, &run.run_id);
+            settle_terminal_leaf_dispatches(self.0, &run.run_id);
         }
     }
 }

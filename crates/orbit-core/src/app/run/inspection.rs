@@ -27,7 +27,13 @@ impl<'a> Command<'a, ForecastAccuracy> {
         Self::new(
             Operation::command("run", "profiles")
                 .target(Some("host"), Some("resource_profiles".into())),
-            move |core| core.runtime().forecast_accuracy_selected(selection, at),
+            move |core| {
+                crate::unit::workspace_auto::forecast_accuracy_selected(
+                    core.runtime(),
+                    selection,
+                    at,
+                )
+            },
         )
     }
 }
@@ -55,7 +61,13 @@ impl<'a> Command<'a, (serde_json::Value, super::WaitingTasks)> {
                 .target(Some("workspace"), Some("auto_readiness".into())),
             move |core| {
                 let rt = core.runtime();
-                let payload = rt.workspace_auto_readiness(ids, concurrency, limit, crews)?;
+                let payload = crate::unit::workspace_auto::workspace_auto_readiness(
+                    rt,
+                    ids,
+                    concurrency,
+                    limit,
+                    crews,
+                )?;
                 Ok((payload, super::WaitingTasks::read(rt, std::iter::empty())))
             },
         )

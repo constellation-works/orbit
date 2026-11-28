@@ -744,10 +744,14 @@ fn assert_admission(workspace: &Workspace, task: &Task, reason: Option<&str>) {
         },
         "{wave}"
     );
-    let readiness = workspace
-        .runtime
-        .workspace_auto_readiness(&[], None, 50, &[])
-        .unwrap();
+    let readiness = orbit_core::unit::workspace_auto::workspace_auto_readiness(
+        &workspace.runtime,
+        &[],
+        None,
+        50,
+        &[],
+    )
+    .unwrap();
     let entry = readiness["tasks"]
         .as_array()
         .unwrap()
@@ -2089,10 +2093,14 @@ fn no_pilot_keeps_every_other_admission_rule() {
     let task = stale_backlog_task(&workspace);
     set_tags(&workspace, &task, &["no-pilot"]);
     let readiness_reason = |task: &Task| {
-        let readiness = workspace
-            .runtime
-            .workspace_auto_readiness(&[], None, 50, &[])
-            .unwrap();
+        let readiness = orbit_core::unit::workspace_auto::workspace_auto_readiness(
+            &workspace.runtime,
+            &[],
+            None,
+            50,
+            &[],
+        )
+        .unwrap();
         let entry = readiness["tasks"]
             .as_array()
             .unwrap()

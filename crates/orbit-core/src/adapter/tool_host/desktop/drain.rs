@@ -19,8 +19,13 @@ pub(super) fn readiness(
     let allowed_crews =
         optional_csv_or_string_list_alias(input, &["allow_crew"])?.unwrap_or_default();
     // This is a bounded observational read, not a reconciliation tick.
-    let mut value =
-        runtime.workspace_auto_readiness(&task_ids, concurrency, limit, &allowed_crews)?;
+    let mut value = crate::unit::workspace_auto::workspace_auto_readiness(
+        runtime,
+        &task_ids,
+        concurrency,
+        limit,
+        &allowed_crews,
+    )?;
     value["controls_authorized"] = json!(
         crate::runtime::authorization::resolved_caller_capabilities(runtime.env(), session)
             .contains(&McpCapability::Operator)

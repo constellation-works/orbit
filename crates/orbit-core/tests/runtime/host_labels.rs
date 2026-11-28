@@ -129,7 +129,9 @@ fn a_host_without_the_labels_withholds_the_task_and_names_the_wait() {
 
     let placement = "waits for a host labelled `gpu` (requires_labels): no registered serving \
                      host carries them";
-    let readiness = plain.workspace_auto_readiness(&[], None, 50, &[]).unwrap();
+    let readiness =
+        orbit_core::unit::workspace_auto::workspace_auto_readiness(&plain, &[], None, 50, &[])
+            .unwrap();
     let entry = readiness["tasks"]
         .as_array()
         .unwrap()

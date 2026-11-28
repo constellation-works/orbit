@@ -1513,10 +1513,9 @@ pub(super) fn published_requeue_is_admitted_past_held_locks_and_reuses_its_pr() 
     };
     set_status(&holder, TaskStatus::Review);
 
-    let readiness = f
-        .runtime
-        .workspace_auto_readiness(&[], None, 50, &[])
-        .unwrap();
+    let readiness =
+        orbit_core::unit::workspace_auto::workspace_auto_readiness(&f.runtime, &[], None, 50, &[])
+            .unwrap();
     let entry = readiness["tasks"]
         .as_array()
         .unwrap()
@@ -1767,10 +1766,14 @@ pub(super) fn footprint_held_resume_keeps_the_preserved_publication() {
             .unwrap()
     };
     let published_delivery = |f: &Fixture| {
-        let readiness = f
-            .runtime
-            .workspace_auto_readiness(&[], None, 50, &[])
-            .unwrap();
+        let readiness = orbit_core::unit::workspace_auto::workspace_auto_readiness(
+            &f.runtime,
+            &[],
+            None,
+            50,
+            &[],
+        )
+        .unwrap();
         readiness["tasks"]
             .as_array()
             .unwrap()

@@ -1684,10 +1684,9 @@ fn an_orchestrator_filed_verified_no_diff_is_held_with_its_evidence_and_never_cl
             .as_deref()
             .is_some_and(|detail| detail.contains(&landed))
     );
-    let readiness = ws
-        .runtime
-        .workspace_auto_readiness(&[], None, 50, &[])
-        .unwrap();
+    let readiness =
+        orbit_core::unit::workspace_auto::workspace_auto_readiness(&ws.runtime, &[], None, 50, &[])
+            .unwrap();
     assert_held(&readiness["approvals"], &filed, "pilot_verified_no_diff");
     assert_held_detail(&readiness["approvals"], &filed, &evidence);
     assert_status(&ws, &filed, TaskStatus::Proposed);

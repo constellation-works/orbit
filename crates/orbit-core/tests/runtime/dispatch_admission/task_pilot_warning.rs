@@ -49,9 +49,9 @@ fn observed(runtime: &OrbitRuntime, drain: &str) -> Option<String> {
     classify(runtime, drain);
     let shown = as_operator(runtime, "orbit.workflow.run.show", json!({"id": drain}));
     let recorded = &shown["drain_last_pass"]["task_pilot_warning"];
-    let readiness = runtime
-        .workspace_auto_readiness(&[], None, 50, &[])
-        .unwrap();
+    let readiness =
+        orbit_core::unit::workspace_auto::workspace_auto_readiness(runtime, &[], None, 50, &[])
+            .unwrap();
     let expected = start.as_ref().map_or(Value::Null, |warning| json!(warning));
     assert_eq!(*recorded, expected, "the pass records it: {shown:#}");
     assert_eq!(

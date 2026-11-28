@@ -456,7 +456,8 @@ fn shadow_and_off_followers_request_without_a_list() {
                     .all(|point| point.memory_bytes == expected),
                 "{records:?}"
             );
-            let report = pair.follower.forecast_accuracy().unwrap();
+            let report =
+                orbit_core::unit::workspace_auto::forecast_accuracy(&pair.follower).unwrap();
             let counts = &report.drains[0];
             assert_eq!(
                 (
@@ -744,18 +745,17 @@ fn pending_pull_capacity_serializes_other_host_admitters_and_recovers_lost_repli
                         .is_some_and(|reason| reason.starts_with("forecast_no_headroom:")),
                     "{shown}"
                 );
-                let report = pair
-                    .follower
-                    .forecast_accuracy_selected(
-                        AccuracySelection {
-                            since: Utc::now() - ChronoDuration::minutes(1),
-                            last: None,
-                            drain: Some(drain.clone()),
-                            mode: None,
-                        },
-                        Utc::now(),
-                    )
-                    .unwrap();
+                let report = orbit_core::unit::workspace_auto::forecast_accuracy_selected(
+                    &pair.follower,
+                    AccuracySelection {
+                        since: Utc::now() - ChronoDuration::minutes(1),
+                        last: None,
+                        drain: Some(drain.clone()),
+                        mode: None,
+                    },
+                    Utc::now(),
+                )
+                .unwrap();
                 let workspace = pair.follower.workspace_id().unwrap();
                 let limiter = report
                     .limiters
@@ -956,18 +956,17 @@ fn pending_pull_capacity_serializes_other_host_admitters_and_recovers_lost_repli
                 })
                 .unwrap();
 
-            let report = pair
-                .follower
-                .forecast_accuracy_selected(
-                    AccuracySelection {
-                        since: record.forecast_at - ChronoDuration::minutes(1),
-                        last: None,
-                        drain: Some(record.run_id.clone()),
-                        mode: Some("enforce".into()),
-                    },
-                    minute_at + ChronoDuration::minutes(1),
-                )
-                .unwrap();
+            let report = orbit_core::unit::workspace_auto::forecast_accuracy_selected(
+                &pair.follower,
+                AccuracySelection {
+                    since: record.forecast_at - ChronoDuration::minutes(1),
+                    last: None,
+                    drain: Some(record.run_id.clone()),
+                    mode: Some("enforce".into()),
+                },
+                minute_at + ChronoDuration::minutes(1),
+            )
+            .unwrap();
             let [pair] = report.pairs.as_slice() else {
                 panic!("expected the mature +5 minute pair: {report:#?}");
             };

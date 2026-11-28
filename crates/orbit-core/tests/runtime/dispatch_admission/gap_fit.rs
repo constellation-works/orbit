@@ -659,11 +659,12 @@ fn per_run_mode_overrides_the_host_and_survives_reopen() {
         } else {
             assert_eq!(recorded(&reopened, &drain, &pass).mode, mode);
         }
-        assert_eq!(reopened.run_auto_concurrency(&drain).unwrap()["mode"], mode);
-        assert_eq!(
-            reopened.run_auto_concurrency(&other).unwrap()["mode"],
-            "shadow"
-        );
+        let drain_mode =
+            orbit_core::unit::workspace_auto::run_auto_concurrency(&reopened, &drain).unwrap();
+        assert_eq!(drain_mode["mode"], mode);
+        let other_mode =
+            orbit_core::unit::workspace_auto::run_auto_concurrency(&reopened, &other).unwrap();
+        assert_eq!(other_mode["mode"], "shadow");
         assert_eq!(
             std::fs::read(fixture.global.join("config.toml")).unwrap(),
             config
@@ -980,7 +981,7 @@ fn shadow_and_enforce_passes_record_their_forecast_and_off_records_none() {
         assert_eq!(record.fit_skipped, vec![heavy.clone()]);
     }
 
-    let report = fixture.runtime.forecast_accuracy().unwrap();
+    let report = orbit_core::unit::workspace_auto::forecast_accuracy(&fixture.runtime).unwrap();
     assert_eq!(report.forecasts, 2);
     let [decisions] = report.drains.as_slice() else {
         panic!("{report:#?}");
@@ -1061,9 +1062,14 @@ fn a_pass_records_its_forecast_hour_as_bucket_maxima() {
         assert_eq!(record.cpu_peak.as_ref().unwrap().minute, 22);
         assert_eq!(record.memory_peak.as_ref().unwrap().minute, 0);
 
-        let readiness = runtime
-            .workspace_auto_readiness(&[], Some(4), 50, &[])
-            .unwrap();
+        let readiness = orbit_core::unit::workspace_auto::workspace_auto_readiness(
+            &runtime,
+            &[],
+            Some(4),
+            50,
+            &[],
+        )
+        .unwrap();
         assert_eq!(
             readiness["capacity"]["admission_forecast"]["series"],
             pass["admission_forecast"]["series"],

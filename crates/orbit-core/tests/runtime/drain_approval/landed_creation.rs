@@ -137,10 +137,14 @@ fn landed_creation_is_held_without_losing_authority_or_redispatching() {
     for task in [&operator, &automatic] {
         assert_eq!(held_reason(&next, task), Some("already_landed"), "{next}");
     }
-    let readiness = workspace
-        .runtime
-        .workspace_auto_readiness(&[], None, 50, &[])
-        .unwrap();
+    let readiness = orbit_core::unit::workspace_auto::workspace_auto_readiness(
+        &workspace.runtime,
+        &[],
+        None,
+        50,
+        &[],
+    )
+    .unwrap();
     assert_eq!(
         held_reason(&readiness["approvals"], &operator),
         Some("already_landed"),

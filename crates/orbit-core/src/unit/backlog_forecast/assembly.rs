@@ -243,7 +243,7 @@ pub(super) fn assemble_forecast_simulation(
 
     let (concurrency, concurrency_source) = match options.concurrency {
         Some(requested) => (u64::from(requested), "requested"),
-        None => runtime.drain_concurrency_ceiling()?,
+        None => crate::unit::workspace_auto::drain_concurrency_ceiling(runtime)?,
     };
     let slots = usize::try_from(concurrency).unwrap_or(1).max(1);
 

@@ -45,8 +45,7 @@ fn audit(fx: &Fixture, run: &str) -> std::sync::Arc<V2AuditWriter> {
 }
 
 fn auth_card(fx: &Fixture) -> Value {
-    fx.runtime
-        .workspace_auto_readiness(&[], None, 50, &[])
+    orbit_core::unit::workspace_auto::workspace_auto_readiness(&fx.runtime, &[], None, 50, &[])
         .unwrap()["provider_auth_failures"]
         .clone()
 }

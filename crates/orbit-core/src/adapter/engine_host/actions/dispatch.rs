@@ -14,8 +14,7 @@ use crate::application::job::{pipeline_actions, script_attach};
 use crate::application::pull_drain;
 use crate::application::task::pilot as task_pilot;
 use crate::application::task::{blocked_recovery, escalation_triage_steps};
-use crate::application::workspace_auto;
-use crate::unit::sweep_filing;
+use crate::unit::{sweep_filing, workspace_auto};
 
 use super::pipeline_actions::{invoke_and_wait, invoke_detached};
 

@@ -452,7 +452,8 @@ pub(super) fn readiness_snapshot_with_detail(
 
     let mut payload = json!({
         "crew_pool_warnings": status_state.as_ref().filter(|_| active_drain.is_some() || pull_drain.is_none()).or(pull_state.as_ref()).map(|state| state.pull_drain.pool_crew_exclusion_warnings()).unwrap_or_default(),
-        "auto_concurrency": runtime.auto_concurrency_view(
+        "auto_concurrency": crate::unit::workspace_auto::mode::auto_concurrency_view(
+            runtime,
             active_drain.as_ref().map(|drain| &drain.input)
                 .or_else(|| recent_drain.as_ref().and_then(|run| run.input.as_ref()))
         )?,

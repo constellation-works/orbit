@@ -88,7 +88,7 @@ pub struct DrainAdmissionPass {
     /// Consecutive failed pull passes, independent of failed claimed leaves,
     /// or consecutive deferred local passes; a local drain fails when this
     /// reaches `TRANSIENT_PASS_FAILURE_LIMIT` (orbit-core's
-    /// `application::workspace_auto::classify`).
+    /// `unit::workspace_auto::classify`).
     #[serde(default)]
     pub consecutive_pass_failures: u32,
     /// Sticky warning state: new admissions stop, but settlements keep flowing.

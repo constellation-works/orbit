@@ -37,7 +37,7 @@ FORBIDDEN = (
     (re.compile(r"\bjob_runs_page\s*\("), "job_runs_page()"),
     (re.compile(r"\.workspace_id\s*\("), "workspace_id()"),
     (re.compile(r"\.explain_operation\s*\("), "explain_operation()"),
-    (re.compile(r"\.workspace_auto_readiness\s*\("), "workspace_auto_readiness()"),
+    (re.compile(r"\bworkspace_auto_readiness\s*\("), "workspace_auto_readiness()"),
     (re.compile(r"\broutine_statuses\s*\("), "routine_statuses()"),
     (re.compile(r"\.clock_status\s*\("), "clock_status()"),
     (re.compile(r"\.automation_store\s*\("), "automation_store()"),

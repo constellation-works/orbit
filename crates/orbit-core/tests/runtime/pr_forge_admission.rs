@@ -132,9 +132,9 @@ fn excluded<'a>(output: &'a Value, field: &str, task: &str) -> Option<&'a Value>
 }
 
 fn readiness_entry(runtime: &OrbitRuntime, task: &str) -> Value {
-    let readiness = runtime
-        .workspace_auto_readiness(&[], None, 50, &[])
-        .unwrap();
+    let readiness =
+        orbit_core::unit::workspace_auto::workspace_auto_readiness(runtime, &[], None, 50, &[])
+            .unwrap();
     readiness["tasks"]
         .as_array()
         .unwrap()

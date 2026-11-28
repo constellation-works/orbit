@@ -60,9 +60,14 @@ kind = "human"
         "an agent task beside it is still admitted"
     );
 
-    let readiness = runtime
-        .workspace_auto_readiness(&[], None, 50, &["dk".to_string()])
-        .expect("readiness with a human crew allowlist");
+    let readiness = orbit_core::unit::workspace_auto::workspace_auto_readiness(
+        &runtime,
+        &[],
+        None,
+        50,
+        &["dk".to_string()],
+    )
+    .expect("readiness with a human crew allowlist");
     let entry = readiness_task(&readiness, &human);
     assert_eq!(entry["eligible"], false, "{entry}");
     assert_eq!(entry["reason"], "human_crew", "{entry}");

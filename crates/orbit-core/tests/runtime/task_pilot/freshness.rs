@@ -96,10 +96,14 @@ fn explicit_assessment_survives_selector_apply_promotion_and_administrative_edit
     );
     assert_pilot_routine_stays_fresh(&workspace, &routine, "fresh");
 
-    let readiness = workspace
-        .runtime
-        .workspace_auto_readiness(&[], None, 50, &[])
-        .unwrap();
+    let readiness = orbit_core::unit::workspace_auto::workspace_auto_readiness(
+        &workspace.runtime,
+        &[],
+        None,
+        50,
+        &[],
+    )
+    .unwrap();
     let entry = readiness["tasks"]
         .as_array()
         .unwrap()
