@@ -458,6 +458,17 @@
   max-width: 75px;
   text-overflow: ellipsis;
 }
+/* The read-only crew is a span, not a select: cap the chip and let its name
+   shrink so the row and its hint stay inside the pane. */
+.task-levers-controls:not([data-fit="full"]) .task-chip-crew:not(.task-crew-control) {
+  flex: 0 1 auto;
+  max-width: 110px;
+}
+.task-crew-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .task-levers-controls:not([data-fit="full"]) .task-os-readout,
 .task-levers-controls:not([data-fit="full"]) .risk-label,
 .task-levers-controls:not([data-fit="full"]) .risk-value { display: none; }
