@@ -43,7 +43,7 @@ use orbit_automation::routines::loader::declared_routine_names;
 use orbit_common::OrbitError;
 
 use super::template::sanitize_routine_name_part;
-use crate::application::managed_assets::RoutineMaterializationBinding;
+use crate::unit::managed_asset::RoutineMaterializationBinding;
 
 /// Shippable default routine assets, seeded under
 /// `<workspace>/.orbit/routines/<file>.yaml` on `orbit init`. Every entry

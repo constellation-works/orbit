@@ -1,3 +1,4 @@
+use crate::app::gc;
 use std::fs;
 
 use orbit_common::protocol::yaml::parse_routine_yaml;
@@ -26,7 +27,7 @@ pub(super) fn doctor_check_worktree_reclaim(runtime: &OrbitRuntime) -> Workspace
             "not a git checkout".into(),
         );
     }
-    match runtime.reclaimable_worktrees() {
+    match gc::reclaimable_worktrees(runtime) {
         Ok(result) if result.bytes_reclaimed > 10 * 1024 * 1024 * 1024 => actionable_check(
             CHECK, WorkspaceDoctorStatus::Warning,
             format!("{} reclaimable in kept run worktrees and host validation output", human_bytes(result.bytes_reclaimed)),
@@ -440,7 +441,7 @@ pub(super) fn doctor_check_task_reservations(runtime: &OrbitRuntime) -> Workspac
 /// workspace has no enabled routine targeting `store_gc_pipeline`.
 pub(super) fn doctor_check_store_retention(runtime: &OrbitRuntime) -> WorkspaceDoctorResult {
     const CHECK: &str = "store-retention";
-    let overview = match runtime.store_retention_overview() {
+    let overview = match gc::store_retention_overview(runtime) {
         Ok(overview) => overview,
         Err(error) => {
             return check(

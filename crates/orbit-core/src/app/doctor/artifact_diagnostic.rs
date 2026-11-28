@@ -23,7 +23,7 @@ use crate::app::auto_task::{
 };
 use crate::app::routine::RETIRED_ROUTINE_FILES;
 use crate::app::routine::{ShippedShape, shipped_shape_of};
-use crate::application::managed_assets::{
+use crate::unit::managed_asset::{
     ConfinedAssetPath, MANAGED_ASSET_MANIFEST_FILE, ManagedAssetOutcome, ManagedAssetReconcileMode,
     load_managed_asset_manifest, reconcile_managed_assets_in_mode, resolve_confined_asset_path,
 };

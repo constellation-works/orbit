@@ -1,3 +1,4 @@
+use crate::app::gc;
 use crate::app::resident;
 use std::time::{Duration, Instant};
 
@@ -179,11 +180,9 @@ pub(crate) fn run_deterministic(
         // The opt-in daily retention sweep: audit rows and blobs, then old
         // terminal runs' pipeline state, under the configured windows.
         CoreDeterministicAction::StoreGc => {
-            let audit = runtime
-                .gc_audit(true, None)
+            let audit = gc::gc_audit(runtime, true, None)
                 .map_err(|error| DispatchError::action_failed(action, error.to_string()))?;
-            let runs = runtime
-                .gc_runs(true, None)
+            let runs = gc::gc_runs(runtime, true, None)
                 .map_err(|error| DispatchError::action_failed(action, error.to_string()))?;
             Ok(serde_json::json!({ "audit": audit, "runs": runs }))
         }

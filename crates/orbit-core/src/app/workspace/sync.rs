@@ -20,14 +20,14 @@ use crate::app::routine::RoutineSeedIdentity;
 use crate::app::routine::reconcile_default_routines_for_policy;
 use crate::app::skill::{DEFAULT_SKILL_FILES, inject_skill_template_tokens};
 use crate::application::job::DEFAULT_JOB_FILES;
-use crate::application::managed_assets::{
+use crate::application::seeding_policy::{seeded_defaults, workspace_seeding_policies};
+use crate::application::tool_name_migration::heal_workspace_sync_auto_task_catalog;
+use crate::runtime::assets::DEFAULT_ACTIVITY_FILES;
+use crate::unit::managed_asset::{
     ManagedAssetAction, ManagedAssetCatalog, ManagedAssetLayout, ManagedAssetOutcome,
     ManagedAssetReconcileMode, ManagedAssetReconciliation, reconcile_managed_assets_in_mode,
     reconcile_managed_assets_left_out,
 };
-use crate::application::seeding_policy::{seeded_defaults, workspace_seeding_policies};
-use crate::application::tool_name_migration::heal_workspace_sync_auto_task_catalog;
-use crate::runtime::assets::DEFAULT_ACTIVITY_FILES;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]

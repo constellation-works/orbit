@@ -21,6 +21,7 @@ use super::{
     BacklogTaskConflict, BacklogTaskExclusion, BacklogTaskExclusionReason, workspace_ship_mode,
 };
 use crate::OrbitRuntime;
+use crate::app::gc;
 use crate::application::admission::auto_admission::PERF_LANE_SELECTOR;
 use crate::application::task::TaskWorkspaceAutoPort;
 use crate::runtime::engine::crew::CrewAllowlist;
@@ -106,7 +107,7 @@ fn list_backlog_tasks_impl(
     preview: bool,
 ) -> Result<Value, DispatchError> {
     if !preview {
-        runtime.reclaim_worktrees_on_admission();
+        gc::reclaim_worktrees_on_admission(runtime);
     }
     let max_tasks = input
         .get("max_tasks")

@@ -969,8 +969,8 @@ class RelativeImportTests(unittest.TestCase):
         # [ORB-22708] Task and job resolved claims through landing, and review
         # dispatched it directly; the missing guard admitted these cycles.
         method = {
-            "landing/handoff.rs":
-                "impl OrbitRuntime {\n    pub(crate) fn fresh_landing_method(&self) {}\n}\n",
+            "../unit/landing/handoff.rs":
+                "pub(crate) fn fresh_landing_method(rt: &OrbitRuntime) {}\n",
         }
         # One batch per detector across the four modules' landing chains,
         # as in the forecast shim rows above.
@@ -978,27 +978,27 @@ class RelativeImportTests(unittest.TestCase):
         self.check_rows([
             (f"{module}/probe.rs",
              "impl OrbitRuntime {\n    fn probe(&self) {\n"
-             "        self.fresh_landing_method();\n    }\n}\n")
+             "        crate::unit::landing::fresh_landing_method(self);\n    }\n}\n")
             for module in modules
         ], rejected=True, shared=method)
         self.check_rows([
             row for module in modules for row in (
-                (f"{module}/probe.rs", "use crate::application::landing::Probe;\n"),
+                (f"{module}/probe.rs", "use crate::unit::landing::Probe;\n"),
                 (f"{module}/deep/probe.rs",
-                 "fn probe() { crate::application::landing::step(); }\n"),
+                 "fn probe() { crate::unit::landing::step(); }\n"),
             )
         ], rejected=True)
         self.check_rows([
             (f"{module}/probe.rs",
-             "use crate::application::{\n    landing::Probe,\n};\n")
+             "use crate::unit::{\n    landing::Probe,\n};\n")
             for module in modules
         ], rejected=True)
         self.check_rows([
             row for module in modules for row in (
-                (f"{module}/mod.rs", "use super::landing::Probe;\n"),
-                (f"{module}/probe.rs", "use super::super::landing::Probe;\n"),
-                (f"{module}/probe.rs", "use super::super::{landing::Probe};\n"),
-                (f"{module}/deep/probe.rs", "use super::super::super::{landing::Probe};\n"),
+                (f"{module}/mod.rs", "use super::super::unit::landing::Probe;\n"),
+                (f"{module}/probe.rs", "use super::super::super::unit::landing::Probe;\n"),
+                (f"{module}/probe.rs", "use super::super::super::unit::{landing::Probe};\n"),
+                (f"{module}/deep/probe.rs", "use super::super::super::super::unit::{landing::Probe};\n"),
             )
         ], rejected=True)
         self.check_files({
@@ -1008,25 +1008,27 @@ class RelativeImportTests(unittest.TestCase):
             "job/pr_repair/admission.rs":
                 "impl OrbitRuntime {\n    fn admit(&self) { self.landing_claim(); }\n}\n",
             "review/landing_dispatch_port.rs":
-                "pub(in crate::application) trait ReviewLandingDispatchPort {\n"
+                "pub(crate) trait ReviewLandingDispatchPort {\n"
                 "    fn dispatch_recorded_landing_authority(&self);\n}\n",
             "review/handoff/accept.rs":
                 "impl OrbitRuntime {\n    fn accept(&self) {\n"
-                "        self.dispatch_recorded_landing_authority();\n    }\n}\n",
-            "landing/review_port.rs":
-                "impl ReviewLandingDispatchPort for OrbitRuntime {\n"
+                "        ReviewLandingDispatch(self).dispatch_recorded_landing_authority();\n    }\n}\n",
+            "../unit/landing/review_port.rs":
+                "pub(crate) struct ReviewPort<'a>(pub(crate) &'a OrbitRuntime);\n",
+            "../app/port.rs":
+                "impl ReviewLandingDispatchPort for ReviewLandingDispatch<'_> {\n"
                 "    fn dispatch_recorded_landing_authority(&self) {\n"
-                "        self.fresh_landing_method();\n    }\n}\n",
-            "landing/context.rs":
-                "impl OrbitRuntime {\n    fn land(&self) { self.landing_claim(); }\n}\n",
-            "landing/dispatch.rs": "use crate::application::job::pipeline;\n",
-            "landing/identity.rs": "use crate::application::distributed::claim_receipt;\n",
+                "        landing::fresh_landing_method(self.0);\n    }\n}\n",
+            "../unit/landing/context.rs":
+                "fn land(rt: &OrbitRuntime) { rt.landing_claim(); }\n",
+            "../unit/landing/dispatch.rs": "use crate::application::job::pipeline;\n",
+            "../unit/landing/identity.rs": "use crate::application::distributed::claim_receipt;\n",
         }, rejected=False)
 
     def test_landing_store_reads_do_not_allow_runtime_calls(self):
         method = {
-            "landing/attempts.rs":
-                "impl OrbitRuntime {\n    pub fn landing_attempts(&self) {}\n}\n",
+            "../unit/landing/attempt.rs":
+                "pub fn landing_attempts(rt: &OrbitRuntime) {}\n",
         }
         self.check_files({
             **method,
@@ -1041,7 +1043,7 @@ class RelativeImportTests(unittest.TestCase):
         }, rejected=False)
         self.check_rejected_exact_rows(self.app, [
             (relative, "impl OrbitRuntime {\n    fn probe(&self) {\n"
-                       "        self.landing_attempts();\n    }\n}\n", 3)
+                       "        crate::unit::landing::landing_attempts(self);\n    }\n}\n", 3)
             for relative in ("task/external_merge/candidate.rs",
                              "task/external_merge/rescued.rs",
                              "review/handoff/console.rs")
@@ -1382,7 +1384,7 @@ class RelativeImportTests(unittest.TestCase):
     # `(file, supers at file depth that reach the forbidden name, name)`.
     INLINE_DEPTH_CALLERS = (
         # orbit-core application modules: contracts, task, job, the grouped
-        # layer checks and landing.
+        # layer checks.
         ("application/contracts/probe.rs", 2, "task"),
         ("application/task/probe.rs", 2, "job"),
         ("application/task/probe.rs", 2, "review"),
@@ -1395,7 +1397,6 @@ class RelativeImportTests(unittest.TestCase):
         ("app/agent/probe.rs", 2, "experiment"),
         ("application/task/probe.rs", 3, "app::agent"),
         ("application/review/probe.rs", 3, "app::codebase"),
-        ("application/review/probe.rs", 2, "landing"),
         ("application/backlog_forecast/probe.rs", 3, "app::codebase"),
         ("app/codebase/probe.rs", 3, "application::backlog_forecast"),
         # orbit-core bootstrap, composition and runtime layering.
@@ -1417,6 +1418,7 @@ class RelativeImportTests(unittest.TestCase):
     # Named-path callers already resolved inline depth; they stay in step.
     INLINE_DEPTH_CORE_CALLERS = (
         ("app/resident/probe.rs", 3, "app::routine"),
+        ("application/review/probe.rs", 3, "unit::landing"),
     )
     INLINE_DEPTH_STORE_CALLERS = (
         ("contract/probe.rs", 2, "repository"),

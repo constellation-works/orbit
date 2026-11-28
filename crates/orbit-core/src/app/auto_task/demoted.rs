@@ -16,7 +16,7 @@ use orbit_common::OrbitError;
 use orbit_common::fs::io::atomic_write_text;
 use orbit_config::DEMOTED_DEFAULT_AUTO_TASKS;
 
-use crate::application::managed_assets::{
+use crate::unit::managed_asset::{
     ConfinedAssetPath, MANAGED_ASSET_MANIFEST_FILE, ManagedAssetAction, ManagedAssetLayout,
     ManagedAssetOutcome, ManagedAssetReconcileMode, encode_managed_asset_manifest,
     load_managed_asset_manifest, record_managed_manifest_write, resolve_confined_asset_path,

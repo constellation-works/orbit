@@ -9,6 +9,7 @@ use std::fs;
 
 use chrono::{DateTime, Duration, Utc};
 use orbit_common::OrbitError;
+use orbit_core::app::gc::test_support as gc;
 use orbit_core::application::task::{TaskAddParams, TaskUpdateParams, TaskWriteScreen};
 use orbit_core::test_support::fixture_engine::Dispatch;
 use orbit_types::task::TaskStatus;
@@ -2453,7 +2454,7 @@ analytics_test!(
             assert_eq!(lock["numerator"], 2);
             assert_eq!(lock["denominator"], 3);
         }
-        let gc = fixture.runtime.gc_audit(true, Some(60)).unwrap();
+        let gc = gc::gc_audit(&fixture.runtime, true, Some(60)).unwrap();
         assert_eq!(gc.tables[0].rows_removed, 3);
         for (window, expected) in ["90d", "all"].into_iter().zip(before) {
             let after = read(window);

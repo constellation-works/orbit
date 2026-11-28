@@ -9,6 +9,7 @@ use super::*;
 use crate::admission_test_support::{
     admission_request, admission_review_contract, admission_ship_contract,
 };
+use orbit_core::unit::landing;
 use orbit_engine::HostEnvironment;
 use orbit_engine::{ReviewGate, RunLifecycle};
 
@@ -383,7 +384,7 @@ fn retry_native_handoff(base_update: bool, already_merged: bool, stop: bool) {
         )
         .unwrap();
     }
-    let stopped = owner.landing_attempts().unwrap().remove(0);
+    let stopped = landing::landing_attempts(owner).unwrap().remove(0);
     orbit_core::runtime::JobRuns::shared(
         owner.sqlite_store().unwrap(),
         owner.workspace_id().unwrap(),
@@ -659,7 +660,7 @@ fn retry_native_handoff(base_update: bool, already_merged: bool, stop: bool) {
                 "{field} refuses before dispatch"
             );
             assert_eq!(
-                owner.landing_attempts().unwrap()[0],
+                landing::landing_attempts(owner).unwrap()[0],
                 stopped,
                 "refusal preserves original stop"
             );
@@ -694,7 +695,7 @@ fn retry_native_handoff(base_update: bool, already_merged: bool, stop: bool) {
             "cached proof cannot replace a fresh successful fetch"
         );
         git(&reviewed.repo, &["remote", "set-url", "origin", &origin]);
-        assert_eq!(owner.landing_attempts().unwrap()[0], stopped);
+        assert_eq!(landing::landing_attempts(owner).unwrap()[0], stopped);
     }
     // Corrupt only this isolated fixture's certificate blob: the public retry
     // must re-read its pinned bytes. No handoff or authority row is rewritten.
@@ -765,7 +766,7 @@ fn retry_native_handoff(base_update: bool, already_merged: bool, stop: bool) {
             .is_err(),
         "unreadable pinned native evidence cannot dispatch a retry"
     );
-    assert_eq!(owner.landing_attempts().unwrap()[0], stopped);
+    assert_eq!(landing::landing_attempts(owner).unwrap()[0], stopped);
     std::fs::write(&native_blob, native_bytes).unwrap();
     assert_eq!(
         owner.get_task_history(&accepted.handoff.task_id).unwrap(),
@@ -791,7 +792,7 @@ fn retry_native_handoff(base_update: bool, already_merged: bool, stop: bool) {
         "an invalidated native certificate cannot reserve a retry"
     );
     std::fs::write(&blob, certified_bytes).unwrap();
-    assert_eq!(owner.landing_attempts().unwrap()[0], stopped);
+    assert_eq!(landing::landing_attempts(owner).unwrap()[0], stopped);
     let submitted = orbit_core::test_support::EngineHost::new(owner)
         .run_tool_with_context(
             "orbit.task.retry_handoff",
@@ -856,8 +857,7 @@ fn retry_native_handoff(base_update: bool, already_merged: bool, stop: bool) {
     assert_eq!(completed.job_run_id, original.job_run_id);
     assert_eq!(completed.job_run_machine, original.job_run_machine);
     assert_eq!(owner.accepted_task_handoff(claim_id).unwrap(), accepted);
-    let historical = owner
-        .landing_attempt_record(&accepted.handoff_id, stopped.attempt)
+    let historical = landing::landing_attempt_record(owner, &accepted.handoff_id, stopped.attempt)
         .unwrap()
         .unwrap();
     if stop {
@@ -877,7 +877,7 @@ fn retry_native_handoff(base_update: bool, already_merged: bool, stop: bool) {
                 .contains(stopped.job_run_id.as_deref().unwrap())
         );
     }
-    let settled = owner.landing_attempts().unwrap();
+    let settled = landing::landing_attempts(owner).unwrap();
     let replay = orbit_core::test_support::EngineHost::new(owner)
         .run_tool_with_context(
             "orbit.task.retry_handoff",
@@ -893,7 +893,7 @@ fn retry_native_handoff(base_update: bool, already_merged: bool, stop: bool) {
         .unwrap();
     assert_eq!(replay["run_id"], submitted["run_id"]);
     assert_eq!(replay["submitted"], false);
-    assert_eq!(owner.landing_attempts().unwrap(), settled);
+    assert_eq!(landing::landing_attempts(owner).unwrap(), settled);
     assert_eq!(
         owner
             .sqlite_store()

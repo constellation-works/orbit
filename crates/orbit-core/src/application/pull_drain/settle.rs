@@ -58,6 +58,7 @@ use super::drain::{
     recorded_base_no_longer_red,
 };
 use crate::OrbitRuntime;
+use crate::app::gc;
 use crate::application::contracts::{PULL_DRAIN_JOB, PullSettlementEntry, PullSettlementOutcome};
 use crate::application::distributed::{PendingPullSettlements, is_owner_transport_failure};
 use orbit_common::OrbitError;
@@ -624,7 +625,7 @@ impl OrbitRuntime {
         };
         let mut reclaimed = 0u64;
         for leaf in leaves {
-            match self.reclaim_run_build_output(&runs, &leaf) {
+            match gc::reclaim_run_build_output(self, &runs, &leaf) {
                 Ok(result) => {
                     reclaimed = reclaimed.saturating_add(result.bytes_reclaimed);
                     for report in result.reports {

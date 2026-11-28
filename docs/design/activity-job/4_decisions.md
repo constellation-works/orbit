@@ -1385,7 +1385,7 @@ Persist a per-resource-kind managed manifest containing the SHA-256 digest last 
 ## All five definition-artifact kinds carry managed provenance, and doctor reports it
 
 **Recorded:** 2026-08 · [ORB-10800]
-**Code anchors:** `crates/orbit-core/src/application/managed_assets/mod.rs::ManagedAssetLayout`, `crates/orbit-core/src/app/skill/materialize.rs::seed_default_skills`, `crates/orbit-core/src/app/routine/materialize.rs::reconcile_default_routines_for_policy`, `crates/orbit-core/src/app/workspace/sync.rs::reconcile_workspace_managed_artifacts`, `crates/orbit-core/src/app/doctor/artifact.rs::inspect_definition_artifacts`, `crates/orbit-core/src/app/doctor/artifact.rs::remove_stale_definition_artifacts`, `crates/orbit-core/src/app/doctor/automation/artifacts.rs::doctor_check_definition_artifacts`
+**Code anchors:** `crates/orbit-core/src/unit/managed_asset/mod.rs::ManagedAssetLayout`, `crates/orbit-core/src/app/skill/materialize.rs::seed_default_skills`, `crates/orbit-core/src/app/routine/materialize.rs::reconcile_default_routines_for_policy`, `crates/orbit-core/src/app/workspace/sync.rs::reconcile_workspace_managed_artifacts`, `crates/orbit-core/src/app/doctor/artifact.rs::inspect_definition_artifacts`, `crates/orbit-core/src/app/doctor/artifact.rs::remove_stale_definition_artifacts`, `crates/orbit-core/src/app/doctor/automation/artifacts.rs::doctor_check_definition_artifacts`
 
 ### Context
 

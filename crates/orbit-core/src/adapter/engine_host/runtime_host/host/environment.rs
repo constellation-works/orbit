@@ -17,6 +17,7 @@ use crate::OrbitRuntime;
 use crate::adapter::engine_host::runtime_host::{
     agent, crew, host_metadata, invocation, validation,
 };
+use crate::app::gc;
 
 use super::{EngineHost, private_vcs};
 
@@ -100,7 +101,7 @@ impl HostEnvironment for EngineHost<'_> {
     }
 
     fn list_job_runs_for_gc(&self) -> Result<Vec<JobRun>, OrbitError> {
-        self.runtime.list_job_runs_for_worktree_gc()
+        gc::list_job_runs_for_worktree_gc(self.runtime)
     }
 
     fn lookup_task_for_worktree_gc(
@@ -108,26 +109,26 @@ impl HostEnvironment for EngineHost<'_> {
         run_id: &str,
         task_id: &str,
     ) -> orbit_engine::WorktreeGcTaskLookup {
-        self.runtime.worktree_gc_task_lookup(run_id, task_id)
+        gc::worktree_gc_task_lookup(self.runtime, run_id, task_id)
     }
 
     fn worktree_gc_task_lookup_scope(&self, run_id: &str) -> Option<String> {
-        OrbitRuntime::worktree_gc_task_lookup_scope(self.runtime, run_id)
+        gc::worktree_gc_task_lookup_scope(self.runtime, run_id)
     }
 
     fn settled_claim_for_worktree_gc(&self, run_id: &str) -> Option<String> {
-        self.runtime.worktree_gc_settled_claim(run_id)
+        gc::worktree_gc_settled_claim(self.runtime, run_id)
     }
 
     fn live_claim_for_worktree_gc(&self, run_id: &str) -> Option<String> {
-        self.runtime.worktree_gc_live_claim(run_id)
+        gc::worktree_gc_live_claim(self.runtime, run_id)
     }
 
     fn gc_scratch(
         &self,
         retention_hours: u64,
     ) -> Result<Option<orbit_engine::ScratchGcReport>, OrbitError> {
-        self.runtime.gc_scratch_by_age(retention_hours).map(Some)
+        gc::gc_scratch_by_age(self.runtime, retention_hours).map(Some)
     }
 
     fn cancel_job_run(&self, run_id: &str) -> Result<(), OrbitError> {

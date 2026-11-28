@@ -18,12 +18,12 @@ use crate::app::workspace::{
 };
 use crate::application::executor::seed_default_executors;
 use crate::application::job::seed_default_jobs;
-use crate::application::managed_assets::MANAGED_ASSET_MANIFEST_FILE;
 use crate::bootstrap::activity::seed_default_activities;
 use crate::bootstrap::global_defaults::{
     global_defaults_are_current, record_global_defaults_reconciled,
 };
 use crate::bootstrap::policy::seed_default_policies;
+use crate::unit::managed_asset::MANAGED_ASSET_MANIFEST_FILE;
 use orbit_common::fs::io::{create_dir_symlink, create_private_dir_all, remove_path_if_exists};
 
 use crate::runtime::resolve_global_root;

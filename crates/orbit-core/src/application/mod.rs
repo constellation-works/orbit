@@ -5,13 +5,13 @@
 //! and root bootstrap live outside this module.
 //!
 //! - Tasks, jobs, and delivery: `task`, `task_bundle`, `job`, `workflow`,
-//!   `landing`, `review`, `operator_input`.
+//!   `review`, `operator_input`.
 //! - Automation: `automation`, `workspace_auto`,
 //!   `sweep_filing`, `seeding_policy`.
 //! - Agents and runs: `executor`, `vision_probe`, `statistics`.
 //! - Tool names: `tool_name_migration`.
 //! - Workspace and host: `distributed`, `pull_drain`,
-//!   `host_labels`, `gc`, `change_watch`, `managed_assets`.
+//!   `host_labels`, `change_watch`.
 //! - Policy: `application_authority`, `contracts`, `admission`,
 //!   `backlog_forecast`, `tag_instructions`.
 //! - `test_support` is compiled only for tests.
@@ -24,11 +24,8 @@ pub mod change_watch;
 pub mod contracts;
 pub mod distributed;
 pub(crate) mod executor;
-pub mod gc;
 pub(crate) mod host_labels;
 pub mod job;
-pub mod landing;
-pub(crate) mod managed_assets;
 pub mod operator_input;
 pub(crate) mod pull_drain;
 pub mod review;

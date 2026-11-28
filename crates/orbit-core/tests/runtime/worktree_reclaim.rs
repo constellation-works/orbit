@@ -1,6 +1,7 @@
 //! Disk-pressure recovery through actual backlog admission, over real Git worktrees.
 
 use chrono::{Duration, Utc};
+use orbit_core::app::gc::test_support as gc;
 use orbit_core::runtime::OrbitRuntime;
 use orbit_engine::Dispatch;
 use orbit_tools::ToolContext;
@@ -120,7 +121,7 @@ fn admission_reclaims_oldest_kept_worktrees_first_and_leaves_active_runs() {
         kept.push((run.run_id, worktree));
     }
     // Inspection and readiness remain observational, even with the threshold on.
-    let inspected = runtime.reclaimable_worktrees().unwrap();
+    let inspected = gc::reclaimable_worktrees(&runtime).unwrap();
     let host_bytes = inspected
         .reports
         .iter()
@@ -322,7 +323,7 @@ fn admission_skips_empty_terminal_history_without_git_and_detects_new_output() {
     assert!(
         !kept[0].join("cache").exists(),
         "new output was retained: {:?}; Git calls: {}",
-        runtime.reclaimable_worktrees().unwrap(),
+        gc::reclaimable_worktrees(&runtime).unwrap(),
         std::fs::read_to_string(&calls).unwrap()
     );
     assert!(!std::fs::read_to_string(&calls).unwrap().is_empty());

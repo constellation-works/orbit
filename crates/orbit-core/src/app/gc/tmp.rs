@@ -13,7 +13,7 @@ pub(super) mod filesystem {
 
     /// What one no-follow walk of an entry saw.
     #[derive(Clone, Copy, Default)]
-    pub(in crate::application::gc) struct Tally {
+    pub(in crate::app::gc) struct Tally {
         pub bytes: u64,
         /// Newest `(seconds, nanoseconds)` mtime of the entry or anything
         /// beneath it, read from the link itself for a symlink.
@@ -38,7 +38,7 @@ pub(super) mod filesystem {
     }
 
     #[cfg(test)]
-    pub(in crate::application::gc) fn collect_with_after_listing(
+    pub(in crate::app::gc) fn collect_with_after_listing(
         checkout: &Path,
         result: &mut TmpGcResult,
         check_runs: impl FnOnce() -> Result<(), OrbitError>,
@@ -120,7 +120,7 @@ pub(super) mod filesystem {
         Ok(())
     }
 
-    pub(in crate::application::gc) fn open_directory(
+    pub(in crate::app::gc) fn open_directory(
         parent: libc::c_int,
         name: &CStr,
     ) -> io::Result<OwnedFd> {
@@ -135,7 +135,7 @@ pub(super) mod filesystem {
         }
     }
 
-    pub(in crate::application::gc) fn names(directory: &OwnedFd) -> io::Result<Vec<CString>> {
+    pub(in crate::app::gc) fn names(directory: &OwnedFd) -> io::Result<Vec<CString>> {
         // Opening `.` gives the stream its own offset, so subsequent walks
         // enumerate independently of earlier preview/measurement walks.
         let fd = open_directory(directory.as_raw_fd(), c".")?;
@@ -182,7 +182,7 @@ pub(super) mod filesystem {
         }
     }
 
-    pub(in crate::application::gc) fn walk(
+    pub(in crate::app::gc) fn walk(
         parent: &OwnedFd,
         name: &CStr,
         delete: bool,
@@ -321,55 +321,52 @@ pub struct TmpGcResult {
     pub reports: Vec<TmpGcReport>,
 }
 
-impl OrbitRuntime {
-    /// Preview or empty this workspace checkout's `.orbit/tmp`, retaining the
-    /// directory. Pending, running, and retrying runs refuse deletion even with
-    /// stale owners.
-    pub fn gc_tmp(&self, delete: bool) -> Result<TmpGcResult, OrbitError> {
-        if delete {
-            self.refuse_active_tmp_gc()?;
-        }
-        let checkout = self.paths().repo_root.canonicalize()?;
-        let mut result = TmpGcResult {
-            path: orbit_scratch_dir(&checkout),
-            dry_run: !delete,
-            entries_removed: 0,
-            bytes_reclaimable: 0,
-            bytes_reclaimed: 0,
-            reports: Vec::new(),
-        };
-        #[cfg(any(target_os = "linux", target_os = "macos"))]
-        filesystem::collect(&checkout, &mut result, || self.refuse_active_tmp_gc())?;
-        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-        return Err(OrbitError::InvalidInput(
-            "tmp collection requires Linux or macOS directory-relative filesystem operations"
-                .into(),
-        ));
-        #[cfg(any(target_os = "linux", target_os = "macos"))]
-        Ok(result)
+/// Preview or empty this workspace checkout's `.orbit/tmp`, retaining the
+/// directory. Pending, running, and retrying runs refuse deletion even with
+/// stale owners.
+pub fn gc_tmp(rt: &OrbitRuntime, delete: bool) -> Result<TmpGcResult, OrbitError> {
+    if delete {
+        refuse_active_tmp_gc(rt)?;
     }
+    let checkout = rt.paths().repo_root.canonicalize()?;
+    let mut result = TmpGcResult {
+        path: orbit_scratch_dir(&checkout),
+        dry_run: !delete,
+        entries_removed: 0,
+        bytes_reclaimable: 0,
+        bytes_reclaimed: 0,
+        reports: Vec::new(),
+    };
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    filesystem::collect(&checkout, &mut result, || refuse_active_tmp_gc(rt))?;
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    return Err(OrbitError::InvalidInput(
+        "tmp collection requires Linux or macOS directory-relative filesystem operations".into(),
+    ));
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    Ok(result)
+}
 
-    fn refuse_active_tmp_gc(&self) -> Result<(), OrbitError> {
-        let jobs = self.stores().jobs();
-        let mut runs = jobs.list_job_runs_filtered(&JobRunQuery {
-            active_only: true,
-            include_steps: false,
-            ..JobRunQuery::default()
-        })?;
-        // `active_only` is pending/running only. A retrying run sleeps between
-        // attempts and then executes again, so its scratch is still in use.
-        runs.extend(jobs.list_job_runs_filtered(&JobRunQuery {
-            state: Some(JobRunState::Retrying),
-            include_steps: false,
-            ..JobRunQuery::default()
-        })?);
-        let mut run_ids: Vec<_> = runs.into_iter().map(|run| run.run_id).collect();
-        run_ids.sort();
-        if run_ids.is_empty() {
-            Ok(())
-        } else {
-            Err(OrbitError::TmpGcActiveRuns { run_ids })
-        }
+fn refuse_active_tmp_gc(rt: &OrbitRuntime) -> Result<(), OrbitError> {
+    let jobs = rt.stores().jobs();
+    let mut runs = jobs.list_job_runs_filtered(&JobRunQuery {
+        active_only: true,
+        include_steps: false,
+        ..JobRunQuery::default()
+    })?;
+    // `active_only` is pending/running only. A retrying run sleeps between
+    // attempts and then executes again, so its scratch is still in use.
+    runs.extend(jobs.list_job_runs_filtered(&JobRunQuery {
+        state: Some(JobRunState::Retrying),
+        include_steps: false,
+        ..JobRunQuery::default()
+    })?);
+    let mut run_ids: Vec<_> = runs.into_iter().map(|run| run.run_id).collect();
+    run_ids.sort();
+    if run_ids.is_empty() {
+        Ok(())
+    } else {
+        Err(OrbitError::TmpGcActiveRuns { run_ids })
     }
 }
 

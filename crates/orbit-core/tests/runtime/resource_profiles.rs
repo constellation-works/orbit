@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Duration, Utc};
 use orbit_config::AUTO_CONCURRENCY_PROFILE_WINDOW as WINDOW;
+use orbit_core::app::gc::test_support as gc;
 use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
 use orbit_core::runtime::OrbitRuntime;
 use orbit_core::runtime::host_resource::profile::{
@@ -1092,7 +1093,7 @@ fn gc_preserves_profiles_behind_ineligible_deliveries() {
             vec![RunSeed::flat(1, 50.0, GIB), resumed],
         );
     }
-    fixture.runtime.gc_runs(true, Some(30)).unwrap();
+    gc::gc_runs(&fixture.runtime, true, Some(30)).unwrap();
     assert!(
         fixture
             .store
@@ -1168,7 +1169,7 @@ fn gc_keeps_each_crew_models_newest_window() {
             }],
         );
     }
-    fixture.runtime.gc_runs(true, Some(30)).unwrap();
+    gc::gc_runs(&fixture.runtime, true, Some(30)).unwrap();
     let found = fixture
         .runtime
         .resource_profile_for(

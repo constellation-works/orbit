@@ -23,12 +23,12 @@ mod filesystem {
     use orbit_types::identity::lower_hex;
     use sha2::{Digest, Sha256};
 
-    use super::super::tmp::filesystem::{Tally, names, open_directory, walk};
     use super::{
         CANDIDATE_MANIFEST_KIND, DeploymentGcClass, DeploymentGcEntry, DeploymentGcResult,
         INSTALLED_NAME, MAX_MANIFEST_BYTES, ROLLBACK_SUFFIX, STORE_BACKUP_PREFIX, is_binary_backup,
     };
     use crate::OrbitError;
+    use crate::app::gc::tmp::filesystem::{Tally, names, open_directory, walk};
 
     /// Where an entry lives, so removal addresses it through its pinned parent.
     #[derive(Clone, Copy)]
@@ -413,7 +413,9 @@ const BACKUP_MARKERS: [&str; 5] = [".bak", ".before-", ".pre-", ".stale", "-stal
 const INSTALLED_NAME: &str = "orbit";
 
 const ROLLBACK_SUFFIX: &str = ".previous";
+
 const STORE_BACKUP_PREFIX: &str = "orbit.db.bak";
+
 const CANDIDATE_MANIFEST_KIND: &str = "orbit-local-candidate";
 
 /// Candidate manifests are a few hundred bytes; anything larger is not one.
@@ -480,48 +482,46 @@ pub struct DeploymentGcResult {
     pub entries: Vec<DeploymentGcEntry>,
 }
 
-impl OrbitRuntime {
-    /// Preview or remove deployment directories, executable backups and
-    /// store backups beyond the newest `keep` of each class. The rollback
-    /// executable and the deployments that built the installed or rollback
-    /// bytes are always kept and never count toward `keep`.
-    pub fn gc_deployments(
-        &self,
-        delete: bool,
-        keep: usize,
-    ) -> Result<DeploymentGcResult, OrbitError> {
-        if keep == 0 {
-            return Err(OrbitError::InvalidInput(
-                "deployment retention must keep at least one entry of each class".into(),
-            ));
-        }
-        let root = self.global_root();
-        let root = match root.canonicalize() {
-            Ok(root) => root,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => root,
-            Err(error) => return Err(error.into()),
-        };
-        let mut result = DeploymentGcResult {
-            root,
-            dry_run: !delete,
-            keep,
-            entries_removed: 0,
-            bytes_reclaimable: 0,
-            bytes_reclaimed: 0,
-            bytes_kept: 0,
-            entries: Vec::new(),
-        };
-        #[cfg(any(target_os = "linux", target_os = "macos"))]
-        filesystem::collect(&mut result)?;
-        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+/// Preview or remove deployment directories, executable backups and
+/// store backups beyond the newest `keep` of each class. The rollback
+/// executable and the deployments that built the installed or rollback
+/// bytes are always kept and never count toward `keep`.
+pub fn gc_deployments(
+    rt: &OrbitRuntime,
+    delete: bool,
+    keep: usize,
+) -> Result<DeploymentGcResult, OrbitError> {
+    if keep == 0 {
         return Err(OrbitError::InvalidInput(
-            "deployment collection requires Linux or macOS directory-relative filesystem \
-             operations"
-                .into(),
+            "deployment retention must keep at least one entry of each class".into(),
         ));
-        #[cfg(any(target_os = "linux", target_os = "macos"))]
-        Ok(result)
     }
+    let root = rt.global_root();
+    let root = match root.canonicalize() {
+        Ok(root) => root,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => root,
+        Err(error) => return Err(error.into()),
+    };
+    let mut result = DeploymentGcResult {
+        root,
+        dry_run: !delete,
+        keep,
+        entries_removed: 0,
+        bytes_reclaimable: 0,
+        bytes_reclaimed: 0,
+        bytes_kept: 0,
+        entries: Vec::new(),
+    };
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    filesystem::collect(&mut result)?;
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    return Err(OrbitError::InvalidInput(
+        "deployment collection requires Linux or macOS directory-relative filesystem \
+         operations"
+            .into(),
+    ));
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    Ok(result)
 }
 
 fn display_path<S: serde::Serializer>(

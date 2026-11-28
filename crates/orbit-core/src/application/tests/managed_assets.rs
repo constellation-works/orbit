@@ -32,7 +32,7 @@ fn failed_create_only_write_is_retried_on_the_next_reconcile() {
 #[test]
 #[ignore = "runs only in the isolated file-size fault-injection child"]
 fn create_only_write_failure_child() {
-    use crate::application::managed_assets::{
+    use crate::unit::managed_asset::{
         ManagedAssetLayout, ManagedAssetOutcome, reconcile_managed_assets,
     };
 

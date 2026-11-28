@@ -13,7 +13,7 @@
 //! audits it, and renders the `Outcome`. A type or function a surface or
 //! `orbit-cmd` names is re-exported from the app that owns its subject.
 //!
-//! Shared use cases live in `application`, protocol translation in
+//! Shared use cases live in `unit` and `application`, protocol translation in
 //! `adapter`, and the runtime kernel is the `orbit-runtime` crate, which
 //! `runtime` re-exports inside this crate beside the `OrbitRuntime` that owns
 //! it. The kernel never calls an application method: a mechanism that needs
@@ -88,6 +88,13 @@ pub mod runtime;
 #[allow(dead_code, unused_imports)]
 pub(crate) mod runtime;
 
+#[cfg(feature = "test-support")]
+#[doc(hidden)]
+pub mod unit;
+
+#[cfg(not(feature = "test-support"))]
+pub(crate) mod unit;
+
 /// Hooks for tests in crates that depend on `orbit-core`, behind the
 /// `test-support` feature. Enable it only from `[dev-dependencies]`.
 #[cfg(feature = "test-support")]
@@ -145,8 +152,6 @@ pub mod test_support {
         pipeline_worker_observer_completed, pipeline_workers_spawned,
     };
     pub use crate::application::job::with_run_root_cause_write_hook;
-    pub use crate::application::landing::with_landing_retry_reservation_hook;
-    pub use crate::application::managed_assets::test_support::with_auto_task_manifest_read_hook;
     pub use crate::application::review::fulfilment_test_support::with_review_evidence_completion;
     pub use crate::application::task::candidate_checkpoint::install_candidate_selection_checkpoint;
     pub use crate::application::task::{
@@ -164,6 +169,8 @@ pub mod test_support {
     pub use crate::runtime::{
         with_host_load_sampling_wait, with_owner_read_retry_wait, with_pipeline_poll_wait,
     };
+    pub use crate::unit::landing::with_landing_retry_reservation_hook;
+    pub use crate::unit::managed_asset::with_auto_task_manifest_read_hook;
     /// The engine crate, for a fixture that drives an engine mechanism directly.
     pub use orbit_engine as fixture_engine;
     pub use orbit_engine::test_support::with_cli_supervision_clock;

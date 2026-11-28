@@ -1,5 +1,6 @@
 use super::*;
 
+use crate::app::gc;
 use crate::application::job::run::definition::run_definition_snapshot_path;
 use crate::application::job::{
     JobAutoConcurrencyPort, JobAutoTaskPort, ReviewAdmissionHook, crew_pools, delivery,
@@ -164,7 +165,7 @@ impl OrbitRuntime {
             &mut input,
             reuse_admission || replay_source_run_id.is_some(),
         )?;
-        self.reclaim_worktrees_on_admission();
+        gc::reclaim_worktrees_on_admission(self);
         // [ORB-11333] The review admission follows the same discipline: a
         // child inherits its parent's snapshot, an ordinary delivery
         // submission captures the effective policy once, and ordinary input

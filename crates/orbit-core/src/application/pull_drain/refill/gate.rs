@@ -10,6 +10,7 @@ use orbit_types::workflow::{PipelineState, PullBreaker};
 use super::super::drain::{BreakerGate, ReconciliationHold, breaker_gate, settle_breaker};
 use super::pass::{Pass, deterministic_failure};
 use super::record::refused_settlements;
+use crate::app::gc;
 use crate::application::job::pull_window_closed;
 use crate::runtime::host_resource::ResourceAdmission;
 use crate::runtime::host_signal::ScheduledShutdown;
@@ -105,7 +106,7 @@ impl Pass<'_, '_> {
         let host_shutdown_hold = self.runtime.host_shutdown_admission_hold();
         // Sustained host pressure holds new requests too [ORB-13901]; unknown
         // telemetry admits.
-        self.runtime.reclaim_worktrees_on_admission();
+        gc::reclaim_worktrees_on_admission(self.runtime);
         let resource = self.runtime.resource_admission();
         // An open breaker skips the probe, as does a half-open one still waiting
         // for this drain's claims to settle; the refill asks it again before each
