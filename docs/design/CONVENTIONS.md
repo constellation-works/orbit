@@ -8,7 +8,7 @@ status: Accepted
 
 # Design Doc Conventions
 
-Recommended conventions that feature leads follow when writing and maintaining design docs under `docs/design/<feature>/`. The goal is a set of feature folders that read as one coherent documentation system regardless of which agent authored them. These are recommendations (not hard rules enforced by tooling; `orbit-design` has been retired in favor of ordinary repository documentation).
+Conventions that feature leads follow when writing and maintaining design docs under `docs/design/<feature>/`. The goal is a set of feature folders that read as one coherent documentation system regardless of which agent authored them. The scaffold and `stage` rules are required by [STD-06@5](../standards/STD-06-design-docs-and-feature-tracking/STD-06.md); §11 says which of them the generator enforces and which are review-only.
 
 This doc is itself the source of truth for the conventions. When a convention changes, update this doc and then update existing feature folders to match — do not silently diverge.
 
@@ -72,7 +72,7 @@ Every numbered design doc starts with the YAML frontmatter carried by the [`_tem
 
 `paths` and the `related_*` fields are optional; add them only when they help.
 
-The generated feature board in [`docs/design/FEATURES.md`](./FEATURES.md) reads `title`, `owner`, `stage` and `next` from each active feature's `1_overview.md` and groups features by `stage`; archived folders keep the entry doc they were archived with. `scripts/generate-doc-indexes.sh` derives a missing title from the document and defaults a missing owner. It fails when an active feature has no `1_overview.md` or its `stage` is missing or unknown; it does not otherwise validate a design-frontmatter schema. Run `make docs-index` and `scripts/generate-doc-indexes.sh --check` after changing board inputs. The other fields are descriptive metadata that the board does not query. When using `related_artifacts`, follow the reference forms below as a writing convention, not an enforced schema. Decisions are addressed by their titles and links, not artifact IDs, so they do not need artifact references.
+The generated feature board in [`docs/design/FEATURES.md`](./FEATURES.md) reads `title`, `owner`, `stage` and `next` from each active feature's `1_overview.md` and groups features by `stage`; archived folders keep the entry doc they were archived with. `scripts/generate-doc-indexes.sh` derives a missing title from the document and defaults a missing owner. It fails when an active feature has no `1_overview.md`, or when a `1_overview.md` that Git sees has a `stage` that is missing or unknown (§11 lists the checks); it does not otherwise validate a design-frontmatter schema. Run `make docs-index` and `scripts/generate-doc-indexes.sh --check` after changing board inputs. The other fields are descriptive metadata that the board does not query. When using `related_artifacts`, follow the reference forms below as a writing convention, not an enforced schema. Decisions are addressed by their titles and links, not artifact IDs, so they do not need artifact references.
 
 ---
 
@@ -213,9 +213,27 @@ A feature that is gone for good (nothing worth keeping as reference) may still b
 
 ## 11. Enforcement
 
-These are recommendations, not mechanically enforced by `scripts/generate-doc-indexes.sh`, which renders navigation rows from current documents. Both numbered design folders and free-form docs are acceptable.
+Two kinds of rule apply. The generator gate is mechanical. Everything else is review-only: reviewers check it against this doc and [STD-06@5](../standards/STD-06-design-docs-and-feature-tracking/STD-06.md) when a change touches it.
 
-Five mechanical checks worth adding later (as optional lints, never blocking):
+**Generator gate.** `make ci-guards` runs `scripts/generate-doc-indexes.sh --check`, and `make docs-index` regenerates the same output. The generator fails when:
+
+- a folder directly under `docs/design/`, other than `_templates/` and `_archived/`, has no `1_overview.md`. This holds whether or not Git tracks the folder (STD-06 §R2).
+- a `1_overview.md` that Git sees (tracked, or untracked and not ignored) has a `stage` that is missing or not one of `idea`, `designing`, `building`, `shipped` or `parked` (STD-06 §R5). Git-ignored overviews skip this check.
+- an `_archived/` folder has no top-level Markdown file.
+- `docs/design/FEATURES.md` or `docs/INDEX.md` is stale against what the generator renders (STD-06 §R9).
+
+The generator checks nothing else about feature folders. A missing `next` or `owner` renders as `—` on the board, and a missing `2_design.md` or `4_decisions.md` is not reported.
+
+**Review-only rules.** No gate checks these. Reviewers check them when a change touches them:
+
+- the rest of the scaffold: `2_design.md` and `4_decisions.md` in every feature folder, no top-level file beyond the four numbered files, and no `README.md`, roadmap, changelog or tutorial (§1; STD-06 §R2, §R3);
+- frontmatter fields and their values (§2; STD-06 §R4), and `next` (§2; STD-06 §R6);
+- `stage` and `next` changing in the same change that moves the feature, and body text that does not contradict `stage` (§2; STD-06 §R7, §R8);
+- decision entries admitted through exactly one door, with a `Cost:` line and title links that resolve (§4; STD-06 §R10, §R11);
+- the feature tag on each task (STD-06 §R12), and a Task References list in each numbered doc (§3; STD-06 §R13);
+- archiving (§7; STD-06 §R14).
+
+**Lints not yet built.** Five checks would make some review-only rules mechanical. None exists today. Each would be optional and never blocking:
 
 1. Lint: every numbered doc has required frontmatter + Task References section.
 2. Lint: every decision has a Cost line.
@@ -225,7 +243,7 @@ Five mechanical checks worth adding later (as optional lints, never blocking):
 
 Check 4 also gives a maintenance signal worth acting on: a Door 1 entry whose paths no longer exist has stopped explaining live code and is a demotion candidate.
 
-Until those exist: cross-review and author judgment are the quality mechanism. When one agent reviews the other's docs, the reviewer treats this doc as a checklist and gives feedback on deviations; the author decides whether the deviation is justified for that folder.
+Until those exist, cross-review and author judgment are the quality mechanism. When one agent reviews the other's docs, the reviewer treats this doc as a checklist and gives feedback on deviations; the author decides whether the deviation is justified for that folder. A justified departure from an STD-06 rule is recorded as a decision in the feature's design docs, citing `STD-06@5 §Rn`.
 
 ---
 
