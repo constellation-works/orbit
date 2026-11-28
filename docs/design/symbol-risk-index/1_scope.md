@@ -249,7 +249,7 @@ coverage priorities, retirement evidence and timing.
    fallback.
 3. **G1 backtest.** An analysis task reconstructs the index per fold and reports G1, with
    scripts and results attached as artifacts.
-4. **Admission wiring**, only if G1 passes: the `declared_lines` basis in `riskiness.rs`, an
+4. **Admission wiring**, only if G1 passes: the `declared_lines` basis in `app/codebase/risk.rs`, an
    estimator version bump, and the forecast docs note.
 5. **Site history.** Symbol change events per landed delivery, site resolution through
    lineage, and shrunk rates in the read tool. This may land with phase 1, since it only

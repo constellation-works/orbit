@@ -507,7 +507,7 @@ An owner-local forecast uses the owner's execution data. A live pull/follower dr
 
 ### Per-task riskiness estimator
 
-Riskiness is its own task API/UI feature, consumed unchanged by the forecast. It estimates the chance that a completed task is later named by at least one `regression_from` relation. It is an observed, windowed probability, not a causal assessment or a replacement for admission. Reuse the shared `CodebaseFacts` and `RegressionFilter` of `app/codebase/`, and the landed-delivery diff rows of `diff_stats.rs`; do not scrape rendered prompt marks or rebuild a competing regression ledger.
+Riskiness is its own task API/UI feature, consumed unchanged by the forecast. It estimates the chance that a completed task is later named by at least one `regression_from` relation. It is an observed, windowed probability, not a causal assessment or a replacement for admission. Reuse the shared `CodebaseFacts` and `RegressionFilter` of `app/codebase/`, and the landed-delivery diff rows of `app/codebase/diff_stat.rs`; do not scrape rendered prompt marks or rebuild a competing regression ledger.
 
 Use a 30-day window and a minimum support of 5 (fixed defaults since [ORB-22806] removed the `workflow.regression_risk.*` keys), not the mark threshold/max-files truncation. Each completed task is one denominator observation, and one numerator observation if any regression link names it, however many fixes/files it has. Retain the existing durable done-time/window semantics. Expose support/window and the observation cutoff: recent deliveries have had less time to reveal defects, and unfiled regressions are invisible.
 

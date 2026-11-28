@@ -67,7 +67,7 @@ Orbit has no way to express that trade today:
 
   | Outcome | Where the conflicting paths are recorded | Read by codebase facts |
   |---|---|---|
-  | Conflict recovery failed, local run (`pr_conflict_blocked`, or `pr_failure_handoff` with `failed_step=sync_base`) | Task history note text (`conflicts=a, b`) | Yes, `BlockCause::BaseConflict(paths)` in [`block_cause.rs`](../../../crates/orbit-core/src/app/codebase/fact/block_cause.rs) |
+  | Conflict recovery failed, local run (`pr_conflict_blocked`, or `pr_failure_handoff` with `failed_step=sync_base`) | Task history note text (`conflicts=a, b`) | Yes, `BlockCause::BaseConflict(paths)` in [`block_cause.rs`](../../../crates/orbit-core/src/application/task/block_cause.rs) (read by codebase facts through `app/codebase/fact/block_cause.rs`, which reads the claim settlements and re-exports the classifier) |
   | Conflict recovery failed, claimed leaf (`ClaimFailureClass::BaseConflict`) | Nowhere on the owner: the settlement carries the class only | As a conflict with no paths |
   | Conflict recovered by `pr_conflict_recovery` | The run's `PipelineState::rebase_recovery_checkpoints` (`RebaseRecoveryCheckpoint::conflicting_paths`), on the host that ran it | No |
   | Overlapping work that rebased cleanly | Nowhere directly; derivable from landed paths and in-flight intervals | No |
