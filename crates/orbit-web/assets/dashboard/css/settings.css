@@ -205,6 +205,11 @@
   .settings-stack .settings-section :is(button, input, select, textarea, a[href]) {
     scroll-margin-top: calc(var(--settings-bar-h, 0px) + 8px);
   }
+  /* The bar's search well and action buttons share the 28px height of its
+     other controls (Reload and the section jumps). Narrower widths keep the
+     heights set in the 900px block below. */
+  .settings-bar .settings-search { height: 28px; }
+  .settings-bar-actions > .settings-btn { height: 28px; }
 }
 
 @media (max-width: 900px) {
