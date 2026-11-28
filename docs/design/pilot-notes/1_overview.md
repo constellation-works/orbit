@@ -6,7 +6,7 @@ updated_date: 2026-11-28
 last_validated: 2026-11-28
 status: Accepted
 stage: building
-next: "Show pilot notes on the dashboard task detail [ORB-29589] and give claimed pilots the owner's captured instructions [ORB-29590]"
+next: "Show pilot notes on task detail [ORB-29589]; task-pilot stays owner-side"
 feature: pilot-notes
 doc_role: overview
 type: design
@@ -71,7 +71,7 @@ from the task. Orbit learns nothing about what the question means.
 | What the pilot may call | [What the pilot may call](./2_design.md#3-what-the-pilot-may-call) | — |
 | What the pilot returns, and what apply does with it | [Notes in the assessment](./2_design.md#4-notes-in-the-assessment) | 1 |
 | Where a note is read | [Reading a note](./2_design.md#5-reading-a-note) | 1 |
-| Pilots on another host | [Claimed pilots](./2_design.md#6-claimed-pilots) | 2 |
+| Claimed tasks | [Claimed pilots](./2_design.md#6-claimed-pilots): task-pilot stays on the owner, and no leaf captures notes | — |
 | The dashboard | [Reading a note](./2_design.md#5-reading-a-note) | 2 |
 
 ## 4. Decided at approval
@@ -89,7 +89,7 @@ the draft and were approved with the recommendation. Both are recorded in the
 | Phase | Task |
 |---|---|
 | 1. Local notes | [ORB-29586] adds the config table, the pilot's prompt section, the audit event and the `doctor` finding; [ORB-29588] adds `notes` to the assessment, the checks in apply and the readouts |
-| 2. Claimed pilots and the dashboard | [ORB-29589] (backlog) shows notes on a task's detail; [ORB-29590] (backlog) gives a claimed pilot the owner's captured instructions |
+| 2. The dashboard | [ORB-29589] (backlog) shows notes on a task's detail. [ORB-29590] is documentation only: task-pilot stays on the owner, so no claimed capture is built |
 
 ## Task References
 
@@ -97,6 +97,6 @@ the draft and were approved with the recommendation. Both are recorded in the
 - [ORB-29586] — adds `[workflow.pilot_notes.<label>]`, the prompt section, the audit event and the `doctor` finding.
 - [ORB-29588] — adds `notes` to the assessment, the checks in apply and the `pilot_notes` readout.
 - [ORB-29589] — backlog; shows pilot notes on the dashboard's task detail.
-- [ORB-29590] — backlog; gives a claimed pilot the owner's captured note instructions.
+- [ORB-29590] — documents where task-pilot runs; claimed tasks take the owner's notes, so no claimed capture is built (2_design.md §6).
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

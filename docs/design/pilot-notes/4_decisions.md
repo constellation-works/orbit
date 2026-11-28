@@ -2,13 +2,13 @@
 title: Pilot Notes — Decisions
 owner: claude
 created_date: 2026-11-27
-updated_date: 2026-11-27
+updated_date: 2026-11-28
 last_validated: 2026-11-28
 status: Accepted
 feature: pilot-notes
 doc_role: decisions
 type: design
-summary: "Pilot Notes — Decisions: a note lives in the assessment and not in a task comment, and a note never stops the pilot"
+summary: "Pilot Notes — Decisions: a note lives in the assessment and not in a task comment, a note never stops the pilot, and task-pilot stays on the owner so claimed tasks get no note capture"
 tags: [pilot-notes]
 related_features: [task-pilot]
 related_artifacts: [ORB-29567]
@@ -71,8 +71,41 @@ the assessment is applied. A note is never repaired by a correction round.
 - Cost: a workspace can lose its notes without any task failing. Whoever relies on a note has
   to watch `doctor` or the audit event, and has to cope with a task that has none.
 
+## Task-pilot stays on the owner, so claimed tasks get no note capture
+
+**Recorded:** 2026-11-28 · [ORB-29590]
+
+### Context
+
+The approved design (§6) gave a claimed task's pilot a note capture, so the leaf would apply
+the owner's instruction text. Tracing the claimed path at base `1d5d716ea` found that a claimed
+agent can submit `orbit run task-pilot` from its checkout. The submitted run's worker must
+register in the protected authority store, and the leaf's sandbox denies that write
+(`crates/orbit-core/src/adapter/engine_host/actions/sandbox/resolve.rs`, `append_terminal_denies`).
+So no leaf prepares a prompt. Prepare's explicit branch reads no execution claim, while its
+automatic branch does (`crates/orbit-core/src/application/task/pilot/prepare/run.rs`). The apply
+fence covers only in-progress and review tasks
+(`crates/orbit-core/src/application/task/pilot/persist/reports.rs`, `superseded_with_current`).
+
+### Decision
+
+Task-pilot runs on the owner. The owner prepares, runs and applies every pilot and its notes,
+from its own config and committed files. The claim receipt carries no note capture, and no leaf
+applies one. The alternative was an authorized claimed-worker pilot that captures the owner's
+instruction text; the operator chose the owner-only path on 2026-11-28.
+
+### Consequences
+
+- No receipt field and no leaf-side apply path. The owner's mapping reaches every pilot prompt,
+  and a replica's mapping never does.
+- Cost: this rests on the sandbox denial. A leaf launch whose nested worker could register would
+  prepare the pilot from its own config and files, and no note capture would cover it. Revisit
+  this decision then. A claimed task's notes are also the owner's, written against the owner's
+  checkout.
+
 ## Task References
 
 - [ORB-29567] — designed pilot notes; the operator approved both decisions with it.
+- [ORB-29590] — documents where task-pilot runs; claimed tasks take the owner's notes.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

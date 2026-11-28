@@ -75,8 +75,8 @@ workspace that enables the plugin can already call it. A note instruction may th
 the pilot to call such a tool. A mutating tool stays out of reach: the pilot holds no
 operator capability and the deny list names the task and workflow mutations.
 
-An instruction should say what to do when the tool is not there, because a pilot on a host
-without the plugin will not have it ([Claimed pilots](#6-claimed-pilots)).
+An instruction should say what to do when the tool is not there, because a pilot on an owner
+without the plugin will not have it. The owner runs every pilot ([Claimed pilots](#6-claimed-pilots)).
 
 ## 4. Notes in the assessment
 
@@ -158,15 +158,91 @@ price that a re-check that says nothing leaves a held task with no notes.
 
 ## 6. Claimed pilots
 
-A leaf that holds a claim can pilot the task it claimed, and its results are applied under
-that claim. For such a pilot the owner captures each note's instruction text, read from the claim's authoritative base, in the claim's receipt, as it captures tag
-instructions. The claimed run applies that capture and not its replica's mapping or files. A
-note the owner switched off stays off on the leaf. A claim from an older owner that captured
-nothing gets no notes.
+**Task-pilot runs on the owner.** A claimed task's pilot, prompt and notes come from the owner.
+No leaf captures note instructions, and the claim receipt carries none. The operator chose this
+on 2026-11-28 ([decision](./4_decisions.md#task-pilot-stays-on-the-owner-so-claimed-tasks-get-no-note-capture)).
+The trace below is from code at base `1d5d716ea`. It was not run on a live host.
 
-The tools are the leaf's own. A pilot on a host where the plugin is not installed or not
-enabled cannot call its tool, and returns no note or a poorer one. Routing a pilot to a host
-by what it has installed is out of scope.
+**Who starts a pilot.** Owner-side paths submit `task_pilot_pipeline`:
+
+- The member scheduler submits the owner's member attempt, with `state_automation` and the
+  attempt's `source_revision` (`crates/orbit-core/src/application/automation/members/member_host/host.rs:174-190`).
+- The owner drain (`crates/orbit-core/assets/jobs/workspace_auto_pipeline.yaml:196`) and the
+  CI-failure sweep (`crates/orbit-core/assets/jobs/ci_failure_sweep_pipeline.yaml:157`) submit
+  the same job.
+- An operator submits explicitly with `orbit run task-pilot`
+  (`crates/orbit-cli/src/command/run/task_pilot.rs:37-48`), from the dashboard
+  (`crates/orbit-core/src/app/run/dashboard.rs:269`), or from a task write
+  (`crates/orbit-core/src/app/task/write.rs:335-342`). The dashboard and task-write paths call
+  `submit_explicit_task_pilot`, which refuses a replica checkout
+  (`crates/orbit-core/src/application/job/pilot_submit.rs:227-240`). The CLI path does not (§9).
+- A replica schedules only its own worktree and store GC (`crates/orbit-core/src/app/routine/loader.rs:36-39`).
+
+**Where the owner prepares the prompt.**
+
+1. `prepare` (`crates/orbit-core/assets/jobs/task_pilot_pipeline.yaml:168-169`) selects tasks.
+   The explicit branch (`crates/orbit-core/src/application/task/pilot/prepare/run.rs:150-236`)
+   records a non-assessable status as `status_not_eligible` (`:188-196`) and reads no execution
+   claim. The automatic branch reads the live-claim set (`:256-257`) and uses it in the
+   stale-repilot check (`:288-293`).
+2. `pilots` runs `task_pilot` (`task_pilot_pipeline.yaml:193-214`). `prepare_provider_envelope`
+   builds its prompt (`crates/orbit-engine/src/activity_job/cli_runner/orchestrator/dispatch/provider/preparation.rs:35`)
+   and appends the `Pilot notes` section (`preparation.rs:164-177`).
+3. That section comes from `OrbitRuntime::pilot_notes_for_activity`
+   (`crates/orbit-core/src/application/tag_instructions.rs:70-85`). It reads the owner's
+   `[workflow.pilot_notes]` table and each committed file at the pilot input's
+   `source_revision`. A leaf's config and files never reach it.
+4. `apply` (`task_pilot_pipeline.yaml:220-221`) writes the assessment (§4).
+
+**A claimed worker's explicit submission.** A claimed leaf's agent is not denied the `orbit`
+binary. Its tool deny list names Orbit tools such as `orbit.pipeline.invoke`, but not the
+`orbit run` command, and its program deny list names no `orbit` binary
+(`crates/orbit-core/assets/activities/agent_implement.yaml:690-712`). A worker-bound CLI call
+stays local (`crates/orbit-cli/src/command/host_route.rs:116-126`). The submission then runs
+as follows:
+
+1. `PilotRequest::submit` refuses any explicit task that is not `proposed` or `backlog`
+   (`crates/orbit-core/src/app/run/job.rs:61-89`). `dispatch_pilot` then submits the run
+   (`job.rs:300-320`).
+2. Submission persists the run and calls `spawn_pipeline_worker` in the same process
+   (`crates/orbit-core/src/application/job/pipeline/admission.rs:430-435`).
+3. `spawn_process` registers the child with the authority store
+   (`crates/orbit-core/src/application/job/pipeline/worker/supervisor.rs:315-317`).
+   `RuntimeKernel::register_worker_process` binds the child's PID to the nested process's worker
+   invocation (`crates/orbit-runtime/src/run/worker_coordination.rs:72-78`). The nested `orbit`
+   is a worker because its binding resolves through a live ancestor
+   (`crates/orbit-runtime/src/stored/recovery_authority/worker.rs:86-93`).
+4. That bind writes `state/recovery-authority/authority.db`
+   (`crates/orbit-runtime/src/stored/recovery_authority/root.rs:11-16`). The directory is created
+   with mode 0700 (`root.rs:21-24`). Both OS profile builders call `append_terminal_denies`
+   (`crates/orbit-core/src/adapter/engine_host/actions/sandbox/resolve.rs:168`, `:233`), which adds
+   a `modify` deny on that root after the convenience grants (`resolve.rs:262-268`, `:705-719`;
+   `crates/orbit-runtime/src/stored/recovery_authority/root.rs:185-195`). The store is protected
+   by location, not by a secret (`crates/orbit-runtime/src/stored/recovery_authority/mod.rs:15-17`).
+5. The refused registration returns an error. `spawn_process` kills and reaps the child
+   (`supervisor.rs:315-316`, `:924-930`). The run is finalized as a startup failure, and the
+   submit call returns that error (`admission.rs:442-458`). No `prepare` step runs in the leaf.
+
+A landing-review diagnosis recorded for run `jrun-20261128-0907-c7` reached the same block: the
+sandbox blocks registration of the nested worker. That is run evidence, not a test.
+
+**The live-claim fence on pilot writes.** Apply checks each task under its lock before it writes
+(`crates/orbit-core/src/application/task/pilot/persist/apply_task.rs:203-208`; also
+`apply/task.rs:88` and `apply/unresolved.rs:77`). `superseded_with_current` settles the write as
+`superseded`, reason `execution_claim`, when the task is `in-progress` or `review` and a
+footprint-protecting execution claim holds it (`crates/orbit-core/src/application/task/pilot/persist/reports.rs:95-105`).
+The clause needs a live claim. The test at `crates/orbit-core/tests/runtime/distributed_drain/pilot.rs:135-161`
+(registered at `:682`) asserts that outcome and that the pipeline still succeeds.
+
+**CLI submission, execution and application are separate steps.**
+
+- *Submission.* The CLI reports a run as `submitted` or `queued` (`job.rs:309-320`). A submit that
+  fails at worker startup returns an error, not a run (`admission.rs:458`).
+- *Execution.* A submitted run can fail at worker registration, as above, or later in `prepare`,
+  `pilots` or `apply` (`task_pilot_pipeline.yaml:168-277`).
+- *Application.* A run can succeed without writing an assessment: a `superseded` outcome still
+  succeeds the pipeline (`pilot.rs:152-159`). Whether an assessment was applied is read from the
+  task's `pilot/assessment-*` artifact (§4), not from the run's state.
 
 ## 7. Phasing
 
@@ -174,8 +250,8 @@ by what it has installed is out of scope.
    the `doctor` finding ([ORB-29586]); `notes` in the output schema, the checks in
    apply, and the readouts in `orbit.task.show`, `orbit.task.list` and `orbit task show`
    ([ORB-29588]).
-2. **Claimed pilots and the dashboard.** The notes on the task's detail ([ORB-29589], backlog),
-   and the capture in the claim receipt ([ORB-29590], backlog).
+2. **The dashboard.** The notes on the task's detail ([ORB-29589], backlog). Claimed pilots get
+   no build: task-pilot stays on the owner ([ORB-29590], documentation only; §6).
 
 ## 8. Acceptance
 
@@ -226,9 +302,20 @@ by what it has installed is out of scope.
   for ordinary mutating plugin tools happens at the capability chokepoint; a plugin tool explicitly
   marked `agent_callable: true` with operator `agent_tools` consent would be reachable unless added
   to `tool_disallow_list`.
-- **The claimed path is read from tests, not traced end to end.** Apply accepts pilot results
-  under a claim; where the leaf's pilot prompt is prepared, and so where the capture has to be
-  applied, is for the phase 2 task to establish.
+- **The claimed-worker path is traced in code, not run.** §6 rests on the code at `1d5d716ea`.
+  In the traced path, the sandbox's authority-root deny is the only barrier. A leaf launch that
+  could register its nested worker would prepare the pilot from its own config and files, and
+  the trace did not cover such a launch.
+- **A claimed task in backlog has no fence on the explicit branch.** Prepare's explicit branch
+  reads no execution claim (`crates/orbit-core/src/application/task/pilot/prepare/run.rs:150-236`),
+  and the apply fence covers only in-progress and review tasks
+  (`crates/orbit-core/src/application/task/pilot/persist/reports.rs:95-105`). Whether a claimed
+  task can be in backlog was not traced. This matters only if the registration block is absent.
+- **The CLI explicit path has no replica refusal.** `PilotRequest::submit` and `dispatch_pilot`
+  do not call the replica guard in `submit_explicit_task_pilot`
+  (`crates/orbit-core/src/application/job/pilot_submit.rs:234-240`, `:289-295`). Nothing else on
+  the traced path refuses a replica checkout. Whether it should is for the owner of the
+  explicit-submit guard to decide. Not run.
 - **Four notes and 1 KiB are guesses.** One use is known. The bounds are set to keep the
   pilot's prompt and the task readout small, and can be raised when a second use needs it.
 
@@ -238,6 +325,6 @@ by what it has installed is out of scope.
 - [ORB-29586] — adds `[workflow.pilot_notes.<label>]`, the prompt section, the audit event and the `doctor` finding, and verifies plugin tool access in an isolated fixture.
 - [ORB-29588] — adds `notes` to the assessment, the checks in apply and the `pilot_notes` readout.
 - [ORB-29589] — backlog; shows pilot notes on the dashboard's task detail.
-- [ORB-29590] — backlog; gives a claimed pilot the owner's captured note instructions.
+- [ORB-29590] — documents where task-pilot runs; claimed tasks take the owner's notes (§6).
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
