@@ -414,7 +414,9 @@ def code_tokens(source):
 def use_tree(tokens, index, prefix=(), aliases=None):
     """Expand relative paths, carrying the prefix through nested use groups.
 
-    When `aliases` is a list, each `path as name` rename appends `(path, name)`.
+    When `aliases` is a list, each binding appends `(path, name)`: a `path as name`
+    rename, or an unaliased `path` that binds its last segment (`self` binds the
+    parent's name; a glob binds nothing).
     """
     paths = []
     while index + 1 < len(tokens) and tokens[index + 1][0] == "::":
@@ -438,6 +440,10 @@ def use_tree(tokens, index, prefix=(), aliases=None):
             if aliases is not None and index + 1 < len(tokens):
                 aliases.append((paths[-1], tokens[index + 1][0]))
             index += 2
+        elif aliases is not None:
+            bound = paths[-1][-2:-1] if paths[-1][-1] == "self" else paths[-1][-1:]
+            if bound and bound[0] != "*":
+                aliases.append((paths[-1], bound[0]))
     return paths, index
 
 
