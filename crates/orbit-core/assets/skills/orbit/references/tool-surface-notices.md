@@ -43,7 +43,7 @@ Who you post as comes from your session, never from input:
 |---|---|---|---|
 | operator | operator capability | anything; closes anything | 720 h |
 | orchestrator | an agent session with orchestrator attribution naming a configured crew (`--orchestrator` or a per-call `orchestrator`) | any scope and kind; edits and closes orchestrator- and agent-authored notices, never the operator's | 168 h warn, incident and info, 72 h maintenance |
-| agent | a managed run (worker binding or run-stamped `orbit tool run`) | `workspace` scope, `incident` or `info`, with `linked_task` or evidence; edits and closes only its own task's notices | 24 h (also the default) |
+| agent | a managed run with a validated worker binding or a host-attested activity binding (via the run broker); a run-stamped `orbit tool run` alone is refused | `workspace` scope, `incident` or `info`, with `linked_task` or evidence; edits and closes only its own task's notices | 24 h (also the default) |
 
 A resident cycle posts as the agent of its mandate's assignment, with its own
 terms: it may also post `warn`, needs no linked task or evidence, and keeps one
