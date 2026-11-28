@@ -6,7 +6,7 @@ updated_date: 2026-11-28
 last_validated: 2026-11-28
 status: Accepted
 stage: building
-next: "Show pilot notes on task detail [ORB-29589]; task-pilot stays owner-side"
+next: "Task-pilot stays owner-side; no claimed note capture [ORB-29590]"
 feature: pilot-notes
 doc_role: overview
 type: design
@@ -89,14 +89,14 @@ the draft and were approved with the recommendation. Both are recorded in the
 | Phase | Task |
 |---|---|
 | 1. Local notes | [ORB-29586] adds the config table, the pilot's prompt section, the audit event and the `doctor` finding; [ORB-29588] adds `notes` to the assessment, the checks in apply and the readouts |
-| 2. The dashboard | [ORB-29589] (backlog) shows notes on a task's detail. [ORB-29590] is documentation only: task-pilot stays on the owner, so no claimed capture is built |
+| 2. The dashboard | [ORB-29589] shows notes on a task's detail. [ORB-29590] is documentation only: task-pilot stays on the owner, so no claimed capture is built |
 
 ## Task References
 
 - [ORB-29567] — this design.
 - [ORB-29586] — adds `[workflow.pilot_notes.<label>]`, the prompt section, the audit event and the `doctor` finding.
 - [ORB-29588] — adds `notes` to the assessment, the checks in apply and the `pilot_notes` readout.
-- [ORB-29589] — backlog; shows pilot notes on the dashboard's task detail.
+- [ORB-29589] — shows pilot notes on the dashboard's task detail.
 - [ORB-29590] — documents where task-pilot runs; claimed tasks take the owner's notes, so no claimed capture is built (2_design.md §6).
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

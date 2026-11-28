@@ -111,6 +111,20 @@ function pilotSummary(comment) {
   return pilot && typeof pilot.summary === "string" && pilot.summary.trim() ? pilot.summary : null;
 }
 
+function pilotNotes(task, comment) {
+  const operationId = comment && comment.operation_id;
+  if (typeof operationId !== "string" || !Array.isArray(task && task.pilot_notes)) return [];
+  return task.pilot_notes.filter((note) =>
+    note && note.operation_id === operationId && typeof note.label === "string" && typeof note.text === "string");
+}
+
+function pilotNotesView(notes) {
+  return el("div", { class: "pilot-notes" }, notes.map((note) => el("div", { class: "pilot-note" }, [
+    el("span", { class: "pilot-note-label", text: note.label }),
+    el("div", { class: "pilot-note-text", text: note.text }),
+  ])));
+}
+
 // Resident records are persisted JSON. Only recognize the known shapes; malformed
 // or future records retain the ordinary comment renderer and original text.
 function residentComment(comment) {
@@ -311,6 +325,7 @@ function buildCommentCard(task, comment, index) {
   const message = commentMessage(comment);
   const writer = comment && comment.by ? String(comment.by) : "?";
   const pilotLine = pilotSummary(comment);
+  const notes = pilotLine ? pilotNotes(task, comment) : [];
   const resident = residentComment(comment);
   const titles = pilotLine || resident ? [] : commentSections(message);
   const long = !pilotLine && !resident && commentIsLong(message);
@@ -350,8 +365,20 @@ function buildCommentCard(task, comment, index) {
     actions,
   ]);
 
-  const view = pilotLine ? el("p", { text: pilotLine }) : resident ? residentCommentView(resident, task) : taskFields.markdownView(message);
-  view.classList.add("markdown-body", "comment-body");
+  let view;
+  if (pilotLine && notes.length > 0) {
+    view = el("div", { class: "markdown-body comment-body pilot-comment-body" }, [
+      el("p", { class: "pilot-summary", text: pilotLine }),
+      pilotNotesView(notes),
+    ]);
+  } else {
+    view = pilotLine
+      ? el("p", { text: pilotLine })
+      : resident
+        ? residentCommentView(resident, task)
+        : taskFields.markdownView(message);
+    view.classList.add("markdown-body", "comment-body");
+  }
   const headings = renderedCommentHeadings(view);
   const raw = el("pre", { class: "comment-raw", text: message });
   raw.style.display = "none";

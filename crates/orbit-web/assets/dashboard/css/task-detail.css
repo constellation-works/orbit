@@ -1668,6 +1668,25 @@ input.field-editor-input {
   line-height: 1.65;
   max-width: 72ch;
 }
+.pilot-comment-body { min-width: 0; }
+.pilot-notes {
+  display: grid;
+  gap: var(--space-8);
+}
+.pilot-note { min-width: 0; }
+.pilot-note-label {
+  display: block;
+  margin-bottom: var(--space-2);
+  color: var(--fg-dim);
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+.pilot-note-text {
+  min-width: 0;
+  color: var(--fg-soft);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
 .comment-body h2 { scroll-margin-top: var(--space-48); }
 .resident-comment { overflow-wrap: anywhere; }
 .resident-comment-title { color: var(--fg); }
