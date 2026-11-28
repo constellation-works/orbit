@@ -34,7 +34,7 @@ already recorded by `codebase/diff_stat.rs` ([ORB-18383]). A `regression_from` l
 narrower site can be named)
 (`crates/orbit-types/src/task/regression.rs`), and [ORB-19276] made Orbit always record
 them. The Coverage workflow (`.github/workflows/coverage.yml`) uploads a workspace LCOV report
-for `main` every six hours ([DEVELOPMENT.md](../../DEVELOPMENT.md#coverage)). The orbit-graph
+for `main` every six hours ([development reference](../../development/testing.md#coverage)). The orbit-graph
 plugin already indexes symbols with source extents in ten languages and maps changes to
 symbols and candidate tests. Routines run catalog jobs from the sweep clock
 ([routines design](../routines/2_design.md)).

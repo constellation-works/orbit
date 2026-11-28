@@ -653,7 +653,7 @@ selection. A base run that tests another selection, or passes without
 executing a counted test, is not comparable: the claim is neither refuted nor
 confirmed, and the review settles `incomplete` with a
 `baseline_not_comparable` escalation (see the
-[validation summary](../DEVELOPMENT.md#validation-summary-and-base-reruns)).
+[validation summary](../development/validation-and-ci.md#validation-summary-and-base-reruns)).
 When the candidate's failures are all tests, the base replays only those
 (`base_replay: "failing_tests"` in `review-baseline.json`), or a full result
 already cached for that base is read (`cached_failure_set`). Each claim's
@@ -848,7 +848,7 @@ a passing replay is pinned as the gate's evidence, whether the record defers
 one kind or several. Real failures, any other `SKIP:` or `skipping` notice,
 empty gates, notices of a kind whose probe the lane does not refuse, `DEFERRED: ps
 denied:` notices from an owner-run or non-macOS implementer and the other
-required commands are not deferrable ([development guide](../DEVELOPMENT.md#test-process-environment)).
+required commands are not deferrable ([development guide](../development/testing.md#test-process-environment)).
 
 A reviewer whose sandbox cannot run a sandbox-gated test names it as
 `host_sandbox_test` evidence for an OS and reports `incomplete` when that is

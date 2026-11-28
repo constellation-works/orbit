@@ -437,7 +437,7 @@ it moves the most callers with the least new API.
 - **Bounded callers gain threads.** Step 4 has landed, so a bounded call on
   Unix now has two pipe workers, joined before return. Whether the "no capture
   worker survives the probe" guarantee in
-  [`DEVELOPMENT.md`](../../DEVELOPMENT.md#child-processes) holds on this path,
+  [process guidance](../../development/processes.md#child-processes) holds on this path,
   and the sampling overhead of `identity`'s `ps` call, have not been re-measured
   since the change. If sampling regresses, the supervisor may keep a
   single-threaded nonblocking mode for `Null` stdin with capture-only sinks.

@@ -7,7 +7,7 @@
 //! that used to be persisted or reported as success without effect.
 //!
 //! Every command runs as a child process against a disposable `HOME` and
-//! checkout, per `docs/DEVELOPMENT.md#safe-mutable-cli-fixtures`.
+//! checkout, per `docs/development/qa.md#safe-mutable-cli-fixtures`.
 
 use std::fs;
 use std::path::{Path, PathBuf};

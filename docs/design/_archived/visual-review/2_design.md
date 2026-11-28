@@ -316,7 +316,7 @@ a new view cannot ship unmeasured. Later entries added `notices` (fixture `fleet
 open notice and none closed in the last 24 hours), `knowledge` and `plugins`; `leases` is
 exempt until a fixture enables path leases.
 
-The dashboard is dark-only ([browser checks](../../../DEVELOPMENT.md#browser-checks-on-a-prepared-host)),
+The dashboard is dark-only ([browser checks](../../../development/browser-checks.md#browser-checks-on-a-prepared-host)),
 so `themes = ["dark"]`, and `color_scheme_invariant = true` turns "both themes" into a check
 that the light colour preference changes nothing (§7). The website gets `themes = ["light",
 "dark"]`.
@@ -1024,7 +1024,7 @@ with this design unchanged.
 
 **`ui/implement.md` and `ui/review.md`** change only to point at `verify-mock-ui` for tasks
 with mocks. The workspace guide's screenshot rule and
-[browser checks](../../../DEVELOPMENT.md#browser-checks-on-a-prepared-host) changed in phase 6 ([ORB-19982]):
+[browser checks](../../../development/browser-checks.md#browser-checks-on-a-prepared-host) changed in phase 6 ([ORB-19982]):
 the implementer's capture duty is dropped for mocked views of a `verify-mock-ui` task in a
 workspace with visual review `live`, and remains for everything else.
 

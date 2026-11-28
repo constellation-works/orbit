@@ -583,7 +583,7 @@ hand off. `make ci-fast` is a required command, so the owner's
 `candidate_validate`, or the claim host's `claim_validate` for a claimed leaf,
 runs it again outside any agent sandbox before delivery, where Bubblewrap
 creates the namespaces and this regression runs in full
-([deferred sandbox validation](../DEVELOPMENT.md#test-process-environment)).
+([deferred sandbox validation](../development/testing.md#test-process-environment)).
 The script identifies the lane by `ORBIT_SCRATCH_DIR`: Orbit's CLI runner sets
 it to an existing directory for every agent it dispatches into a worktree, and
 nothing else in Orbit sets it. The validation steps run required commands

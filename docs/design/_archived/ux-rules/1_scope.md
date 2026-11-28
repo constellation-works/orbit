@@ -55,7 +55,7 @@ Bearing: the design baseline was the CLI pass [ORB-19681] and UI pass
 
 Both store a findings table as `ux-review.json` and compare it with the previous pass. The
 browser kit pins one Playwright build per Orbit release
-([browser checks](../../../DEVELOPMENT.md#browser-checks-on-a-prepared-host)). Jobs already
+([browser checks](../../../development/browser-checks.md#browser-checks-on-a-prepared-host)). Jobs already
 pair a collecting step with a deterministic filing step (`dependabot_alert_sweep_pipeline`:
 `collect_dependabot_alerts` → `file_dependabot_alert_tasks`). [Script steps](../../script-steps/1_scope.md)
 (phases 1-2 landed: a granted workspace script runs on Linux with no network) let a job run
