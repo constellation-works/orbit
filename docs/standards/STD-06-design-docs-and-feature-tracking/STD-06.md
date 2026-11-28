@@ -1,11 +1,11 @@
 ---
 id: STD-06-design-docs-and-feature-tracking
 title: Design docs and feature tracking — one folder per feature, a delivery stage separate from doc approval, a generated feature board, admitted decisions, and tasks tagged with their feature
-summary: Normative rules for how a project keeps feature designs and knows where each feature stands — one docs/design/<feature>/ folder on a scope or full track, required frontmatter, a `stage` and `next` on the entry doc kept apart from the doc's approval `status`, a generated and CI-checked feature board, decision entries admitted only when they explain surprising code or govern future choices, and every implementation task tagged with its feature slug so live progress is read from the tracker; follow it in any project with design docs.
+summary: Normative rules for how a project keeps feature designs and knows where each feature stands — one docs/design/<feature>/ folder scaffolded with an overview, a design and a decisions doc, required frontmatter, a `stage` and `next` on the overview kept apart from the doc's approval `status`, a generated and CI-checked feature board, decision entries admitted only when they explain surprising code or govern future choices, and every implementation task tagged with its feature slug so live progress is read from the tracker; follow it in any project with design docs.
 tags: [standard, docs, design, tracking, agents]
-version: 4
+version: 5
 created_date: 2026-10-25
-updated_date: 2026-11-27
+updated_date: 2026-11-28
 last_validated: 2026-10-25
 related: [STD-04-testing-and-verification]
 ---
@@ -15,8 +15,8 @@ related: [STD-04-testing-and-verification]
 These rules cover where a project writes down its feature designs, how it records how far each feature is built, and how that record stays tied to the work tracker. They exist so that one read of a generated board answers "what are we building, and where does each thing stand", and one tag query answers "which tasks belong to it".
 
 Every rule is portable. A project with three features and a plain issue tracker can comply. The minimum is:
-- one folder per designed feature with a frontmatter entry doc;
-- `stage` and `next` on that doc;
+- one folder per designed feature with `1_overview.md`, `2_design.md` and `4_decisions.md`, each starting with frontmatter;
+- `stage` and `next` on `1_overview.md`;
 - a script that renders the board and fails CI when a stage is missing;
 - the feature slug as a tag on each task that implements the feature.
 
@@ -35,17 +35,13 @@ This standard is a directory. This file holds the binding text: the rules, where
 ### Where designs live
 
 - **R1.** Each designed feature MUST have exactly one folder, `docs/design/<feature>/`. The slug is lowercase, hyphenated and singular, and it MUST NOT be renamed while tasks carry it (§R12); a rename retags every open task in the same change.
-- **R2.** A folder MUST follow one of two tracks:
-  - *scope*: `1_scope.md`, plus `4_decisions.md` once an entry is admitted (§R10). For one change to an existing mechanism, readable in one sitting.
-  - *full*: `1_overview.md`, `2_design.md`, `3_vision.md`, `4_decisions.md`, with `specs/` and `references/` as needed. For a subsystem with its own vocabulary or several mechanisms.
-
-  A scope doc that outgrows one sitting graduates to the full track in the change that makes it outgrow. `4_decisions.md` keeps its name on both tracks.
-- **R3.** A feature folder MUST NOT hold a `README.md`, roadmap, changelog or tutorial, or any top-level file outside its track's numbered files. Roadmaps live in the tracker, changelogs in git, tutorials in user docs.
+- **R2.** Each designed feature MUST keep its own folder under docs/design/<feature>/ and scaffold 1_overview.md, 2_design.md and 4_decisions.md from the start; 3_vision.md is optional. Keep these documents filled and current as the feature progresses. The only permitted top-level numbered files are those four; mechanism documents belong under specs/ and lookup material under references/. An empty 4_decisions.md is permitted until a decision entry qualifies under R10. Migrate existing 1_scope.md documents to this format, preserving their substance.
+- **R3.** A feature folder MUST NOT hold a `README.md`, roadmap, changelog or tutorial, or any top-level file other than the four numbered files §R2 permits. Roadmaps live in the tracker, changelogs in git, tutorials in user docs.
 
 ### Frontmatter and stage
 
 - **R4.** Every numbered doc MUST start with YAML frontmatter carrying `title`, `owner` (the accountable person or agent family), `created_date` and `updated_date` (both `YYYY-MM-DD`; `updated_date` changes with every content edit), `status`, `feature` (the slug), `doc_role` and a one-line `summary`. A `last_validated` field, where present, is the date the doc was last checked against the code. `status` is `Draft` until the feature lead approves the doc, then `Accepted`, and `Deprecated` when archived (§R14). It records the doc's approval and nothing else.
-- **R5.** The entry doc (`1_overview.md` or `1_scope.md`) MUST carry `stage`, one of:
+- **R5.** The entry doc, `1_overview.md`, MUST carry `stage`, one of:
   - `idea`: problem stated, no agreed design, nothing built;
   - `designing`: design written or under review, nothing implemented and nothing approved to build;
   - `building`: implementation landed or approved, but the design's committed scope (not its vision) is incomplete;
@@ -90,12 +86,12 @@ This standard is a directory. This file holds the binding text: the rules, where
 An adopting repo that departs from a rule records a decision in its own design docs, citing `STD-06@<version> §Rn` and the reason, for example `STD-06@1 §R2`. It never edits its vendored copy of this standard.
 
 Some deviations are expected, and the decision still needs to be recorded:
-- A small repo whose only designs are a handful of scope docs may render the board into its README instead of a separate index, under `STD-06@1 §R9`, as long as CI still checks it.
-- A folder whose own acceptance shape pairs a scope doc with a `2_design.md` cites `STD-06@1 §R2` in that scope doc.
+- A small repo with only a handful of features may render the board into its README instead of a separate index, under `STD-06@1 §R9`, as long as CI still checks it.
+- A repo that cannot migrate its existing `1_scope.md` docs at once records the deviation, citing `STD-06@5 §R2`, in each such doc until it migrates them.
 
 Known deviations in the exemplar itself, so adopters do not copy them:
 - At the time of v1, several Orbit entry docs still carry prose `Status:` banners written before `stage` existed, and some contradict it (against R8).
 - `docs/design/executors/` and `docs/design/project-learnings/` have no `1_` entry doc; the generator falls back to `4_decisions.md` (against R2).
-- `docs/design/plugins/1_scope.md` has no `owner`, `status`, `feature` or `doc_role` (against R4).
+- `docs/design/plugins/1_scope.md` has no `owner`, `status`, `feature` or `doc_role` (against R4), and every `1_scope.md` in Orbit, Formation, orbit-graph and rust-cli-template awaits migration under v5 (against R2).
 - Orbit's `docs/design/CONVENTIONS.md` §11 calls its conventions recommendations; adoption makes them binding where this standard states them.
 - Feature tags on Orbit tasks are used by some features and not others (against R12).
