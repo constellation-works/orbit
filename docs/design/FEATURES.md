@@ -60,7 +60,7 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Orbit MCP](./mcp-bridge/1_overview.md) | — | codex |
 | [MCP Session Context](./mcp-session-context/1_overview.md) | — | codex |
 | [Mid-Run Operator Steering](./mid-run-steering/1_overview.md) | — | codex |
-| [Operator Attention](./operator-attention/1_overview.md) | Add the hold record and the refusal of `no-drain` without one [ORB-29656] | claude |
+| [Operator Attention](./operator-attention/1_overview.md) | Add the hold record and the optional `hold` input [ORB-29656] | claude |
 | [Orbit Core](./orbit-core/1_overview.md) | — | codex |
 | [Task Search](./orbit-search/1_overview.md) | — | codex |
 | [Plugins](./plugins/1_scope.md) | — | claude |

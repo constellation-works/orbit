@@ -6,7 +6,7 @@ updated_date: 2026-11-28
 last_validated: 2026-11-28
 status: Draft
 stage: shipped
-next: "Add the hold record and the refusal of `no-drain` without one [ORB-29656]"
+next: "Add the hold record and the optional `hold` input [ORB-29656]"
 feature: operator-attention
 doc_role: overview
 type: design
@@ -102,6 +102,6 @@ The kind list above does not include it until it ships.
 - [ORB-21127] — carried a pilot warning in the motivating example
 - [ORB-20363] — carried a pilot warning and contract finding in the motivating example
 - [ORB-29623] — designed the hold record and the `held_ready` kind
-- [ORB-29656] — builds the hold record, the `hold` input and the refusal
+- [ORB-29656] — builds the hold record and the optional `hold` input
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
