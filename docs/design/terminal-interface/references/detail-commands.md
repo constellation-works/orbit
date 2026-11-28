@@ -68,9 +68,11 @@ The workspace doctor JSON document remains an array of check rows. Each row's
 lowercase `status` token is `error`, `warning`, `ok`, `info` or
 `skipped`; count `error` rows for failures and `warning` rows for warnings.
 NDJSON emits those rows in order followed by one
-`{"summary":{"failures":N,"warnings":N,"text":"..."}}` trailer. Neither JSON
-mode writes the human summary to stderr. This preserves the existing JSON
-array contract while giving NDJSON consumers direct numeric counts.
+`{"summary":{"failures":N,"warnings":N,"text":"..."}}` trailer. On a healthy or
+warning-only run neither JSON mode writes anything to stderr. When a check
+fails, both modes write the one-line count to stderr so the nonzero exit has a
+stated cause. This preserves the existing JSON array contract while giving
+NDJSON consumers direct numeric counts.
 
 Workspace doctor's full non-ok findings section already landed [ORB-14829].
 It remains available below the terminal table; `--check` also recovers ok/info

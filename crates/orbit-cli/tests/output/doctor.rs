@@ -29,6 +29,12 @@ struct RenderFixtureOutput {
     stderr: String,
 }
 
+/// Directory searched before the host `PATH`. It holds only the provider CLI
+/// stubs a test installs, so a fixture never depends on the host's agent CLIs.
+fn provider_stub_dir(fixture: &WorkCheckout) -> std::path::PathBuf {
+    fixture.temp.path().join("provider-stubs")
+}
+
 fn command(fixture: &WorkCheckout) -> assert_cmd::Command {
     let mut command = cargo_bin_cmd!("orbit");
     test_env::clear_inherited_authority(|name| {
@@ -38,7 +44,24 @@ fn command(fixture: &WorkCheckout) -> assert_cmd::Command {
     command.env("HOME", &fixture.home);
     command.env("USERPROFILE", &fixture.home);
     command.env_remove("ORBIT_FORMAT");
+    let mut path = vec![provider_stub_dir(fixture)];
+    if let Some(host) = std::env::var_os("PATH") {
+        path.extend(std::env::split_paths(&host));
+    }
+    command.env("PATH", std::env::join_paths(path).expect("join PATH"));
     command
+}
+
+/// Install an executable `name` that exits 0 in the fixture's provider stub
+/// directory. `workspace init` enables a provider's crews only when its CLI is
+/// on PATH, so a healthy fixture must install the CLI rather than inherit it.
+#[cfg(unix)]
+fn install_provider_stub(fixture: &WorkCheckout, name: &str) {
+    let dir = provider_stub_dir(fixture);
+    mkdir(&dir);
+    let path = dir.join(name);
+    put(&path, "#!/bin/sh\nexit 0\n");
+    set_mode(&path, 0o755);
 }
 fn run(fixture: &WorkCheckout, args: &[&str]) -> Output {
     if args.first() == Some(&"doctor") {
@@ -2351,6 +2374,8 @@ fn stdout_trailers_go_to_stderr_for_doctors_and_migrate() {
         return;
     }
     let f = WorkCheckout::new();
+    #[cfg(unix)]
+    install_provider_stub(&f, "claude");
     run_ok(
         &f,
         &[

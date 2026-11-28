@@ -42,7 +42,8 @@ For machine-readable checks, `orbit doctor --json` and `--format json` keep
 their top-level array of check rows. Count rows with `status: "error"` as
 failures and `status: "warning"` as warnings. `--format ndjson` emits those
 rows followed by a summary record with numeric `failures` and `warnings`
-fields. All three structured modes keep the summary prose off stderr.
+fields. On a healthy or warning-only run all three structured modes write nothing
+to stderr; when a check fails they write the one-line count to stderr.
 
 | Check | What it reports | Status and next step |
 |---|---|---|

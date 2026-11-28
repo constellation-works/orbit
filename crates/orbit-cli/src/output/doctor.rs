@@ -216,10 +216,17 @@ pub(crate) fn report_output(
     let values = results.iter().map(doctor_row_json).collect::<Vec<_>>();
     let mut records = values.clone();
     records.push(summary_record);
-    let summary_notice = summary.clone();
-    let mut blocks = vec![Block::custom(move |sink| {
-        eprintln!("{}", sink.wrap_prose(&summary_notice));
-    })];
+    // Human modes always show the count first. JSON and NDJSON keep stderr
+    // silent unless a check failed, so a nonzero exit still names its cause.
+    let summary_block = if failures > 0 {
+        Block::notice(summary.clone())
+    } else {
+        let summary_notice = summary.clone();
+        Block::custom(move |sink| {
+            eprintln!("{}", sink.wrap_prose(&summary_notice));
+        })
+    };
+    let mut blocks = vec![summary_block];
 
     results.sort_by_key(|row| match row.status {
         WorkspaceDoctorStatus::Error => 0,
