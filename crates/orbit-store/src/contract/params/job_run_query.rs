@@ -1,5 +1,5 @@
 use chrono::{DateTime, Utc};
-use orbit_types::workflow::{JobRunState, JobTargetType};
+use orbit_types::workflow::{JobRun, JobRunState, JobTargetType};
 
 #[derive(Debug, Clone)]
 pub struct JobRunQuery {
@@ -119,7 +119,29 @@ pub struct JobRunStepTargetQuery {
     pub input_text_filters: Vec<JobRunInputTextFilter>,
     /// Top-level `input_json` keys to hydrate (`Some(&[])` skips `input_json`).
     pub input_keys: Option<&'static [&'static str]>,
+    /// Keyset cursor to resume strictly after a prior page in recency order.
+    pub cursor: Option<JobRunStepTargetCursor>,
     /// Maximum matching step-run rows to return, ordered by run recency
     /// descending then `run_id` ascending.
     pub limit: Option<usize>,
+}
+
+/// Keyset cursor for [`JobRunStepTargetQuery`] pagination in recency order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JobRunStepTargetCursor {
+    /// Raw `COALESCE(finished_at, started_at, created_at)` column value of the last scanned row.
+    pub recency_raw: String,
+    /// `run_id` of the last scanned row.
+    pub run_id: String,
+}
+
+/// One bounded page returned by a step-target run query.
+#[derive(Debug, Clone, Default)]
+pub struct JobRunStepTargetPage {
+    /// Matching runs in `(recency DESC, run_id ASC)` order.
+    pub runs: Vec<JobRun>,
+    /// Cursor to continue strictly after this page when additional rows remain.
+    pub next_cursor: Option<JobRunStepTargetCursor>,
+    /// Number of matching step-run rows read for this page.
+    pub scanned_rows: usize,
 }

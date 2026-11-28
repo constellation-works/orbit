@@ -1856,3 +1856,243 @@ fn stale_owner_base_attention_bounds_queries_across_historical_runs() {
         "only the held run and clearing run should be hydrated"
     );
 }
+
+fn insert_held_setup_runs_batch(
+    runtime: &OrbitRuntime,
+    count: usize,
+    start_at: chrono::DateTime<Utc>,
+    branch: &str,
+    message: &str,
+    prefix: &str,
+) {
+    let mut db = rusqlite::Connection::open(runtime.global_root().join("orbit.db")).unwrap();
+    let ws_id = runtime.workspace_id().unwrap();
+    let tx = db.transaction().unwrap();
+    let input = json!({"base_branch": branch, "base_sync": "local"}).to_string();
+    for index in 0..count {
+        let run_id = format!("{prefix}-{index:04}");
+        let ts = (start_at + Duration::milliseconds(index as i64)).to_rfc3339();
+        tx.execute(
+            "INSERT INTO job_runs(
+                run_id, workspace_id, job_id, attempt, state, scheduled_at,
+                started_at, finished_at, duration_ms, created_at, input_json
+             ) VALUES (?1, ?2, 'task_local_pipeline', 1, 'held', ?3, ?3, ?3, 1, ?3, ?4)",
+            rusqlite::params![run_id, ws_id, ts, input],
+        )
+        .unwrap();
+        tx.execute(
+            "INSERT INTO job_run_steps(
+                workspace_id, run_id, step_index, target_type, target_id, state,
+                started_at, finished_at, duration_ms, error_code, error_message, agent_response_json
+             ) VALUES (?1, ?2, 0, 'activity', 'worktree_setup', 'held', ?3, ?3, 1, 'delivery_stale_branch', ?4, '{malformed')",
+            rusqlite::params![ws_id, run_id, ts, message],
+        )
+        .unwrap();
+    }
+    tx.commit().unwrap();
+}
+
+#[test]
+fn stale_owner_base_attention_keeps_older_unresolved_base_when_another_is_crowded() {
+    let (root, runtime) = attention_runtime();
+    let repo = root.path().join("repo");
+    let (base, local, remote) = setup_diverged_owner_base(&repo);
+
+    run_git(&repo, &["checkout", "-b", "release", &base]);
+    run_git(
+        &repo,
+        &["commit", "--allow-empty", "-m", "release local [ORB-298]"],
+    );
+    let release_local = run_git(&repo, &["rev-parse", "HEAD"]);
+    run_git(
+        &repo,
+        &["update-ref", "refs/remotes/origin/release", &remote],
+    );
+    run_git(&repo, &["checkout", "agent-main"]);
+
+    let now = Utc::now() - Duration::minutes(10);
+    // Older unresolved hold on `release`.
+    record_setup_run(
+        &runtime,
+        SetupRun::at(
+            "task_local_pipeline",
+            json!({"base_branch": "release", "base_sync": "local"}),
+            now,
+            JobRunState::Held,
+            Some(diverged_hold_message(
+                &repo,
+                "release",
+                &release_local,
+                &remote,
+            )),
+        ),
+    );
+
+    // Crowd `agent-main` beyond the 128-row page limit and resolve it with a
+    // newer local-sync setup admission.
+    let crowded_count = 200;
+    insert_held_setup_runs_batch(
+        &runtime,
+        crowded_count,
+        now + Duration::seconds(1),
+        "agent-main",
+        &diverged_hold_message(&repo, "agent-main", &local, &remote),
+        "crowded-main",
+    );
+    record_setup_run(
+        &runtime,
+        SetupRun::at(
+            "task_local_pipeline",
+            json!({"base_branch": "agent-main", "base_sync": "local"}),
+            now + Duration::minutes(5),
+            JobRunState::Success,
+            None,
+        ),
+    );
+
+    let operator = session(McpCapability::Operator);
+    let full_steps_before = orbit_core::test_support::job_run_full_step_reads();
+    let response = call(&runtime, json!({"kind": "delivery_stale_base"}), &operator);
+    let items = response["items"].as_array().unwrap();
+    assert_eq!(items.len(), 1, "{response}");
+    assert_eq!(items[0]["detail"]["base"], "release", "{response}");
+    assert_eq!(items[0]["detail"]["ahead"], 1, "{response}");
+    assert_eq!(items[0]["detail"]["behind"], 1, "{response}");
+    assert!(
+        response["degraded"].as_array().unwrap().is_empty(),
+        "complete observation within scan budget should not degrade: {response}"
+    );
+    assert_eq!(
+        orbit_core::test_support::job_run_full_step_reads() - full_steps_before,
+        0
+    );
+
+    // Replica behavior stays intact under crowded history.
+    let replica = runtime
+        .clone()
+        .with_coordination_write_owner(Some("hm_owner".into()));
+    let mut aggregator = operator.clone();
+    aggregator.mcp_client_name = Some("orbit-federated-mux".into());
+    let candidate = call(
+        &replica,
+        json!({"kind": "delivery_stale_base", "candidate_read": true}),
+        &aggregator,
+    );
+    assert!(
+        candidate["items"].as_array().unwrap().is_empty(),
+        "{candidate}"
+    );
+    assert!(
+        candidate["degraded"].as_array().unwrap().is_empty(),
+        "{candidate}"
+    );
+    let direct = call(&replica, json!({"kind": "delivery_stale_base"}), &operator);
+    assert!(direct["items"].as_array().unwrap().is_empty(), "{direct}");
+    assert_eq!(
+        direct["degraded"][0]["code"], "source_unavailable",
+        "{direct}"
+    );
+
+    // Resolving `release` clears the alert cleanly.
+    record_setup_run(
+        &runtime,
+        SetupRun::at(
+            "task_local_pipeline",
+            json!({"base_branch": "release", "base_sync": "local"}),
+            now + Duration::minutes(6),
+            JobRunState::Success,
+            None,
+        ),
+    );
+    let cleared = call(&runtime, json!({"kind": "delivery_stale_base"}), &operator);
+    assert!(cleared["items"].as_array().unwrap().is_empty(), "{cleared}");
+    assert!(
+        cleared["degraded"].as_array().unwrap().is_empty(),
+        "{cleared}"
+    );
+}
+
+#[test]
+fn stale_owner_base_attention_reports_incomplete_coverage_when_scan_budget_exhausted() {
+    let (root, runtime) = attention_runtime();
+    let repo = root.path().join("repo");
+    let (base, local, remote) = setup_diverged_owner_base(&repo);
+
+    run_git(&repo, &["checkout", "-b", "release", &base]);
+    run_git(
+        &repo,
+        &["commit", "--allow-empty", "-m", "release local [ORB-298]"],
+    );
+    let release_local = run_git(&repo, &["rev-parse", "HEAD"]);
+    run_git(
+        &repo,
+        &["update-ref", "refs/remotes/origin/release", &remote],
+    );
+    run_git(&repo, &["checkout", "agent-main"]);
+
+    let now = Utc::now() - Duration::minutes(10);
+    // Older unresolved hold on `release` sits beyond the 1024-row scan budget.
+    record_setup_run(
+        &runtime,
+        SetupRun::at(
+            "task_local_pipeline",
+            json!({"base_branch": "release", "base_sync": "local"}),
+            now,
+            JobRunState::Held,
+            Some(diverged_hold_message(
+                &repo,
+                "release",
+                &release_local,
+                &remote,
+            )),
+        ),
+    );
+
+    insert_held_setup_runs_batch(
+        &runtime,
+        1050,
+        now + Duration::seconds(1),
+        "agent-main",
+        &diverged_hold_message(&repo, "agent-main", &local, &remote),
+        "budget-main",
+    );
+    record_setup_run(
+        &runtime,
+        SetupRun::at(
+            "task_local_pipeline",
+            json!({"base_branch": "agent-main", "base_sync": "local"}),
+            now + Duration::minutes(5),
+            JobRunState::Success,
+            None,
+        ),
+    );
+
+    let operator = session(McpCapability::Operator);
+    let full_steps_before = orbit_core::test_support::job_run_full_step_reads();
+    let rows_before = orbit_core::test_support::job_run_rows_hydrated();
+    let response = call(&runtime, json!({"kind": "delivery_stale_base"}), &operator);
+    assert!(
+        response["items"].as_array().unwrap().is_empty(),
+        "holds past the scan budget are not observed: {response}"
+    );
+    let degraded = response["degraded"].as_array().unwrap();
+    assert!(
+        degraded.iter().any(|entry| {
+            entry["kind"] == "delivery_stale_base"
+                && entry["code"] == "source_unavailable"
+                && entry["message"]
+                    .as_str()
+                    .is_some_and(|message| message.contains("scan budget"))
+        }),
+        "exhausted scan budget must report incomplete coverage: {response}"
+    );
+    assert_eq!(
+        orbit_core::test_support::job_run_full_step_reads() - full_steps_before,
+        0
+    );
+    let hydrated = orbit_core::test_support::job_run_rows_hydrated() - rows_before;
+    assert!(
+        hydrated <= 1025,
+        "scan must stay bounded at 1024 held rows plus 1 clearing row, got {hydrated}"
+    );
+}
