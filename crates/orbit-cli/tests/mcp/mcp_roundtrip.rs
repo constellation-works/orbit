@@ -74,6 +74,13 @@ const SSH_ENV: (&str, &str) = ("SSH_CONNECTION", "192.0.2.8 43100 198.51.100.2 2
 /// The one `workspace` description every advertised selector uses.
 const SHARED_WORKSPACE_DESCRIPTION: &str = "Workspace selector from orbit_workspace_list.";
 
+/// Child `RUST_LOG` for the task-show stderr check. `orbit.common.fs.file_lock`
+/// warns when a lock wait or hold crosses its threshold, and its lock path can
+/// name the workspace directory (ORB-29891). Under runner contention that warning
+/// fires in one child and not another, so this target is silenced; every other
+/// warning stays enabled, as in a normal CLI run.
+const TASK_SHOW_STDERR_LOG_FILTER: &str = "warn,orbit.common.fs.file_lock=off";
+
 // ---------------------------------------------------------------------------
 // Fixture: an initialized Orbit workspace fully isolated from ~/.orbit.
 // ---------------------------------------------------------------------------
@@ -5176,11 +5183,15 @@ fn task_show_is_global_by_default_across_tool_run_and_mcp() {
     let scratch = workspace.scratch("scratch");
 
     for cwd in [&worktree, &elsewhere, &scratch] {
-        let output = cli_ok(
-            cwd,
-            &workspace.home,
-            &["tool", "run", "orbit.task.show", "--input", &show_input],
-        );
+        let mut command = McpWorkspace::orbit_command(cwd, &workspace.home);
+        command.env("RUST_LOG", TASK_SHOW_STDERR_LOG_FILTER).args([
+            "tool",
+            "run",
+            "orbit.task.show",
+            "--input",
+            show_input.as_str(),
+        ]);
+        let output = orbit_ok(&mut command);
         let stderr = stderr(&output);
         assert!(output.status.success());
         assert!(
