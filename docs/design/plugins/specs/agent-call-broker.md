@@ -221,11 +221,12 @@ activity-dependent scopes below. The binding, not the request, supplies the
 owner's workspace, so the owner answers only from that workspace, and a task show or ordinary
 artifact get naming a task the owner does not hold there is refused as `claimed_owner_bridge_refused`
 after a task-only check on the owner. An artifact put names the claimed task. A new task must name the
-claimed task as `spawned_from`, and may relate to nothing else, except that a claimed review
-task's finding may also name the task that introduced it as `regression_from` ([ORB-14792]); a
-friction may name only the claimed task as the one it was found during. A notice is
-stored only on the owner and attributed to the claim's task and run; its request's
-`orchestrator` attribution never crosses the broker. Internal
+claimed task as `spawned_from` while the claim is active, and may relate to nothing else, except that
+a claimed review or QA task's finding may also name the task that introduced it as `regression_from`
+([ORB-14792]), when the claimed task carries a finding-filing provenance tag or the area-task tags
+(the `regression_from` rule below lists them); a friction may name only the claimed task as the one it
+was found during. A notice is stored only on the owner and attributed to the claim's task and run; its
+request's `orchestrator` attribution never crosses the broker. Internal
 (`_`-prefixed) fields are refused; task show and artifact calls also use closed field
 allowlists. The activity's own tool policy still applies.
 For `orbit.task.show`, supplying `limit`, `comments_offset`, `history_offset` or
@@ -603,7 +604,8 @@ service side regardless.
   the one audit row (brokered, peer PID, the run's task and activity); the owner's row names the
   follower as caller over `ssh-mcp`. On the owner, a claimed worker's `orbit.task.add` is taken
   only while its claim is active and only `spawned_from` the claimed task, plus, for a claimed
-  review task, `regression_from` a task in the owner's workspace.
+  review or QA task that files regression findings (the tags in the `regression_from` rule in §3),
+  `regression_from` a task in the owner's workspace.
 - `crates/orbit-cli/tests/tool/claimed_review_bridge_sandbox.rs` drives a reviewer inside the
   real agent sandbox (Bubblewrap on Linux, `sandbox-exec` on macOS) through both the CLI and
   MCP against a real owner home reached by an `ssh` stand-in that needs `~/.ssh/known_hosts`,
@@ -809,7 +811,7 @@ anything:
 | Peer authentication fails | The connection is closed with no reply. The client reports `plugin_broker_unavailable` and the host logs the refusal. |
 | The client disconnects mid-call | The backend's process group is killed. A reported rotation is still applied. |
 | A claimed reviewer's artifact call arrives after its reviewer finished, or outside the reviewer activity | `plugin_broker_refused` with `review_attempt_stale` or `claimed_review_bridge_refused`; nothing reaches the owner. The reviewer reports `incomplete`, and the next run admits a fresh attempt. |
-| A claimed worker's ordinary owner call writes to another task, names an unsupported relation or field, or reads a task outside the claimed workspace | `plugin_broker_refused` with `claimed_owner_bridge_refused`; nothing reaches the owner, except the read whose not-found tells the broker the task is outside the claimed workspace. A `regression_from` relation reaches the owner, which refuses it with `PolicyDenied` unless the claimed task is a review task and the target is a task in its workspace. |
+| A claimed worker's ordinary owner call writes to another task, names an unsupported relation or field, or reads a task outside the claimed workspace | `plugin_broker_refused` with `claimed_owner_bridge_refused`; nothing reaches the owner, except the read whose not-found tells the broker the task is outside the claimed workspace. A `regression_from` relation reaches the owner, which refuses it with `PolicyDenied` unless the claimed task is a finding-filing review or QA task (the `regression_from` rule in §3) and the target is a task in its workspace. |
 | A claimed worker remotely reads another task's `review-*` artifact | `plugin_broker_refused` with `claimed_owner_bridge_refused` before any activity-dependent scope in §3; nothing reaches the owner. The claimed-task check runs first for every activity, so an ordinary `agent_implement` read of another task's `review-report.json` or `review-manifest.json` never reaches the reviewer activity check. Same-task reads keep the §3 scopes: an ordinary `agent_implement` read of its own task's `review-report.json` or `review-manifest.json` fails the reviewer activity check with `claimed_review_bridge_refused`, while an admitted reviewer, a live final recovery and the findings-read route serve their own named artifacts. |
 | A claimed final recovery writes a `review-*` artifact, reads one outside the gate's named evidence, or reads after its recovery decided or its claim began settling; or any claimed worker asks for another run's delivery of its claimed task | `plugin_broker_refused` with `review_write_refused`, `review_read_refused`, `final_recovery_stale`, `claim_not_live` or `delivery_run_refused`; nothing reaches the owner. The final-recovery prompt treats a refused read as a gap in its evidence, not a reason to stop. |
 | A claimed worker's owner call cannot reach the broker | `owner_route_unavailable`, `retryable: false`, naming this run's coordinator as stopped (or `ORBIT_PLUGIN_BROKER` as unset). The agent ends its step on that code and must not route around the sandbox. The run skips step and final recovery, and a pull drain preserves release evidence, the owner holds the task for an operator decision, and the drain suppresses its host for the window. |
