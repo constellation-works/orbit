@@ -34,8 +34,10 @@ spec:
   # When the matching backend's native primitive is unavailable (bwrap absent
   # or failing its probe, or sandbox-exec missing), the step fails unless
   # `allow_fallback: true` permits bare execution without its policy or masks.
-  # Other setup or spawn errors do not trigger fallback. Each step reports the
-  # backend it actually ran under.
+  # Other setup or spawn errors do not trigger fallback. A succeeding step
+  # reports the backend it ran under in its output's `sandbox` field: `none`
+  # when no sandbox is declared, `bare-fallback` after a permitted fallback. A
+  # failed step keeps only a bounded diagnostic with no `sandbox` field.
   executor_type: local_shell
   args: []
   env: {}

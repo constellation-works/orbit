@@ -89,8 +89,9 @@ A job that needs a different command declares a different activity.
 ```
 
 `sandbox` names the backend the child actually ran under (`linux-bwrap`,
-`macos-sandbox-exec`, `bare-fallback`, or `none`), so a run record never leaves
-the containment question implicit.
+`macos-sandbox-exec`, `bare-fallback`, `off`, or `none`) on every succeeding
+step. A failed step persists only the bounded diagnostic below, which has no
+`sandbox` field, so that run record does not name the backend.
 
 A nonzero exit, a timeout, or a child terminated by a signal fails the step
 unless `allow_nonzero_exit` is set; the failure message names the program, the
