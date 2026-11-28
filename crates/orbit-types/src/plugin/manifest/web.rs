@@ -34,6 +34,13 @@ pub const PAGE_STYLE_EXTENSION: &str = ".css";
 /// and style (2 MiB).
 pub const MAX_PAGE_BYTES: u64 = 2 * 1024 * 1024;
 
+/// The most files one page may list across `scripts` and `styles`.
+pub const MAX_PAGE_FILES: usize = 2_048;
+
+/// The most bytes one page's listed `scripts` and `styles` file names may
+/// total (512 KiB).
+pub const MAX_PAGE_NAME_BYTES: usize = 512 * 1024;
+
 /// Text a page's markup may not hold, compared without ASCII case: Orbit
 /// writes the page's scripts and styles itself.
 pub const PAGE_MARKUP_REFUSED: &[&str] = &["<script", "<link"];

@@ -1,8 +1,8 @@
 use orbit_types::plugin::{
-    PluginBackend, PluginBackendType, PluginCliShape, PluginExecutionKind, PluginManifest,
-    PluginMcpScope, PluginMetadata, PluginPanelGroup, PluginPanelRender, PluginPermissions,
-    PluginRequires, PluginSandbox, PluginSpec, PluginToolSpec, PluginWebLink, PluginWebPanel,
-    PluginWebSection,
+    MAX_PAGE_FILES, MAX_PAGE_NAME_BYTES, PluginBackend, PluginBackendType, PluginCliShape,
+    PluginExecutionKind, PluginManifest, PluginMcpScope, PluginMetadata, PluginPanelGroup,
+    PluginPanelRender, PluginPermissions, PluginRequires, PluginSandbox, PluginSpec,
+    PluginToolSpec, PluginWebLink, PluginWebPage, PluginWebPanel, PluginWebSection,
 };
 
 const BUILD_MANIFEST: &str = r#"
@@ -389,5 +389,64 @@ fn digit_leading_names_are_refused_with_the_initial_letter_rule() {
         error.message.contains(RULE),
         "a digit-leading panel id must state the initial-letter rule [ORB-28536]: {}",
         error.message
+    );
+}
+
+#[test]
+fn page_manifest_enforces_file_count_and_name_byte_bounds() {
+    let page_with_styles = |styles: Vec<String>| -> PluginManifest {
+        let mut manifest = minimal();
+        manifest.spec.web = Some(PluginWebSection {
+            panels: vec![],
+            links: vec![],
+            pages: vec![PluginWebPage {
+                id: "overview".into(),
+                title: "Overview".into(),
+                root: "web/overview".into(),
+                scripts: vec![],
+                styles,
+                kit: None,
+                tools: vec![],
+                actions: vec![],
+            }],
+        });
+        manifest
+    };
+
+    let within_bounds: Vec<String> = (0..2_000)
+        .map(|index| format!("styles/{index:0188}.css"))
+        .collect();
+    page_with_styles(within_bounds)
+        .validate_structure()
+        .expect("2,000 199-byte style names stay within file-count and name-byte bounds");
+
+    let too_many_files: Vec<String> = (0..=MAX_PAGE_FILES)
+        .map(|index| format!("s{index}.css"))
+        .collect();
+    let error = page_with_styles(too_many_files)
+        .validate_structure()
+        .unwrap_err();
+    assert_eq!(error.field, "spec.web.pages[0]");
+    assert!(
+        error
+            .message
+            .contains(&format!("at most {MAX_PAGE_FILES} files")),
+        "{error:?}"
+    );
+
+    let name_len = 2_625;
+    let count = MAX_PAGE_NAME_BYTES / name_len + 1;
+    let names_too_large: Vec<String> = (0..count)
+        .map(|index| format!("styles/{index:0width$}.css", width = name_len - 11))
+        .collect();
+    let error = page_with_styles(names_too_large)
+        .validate_structure()
+        .unwrap_err();
+    assert!(error.field.starts_with("spec.web.pages[0].styles["));
+    assert!(
+        error
+            .message
+            .contains(&format!("at most {MAX_PAGE_NAME_BYTES} bytes")),
+        "{error:?}"
     );
 }

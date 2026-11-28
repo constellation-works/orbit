@@ -7,8 +7,9 @@
 use std::path::{Path, PathBuf};
 
 use orbit_tools::plugin::{
-    MAX_PLUGIN_PAGE_BYTES, PluginValidationPolicy, load_plugin_dir, load_plugin_dir_without_tests,
-    page_digest_diagnostic, plugin_pages_unchanged, validate_loaded_plugin,
+    MAX_PLUGIN_PAGE_BYTES, MAX_PLUGIN_PAGE_FILES, MAX_PLUGIN_PAGE_NAME_BYTES,
+    PluginValidationPolicy, load_plugin_dir, load_plugin_dir_without_tests, page_digest_diagnostic,
+    plugin_pages_unchanged, validate_loaded_plugin,
 };
 
 const PAGE_ROOT: &str = "web/overview";
@@ -142,6 +143,8 @@ fn validate_refuses_each_unsafe_page_by_name() {
     let with_tools = |tools: &str| VALID_PAGE.replace("tools: [status]", tools);
 
     let size_bound = format!("at most {MAX_PLUGIN_PAGE_BYTES} bytes (2 MiB)");
+    let file_count_bound = format!("at most {MAX_PLUGIN_PAGE_FILES} files");
+    let name_bytes_bound = format!("at most {MAX_PLUGIN_PAGE_NAME_BYTES} bytes");
     let cases: Vec<(&str, tempfile::TempDir, &str)> = vec![
         (
             "a tool of another plugin",
@@ -290,6 +293,40 @@ fn validate_refuses_each_unsafe_page_by_name() {
                 std::fs::write(page_file(temp, "app.js"), big).unwrap()
             }),
             &size_bound,
+        ),
+        (
+            "a page listing too many files",
+            mutate(
+                &VALID_PAGE.replace(
+                    "styles: [app.css]",
+                    &format!(
+                        "styles: [{}]",
+                        (0..=MAX_PLUGIN_PAGE_FILES)
+                            .map(|index| format!("s{index}.css"))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ),
+                ),
+                &none,
+            ),
+            &file_count_bound,
+        ),
+        (
+            "a page whose listed file names exceed the name-bytes bound",
+            mutate(
+                &VALID_PAGE.replace(
+                    "styles: [app.css]",
+                    &format!(
+                        "styles: [{}]",
+                        (0..(MAX_PLUGIN_PAGE_NAME_BYTES / 2_625 + 1))
+                            .map(|index| format!("s{index:02620}.css"))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ),
+                ),
+                &none,
+            ),
+            &name_bytes_bound,
         ),
     ];
     for (case, temp, expect) in &cases {

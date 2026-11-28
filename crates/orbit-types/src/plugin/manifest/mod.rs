@@ -25,9 +25,9 @@ pub use model::{
 };
 pub use validate::{plugin_provenance_label, validate_plugin_relative_path};
 pub use web::{
-    DEFAULT_PANEL_REFRESH_MS, KNOWN_PAGE_KITS, LINK_URL_SCHEMES, MAX_PAGE_BYTES,
-    MAX_PANEL_REFRESH_MS, MIN_PANEL_REFRESH_MS, PAGE_INDEX_FILE, PAGE_MARKUP_REFUSED,
-    PAGE_SCRIPT_EXTENSIONS, PAGE_SCRIPT_REFUSED, PAGE_STYLE_EXTENSION, PAGE_STYLE_REFUSED,
-    PANEL_SOURCE_TOOL_PREFIX, PluginPanelGroup, PluginPanelRender, PluginWebLink, PluginWebPage,
-    PluginWebPanel, PluginWebSection, find_page_refused,
+    DEFAULT_PANEL_REFRESH_MS, KNOWN_PAGE_KITS, LINK_URL_SCHEMES, MAX_PAGE_BYTES, MAX_PAGE_FILES,
+    MAX_PAGE_NAME_BYTES, MAX_PANEL_REFRESH_MS, MIN_PANEL_REFRESH_MS, PAGE_INDEX_FILE,
+    PAGE_MARKUP_REFUSED, PAGE_SCRIPT_EXTENSIONS, PAGE_SCRIPT_REFUSED, PAGE_STYLE_EXTENSION,
+    PAGE_STYLE_REFUSED, PANEL_SOURCE_TOOL_PREFIX, PluginPanelGroup, PluginPanelRender,
+    PluginWebLink, PluginWebPage, PluginWebPanel, PluginWebSection, find_page_refused,
 };

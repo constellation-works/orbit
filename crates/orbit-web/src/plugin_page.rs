@@ -23,8 +23,9 @@ use base64::Engine as _;
 use orbit_common::OrbitError;
 use orbit_core::app::plugin::{PageCall, PageSource};
 use orbit_types::plugin::{
-    KNOWN_PAGE_KITS, MAX_PAGE_BYTES, PAGE_MARKUP_REFUSED, PAGE_SCRIPT_EXTENSIONS,
-    PAGE_SCRIPT_REFUSED, PAGE_STYLE_EXTENSION, PAGE_STYLE_REFUSED, find_page_refused,
+    KNOWN_PAGE_KITS, MAX_PAGE_BYTES, MAX_PAGE_FILES, MAX_PAGE_NAME_BYTES, PAGE_MARKUP_REFUSED,
+    PAGE_SCRIPT_EXTENSIONS, PAGE_SCRIPT_REFUSED, PAGE_STYLE_EXTENSION, PAGE_STYLE_REFUSED,
+    find_page_refused,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -49,10 +50,26 @@ pub(crate) const ACTION_CONFIRMATION_TTL: Duration = Duration::from_secs(300);
 /// refused with `busy` until one is used or expires.
 pub(crate) const ACTION_CONFIRMATION_LIMIT: usize = 32;
 
-/// The most bytes of a remote parts response this dashboard reads: the page
-/// bound in base64, plus room for names and the JSON around them.
+/// Fixed JSON syntax per listed file in [`parts_json`]:
+/// `{"content":"","name":""},`.
+const REMOTE_PART_ENTRY_OVERHEAD_BYTES: usize = 25;
+
+/// Fixed top-level JSON envelope around [`parts_json`], with headroom for
+/// `kit`.
+const REMOTE_PARTS_ENVELOPE_BYTES: usize = 128;
+
+/// Worst-case wire escaping factor for a UTF-8 file name in JSON (`\u00xx`).
+const JSON_STRING_MAX_ESCAPE_FACTOR: usize = 6;
+
+/// The most bytes of a remote parts response this dashboard reads: the
+/// worst-case JSON serialization of any locally valid page (`MAX_PAGE_BYTES`
+/// across `index.html`, scripts and styles, at most `MAX_PAGE_FILES` listed
+/// files, and at most `MAX_PAGE_NAME_BYTES` across their names).
 pub(crate) const REMOTE_PARTS_LIMIT_BYTES: usize =
-    (MAX_PAGE_BYTES as usize).div_ceil(3) * 4 + 256 * 1024;
+    ((MAX_PAGE_BYTES as usize) * 4 + 8 * (MAX_PAGE_FILES + 1)).div_ceil(3)
+        + MAX_PAGE_FILES * REMOTE_PART_ENTRY_OVERHEAD_BYTES
+        + MAX_PAGE_NAME_BYTES * JSON_STRING_MAX_ESCAPE_FACTOR
+        + REMOTE_PARTS_ENVELOPE_BYTES;
 
 /// The frame policy of design §2 before its `script-src` hashes.
 const POLICY_HEAD: &str = "sandbox allow-scripts; default-src 'none'; script-src";
@@ -457,7 +474,8 @@ fn borrow_files(files: &[(String, Vec<u8>)]) -> Vec<(&str, &[u8])> {
 /// dashboard does not know, `<script` or `<link` in the markup, `</script`
 /// or `<!--` in a script, `</style` in a style, a script name not ending in
 /// `.js` or `.mjs`, a style name not ending in `.css`, and a page over the
-/// size bound. `Err` is the diagnostic shown in the page's place.
+/// file-count, name-bytes or content-size bounds. `Err` is the diagnostic
+/// shown in the page's place.
 pub(crate) fn check_remote_parts(body: &[u8]) -> Result<RemoteParts, String> {
     let wire: WireParts = serde_json::from_slice(body)
         .map_err(|error| format!("its page parts are not valid JSON: {error}"))?;
@@ -474,6 +492,13 @@ pub(crate) fn check_remote_parts(body: &[u8]) -> Result<RemoteParts, String> {
             "the page names kit version {kit}, which this dashboard does not know"
         ));
     }
+    let file_count = wire.scripts.len().saturating_add(wire.styles.len());
+    if file_count > MAX_PAGE_FILES {
+        return Err(format!(
+            "the page lists {file_count} files across `scripts` and `styles`; a page may list \
+             at most {MAX_PAGE_FILES} files"
+        ));
+    }
     let decode = |label: &str, content: &str| {
         base64::engine::general_purpose::STANDARD
             .decode(content)
@@ -487,8 +512,10 @@ pub(crate) fn check_remote_parts(body: &[u8]) -> Result<RemoteParts, String> {
              by the dashboard"
         ));
     }
+    let mut name_bytes: usize = 0;
     let mut scripts = Vec::with_capacity(wire.scripts.len());
     for file in wire.scripts {
+        add_remote_name_bytes(&mut name_bytes, &file.name)?;
         if !PAGE_SCRIPT_EXTENSIONS
             .iter()
             .any(|extension| file.name.ends_with(extension))
@@ -510,6 +537,7 @@ pub(crate) fn check_remote_parts(body: &[u8]) -> Result<RemoteParts, String> {
     }
     let mut styles = Vec::with_capacity(wire.styles.len());
     for file in wire.styles {
+        add_remote_name_bytes(&mut name_bytes, &file.name)?;
         if !file.name.ends_with(PAGE_STYLE_EXTENSION) {
             return Err(format!("style '{}' does not end in `.css`", file.name));
         }
@@ -535,6 +563,17 @@ pub(crate) fn check_remote_parts(body: &[u8]) -> Result<RemoteParts, String> {
         scripts,
         styles,
     })
+}
+
+fn add_remote_name_bytes(total: &mut usize, name: &str) -> Result<(), String> {
+    *total = total.saturating_add(name.len());
+    if *total > MAX_PAGE_NAME_BYTES {
+        return Err(format!(
+            "the page lists at least {total} bytes of file names across `scripts` and `styles`; \
+             a page's listed file names may total at most {MAX_PAGE_NAME_BYTES} bytes"
+        ));
+    }
+    Ok(())
 }
 
 /// Write one page as a document: the kit's stylesheet and each listed style
