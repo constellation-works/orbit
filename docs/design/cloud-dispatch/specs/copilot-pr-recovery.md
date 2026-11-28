@@ -15,7 +15,7 @@ last_validated: 2026-11-03
 
 Proposal only. Nothing here enables Copilot, sends a prompt, changes current
 auto-fix routing, or grants merge authority. The existing
-[cloud-dispatch scope](../1_scope.md) concerns new Claude cloud deliveries;
+[cloud-dispatch scope](../1_overview.md) concerns new Claude cloud deliveries;
 this companion covers repair of an already published candidate. Its phases
 are independent of that proposal's PTY/session implementation.
 

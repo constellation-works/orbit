@@ -879,7 +879,7 @@ the measure of how well the self-check worked.
 
 ### 12.1 The experiment
 
-One experiment ([experiments](../../experiments/1_scope.md)) in each workspace that runs it:
+One experiment ([experiments](../../experiments/1_overview.md)) in each workspace that runs it:
 
 - **Population:** tasks tagged `verify-mock-ui`, excluding `no-diff-expected`.
 - **Arms:** `control` with `visual_review.reviewer = false` (self-check, capture and checks

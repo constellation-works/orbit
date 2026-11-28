@@ -36,7 +36,7 @@ Bearing: which crews may run a tier is the operator's pool configuration
 the drawn crew and its `crew_source` back to the task. A crew is a model, a provider and an
 optional reasoning `effort`. The
 [agent scorecards](../../agent-scorecards/2_design.md) score implementers per tier.
-[Experiments](../../experiments/1_scope.md) randomise tasks between arms, one of which can be a
+[Experiments](../../experiments/1_overview.md) randomise tasks between arms, one of which can be a
 crew pool, read outcomes per arm (done rate, first-pass acceptance, repairs, recoveries,
 escaped regressions, `cost_usd`) and file a proposed promotion task on an operator's
 conclusion. `exp-4e3e0399` (half of medium to luna, haiku and muse-spark) is the first crew
@@ -448,7 +448,7 @@ Ladder trials count toward `experiments.max_running`, and need `experiments.enab
 - [ORB-20221] — repaired trial reconciliation across runtime configuration reloads
 - [ORB-20704] — demoted the unproven monthly review default while preserving workspace copies
 
-The reused machinery is in the [experiments](../../experiments/1_scope.md) and
+The reused machinery is in the [experiments](../../experiments/1_overview.md) and
 [crew performance](../crew-performance/1_scope.md) designs.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

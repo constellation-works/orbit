@@ -1,6 +1,6 @@
 //! Workspace presets: a validated file `orbit workspace init --preset <file>`
 //! applies to a new or existing workspace (design
-//! `docs/design/distributions/1_scope.md`).
+//! `docs/design/distributions/2_design.md`).
 //!
 //! A preset is data a distribution ships. It may set the seeding policy
 //! (`[seeding]`), enable definitions a plugin already seeded into the

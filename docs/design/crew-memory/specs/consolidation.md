@@ -168,7 +168,7 @@ Orbit enforces the first two at write time and refuses a write that breaks one.
 
 ## 6. Measurement Changes
 
-These belong to [experiments](../../experiments/1_scope.md) and are worth having whether or
+These belong to [experiments](../../experiments/1_overview.md) and are worth having whether or
 not memory survives.
 
 - **Reviewer strata.** For every review-derived metric the readout reports the difference

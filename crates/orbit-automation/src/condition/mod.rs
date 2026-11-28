@@ -1,7 +1,7 @@
 //! Condition triggers: the CEL environment for `task` and `workspace` scopes,
 //! the load-time checker, the pure evaluation behind `orbit automation
 //! explain`, the edge rules, and the protocol that fires each edge once
-//! (`docs/design/condition-triggers/1_scope.md`); and the typed wait
+//! (`docs/design/condition-triggers/2_design.md`); and the typed wait
 //! environment, load-time checks and pass evaluation of a job's auto-task
 //! steps [ORB-20157, ORB-20158].
 

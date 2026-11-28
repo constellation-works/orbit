@@ -1,6 +1,6 @@
 //! Durable condition-trigger state: per-subject arm states, holds and fire
 //! records, kept in the owner's automation store in their own rows
-//! (`docs/design/condition-triggers/1_scope.md` §3, §10).
+//! (`docs/design/condition-triggers/2_design.md` §3, §10).
 //!
 //! This is persisted shape only. The edge rules that move it live in
 //! `orbit-automation`'s `condition` module.

@@ -10,13 +10,13 @@ Live task progress is in Orbit; this board records what the feature lead last se
 
 | Feature | Next | Lead |
 | --- | --- | --- |
-| [Application Approvals](./application-approvals/1_scope.md) | Orbit slices 1-5 shipped; office profile remains ORB-20363, compatibility retirement ORB-21043 | claude |
+| [Application Approvals](./application-approvals/1_overview.md) | Orbit slices 1-5 shipped; office profile remains ORB-20363, compatibility retirement ORB-21043 | claude |
 | [Architecture Restructure](./architecture-restructure/1_overview.md) | Finish routing surface commands through exec: ORB-28400, then ORB-28401 to ORB-28407 | claude |
-| [Backlog Forecast](./backlog-forecast/1_scope.md) | Residual rules (review phases, shadow resource-fit, follower capacity, richer calibration) are not filed | claude |
-| [Claude Code Mod](./claude-code-mod/1_scope.md) | Trial peer-message links in Claude Code [ORB-28918] | claude |
-| [Condition Triggers](./condition-triggers/1_scope.md) | File phase 3: host scope and notifications | claude |
-| [Doc Layout](./doc-layout/1_scope.md) | Phase 2: the four principle pages [ORB-29312, ORB-29313, ORB-29314, ORB-29315] | claude |
-| [Experiments](./experiments/1_scope.md) | The horizon decision-channel step remains unfiled | claude |
+| [Backlog Forecast](./backlog-forecast/1_overview.md) | Residual rules (review phases, shadow resource-fit, follower capacity, richer calibration) are not filed | claude |
+| [Claude Code Mod](./claude-code-mod/1_overview.md) | Trial peer-message links in Claude Code [ORB-28918] | claude |
+| [Condition Triggers](./condition-triggers/1_overview.md) | File phase 3: host scope and notifications | claude |
+| [Doc Layout](./doc-layout/1_overview.md) | Phase 2: the four principle pages [ORB-29312, ORB-29313, ORB-29314, ORB-29315] | claude |
+| [Experiments](./experiments/1_overview.md) | The horizon decision-channel step remains unfiled | claude |
 | [Model Ranking](./model-ranking/1_overview.md) | R4 has no open task (ORB-23305 rejected): file the freeze and 4-week shadow run | claude |
 | [Operations as Data](./operations-as-data/1_overview.md) | Restore ORB-15934 after 2026-11-12 to refuse unknown fields | claude |
 | [Plugin Pages](./plugin-pages/1_overview.md) | Add the Plugins sub-tabs, the page frame and the bridge relay [ORB-29537] | claude |
@@ -28,7 +28,7 @@ Live task progress is in Orbit; this board records what the feature lead last se
 
 | Feature | Next | Lead |
 | --- | --- | --- |
-| [Cloud Dispatch](./cloud-dispatch/1_scope.md) | Review the Copilot existing-PR recovery companion; the Claude phase 0 spike remains pending | claude |
+| [Cloud Dispatch](./cloud-dispatch/1_overview.md) | Review the Copilot existing-PR recovery companion; the Claude phase 0 spike remains pending | claude |
 | [Context Index](./context-index/1_overview.md) | Decide from the [ORB-24866] measurement whether to file 2_design.md §13 tasks 1–5 in ws_orbit-graph | claude |
 | [Eval Harness](./eval-harness/1_overview.md) | Daniel accepted every recommendation in 2_design.md §14; file build-order tasks 1 to 5 once he names the Q7 spend cap and confirms the Q2 box | claude |
 | [Owner Failover](./owner-failover/1_overview.md) | Daniel reviews the proposal and answers its open questions | claude |
@@ -48,9 +48,9 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Auto-concurrency](./auto-concurrency/1_overview.md) | Operator decides when admission moves from shadow to forecast mode | claude |
 | [Auto-tasks](./auto-tasks/1_overview.md) | — | claude |
 | [Automation Triggers](./automation-triggers/1_overview.md) | — | codex |
-| [Crew Credentials](./crew-credentials/1_scope.md) | — | claude |
+| [Crew Credentials](./crew-credentials/1_overview.md) | — | claude |
 | [Distributed Drain](./distributed-drain/1_overview.md) | — | claude |
-| [Distributions](./distributions/1_scope.md) | — | claude |
+| [Distributions](./distributions/1_overview.md) | — | claude |
 | [Executors](./executors/4_decisions.md) | — | claude |
 | [Federated MCP](./federated-mcp/1_overview.md) | — | grok |
 | [Fleet Notices](./fleet-notices/1_overview.md) | — | claude |
@@ -84,7 +84,7 @@ Live task progress is in Orbit; this board records what the feature lead last se
 
 | Feature | Next | Lead |
 | --- | --- | --- |
-| [Conflict Budget](./conflict-budget/1_scope.md) | Parked for free time (Daniel, 2026-11-02); on pickup settle open questions, file phase 1 | claude |
+| [Conflict Budget](./conflict-budget/1_overview.md) | Parked for free time (Daniel, 2026-11-02); on pickup settle open questions, file phase 1 | claude |
 | [Crew Memory](./crew-memory/1_overview.md) | Parked after exp-5342a4d6's no-difference readout (2026-11-21); on pickup, run a variant experiment on the dormant machinery, such as the consolidation redesign in specs/consolidation.md | claude |
 | [Path Leases](./path-leases/1_overview.md) | Restore the config keys, CLI and MCP tools withdrawn in ORB-22808 before any host enables leases | claude |
 | [Project Learnings](./project-learnings/4_decisions.md) | Retired by decision (ORB-10736); candidate to move under _archived | claude |

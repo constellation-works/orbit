@@ -220,7 +220,7 @@ revision.
 Waiting costs one store read per mandate per tick and starts no agent. That is what "waiting is a
 cheap no-op" means here.
 
-Why a typed kind and not a [condition trigger](../condition-triggers/1_scope.md)? A condition fires
+Why a typed kind and not a [condition trigger](../condition-triggers/1_overview.md)? A condition fires
 once per subject edge of a predicate. A resident needs "anything in this set changed since my last
 checkpoint", with the checkpoint as the cursor, plus a heartbeat and a floor. That is one
 observation rule, not an expression. Workspaces may still add condition-triggered routines that call

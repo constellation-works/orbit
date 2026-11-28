@@ -22,7 +22,7 @@ The eval harness is a proposed Orbit plugin (`eval`) with two jobs. **Replay** t
 
 ## 1. Motivation
 
-Orbit can compare crews only on live work today. [Experiments](../experiments/1_scope.md) assign each new task to one arm when it is first admitted, and [scorecards](../agent-scorecards/1_overview.md) and the [model ranking](../model-ranking/1_overview.md) summarise what landed. All three have the same two limits:
+Orbit can compare crews only on live work today. [Experiments](../experiments/1_overview.md) assign each new task to one arm when it is first admitted, and [scorecards](../agent-scorecards/1_overview.md) and the [model ranking](../model-ranking/1_overview.md) summarise what landed. All three have the same two limits:
 
 1. **One crew per task.** No task is ever implemented twice, so a difference between two crews is always mixed with a difference between the tasks they happened to get. It takes weeks of live traffic to average that out.
 2. **The candidate is real delivery.** Trying an unproven model means letting it ship work.
@@ -55,7 +55,7 @@ Nothing is implemented. The table maps each concern to where the design settles 
 | Replay: scoring, eval sets, readout | [2_design.md §5](./2_design.md#5-replay-outputs-and-scoring) to [§7](./2_design.md#7-replay-readout) | [experiment readout](../../../crates/orbit-core/src/app/experiment/readout), [model_prices.yaml](../../../crates/orbit-common/assets/model_prices.yaml) |
 | Bake-off: lifecycle, locks, review, pick, cleanup | [2_design.md §8](./2_design.md#8-bake-off-job) | [locks/index.rs](../../../crates/orbit-runtime/src/stored/locks/index.rs), [pr/open/superseded.rs](../../../crates/orbit-engine/src/executor/automation/vcs/pr/open/superseded.rs), [worktree/gc/sweep.rs](../../../crates/orbit-engine/src/executor/automation/vcs/worktree/gc/sweep.rs) |
 | Capacity and spend | [2_design.md §9](./2_design.md#9-capacity-and-spend) | [task.rs dispatch order](../../../crates/orbit-types/src/task/model/task.rs), [provider_limit/budget.rs](../../../crates/orbit-config/src/provider_limit/budget.rs) |
-| Relation to experiments | [2_design.md §10](./2_design.md#10-relation-to-live-experiments) | [experiments scope](../experiments/1_scope.md) |
+| Relation to experiments | [2_design.md §10](./2_design.md#10-relation-to-live-experiments) | [experiments scope](../experiments/1_overview.md) |
 | Plugin location, tools, schemas, authority | [2_design.md §11](./2_design.md#11-plugin-shape) | [plugins scope](../plugins/1_scope.md) |
 | Build order and open questions | [2_design.md §13](./2_design.md#13-build-order) and [§14](./2_design.md#14-open-questions-for-daniel) | — |
 

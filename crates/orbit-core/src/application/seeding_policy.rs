@@ -1,6 +1,6 @@
 //! The workspace seeding policy over Orbit's shipped default routines and
 //! auto-tasks (`seeding.routines`, `seeding.auto_tasks`; design
-//! `docs/design/distributions/1_scope.md`).
+//! `docs/design/distributions/2_design.md`).
 //!
 //! Every seeding path — `orbit workspace init`, re-init, `orbit workspace
 //! sync` and the create-only seeding host `orbit init` runs after an upgrade —

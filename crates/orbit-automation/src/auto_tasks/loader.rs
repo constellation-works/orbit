@@ -258,7 +258,7 @@ fn load_definition_with_settings(
 
 /// Type-check a definition's condition or `when:` guard against its schema,
 /// and refuse a `task` condition that would match its own template's output
-/// (`docs/design/condition-triggers/1_scope.md` §8). A refused expression
+/// (`docs/design/condition-triggers/2_design.md` §8). A refused expression
 /// names its clause and position; a self-match names the definition and
 /// `schedule.condition.when`.
 pub fn check_auto_task_conditions(definition: &AutoTaskDefinition) -> Result<(), String> {

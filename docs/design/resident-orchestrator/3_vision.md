@@ -91,7 +91,7 @@ escalation equation. It lives in a separate repository, cited here by name.
 
 ### Orbit-internal
 
-- [routines](../routines/1_overview.md), [condition-triggers](../condition-triggers/1_scope.md),
+- [routines](../routines/1_overview.md), [condition-triggers](../condition-triggers/1_overview.md),
   [activity-job](../activity-job/1_overview.md)
 - [human-decision-channel](../human-decision-channel/1_scope.md),
   [decision-assistance](../_archived/decision-assistance/1_scope.md) (archived)

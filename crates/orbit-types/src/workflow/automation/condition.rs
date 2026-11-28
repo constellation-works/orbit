@@ -4,7 +4,7 @@
 //! This is the persisted shape only. The expression language, its schema,
 //! the load-time checker and the edge rules live in `orbit-automation`. Task
 //! and workspace conditions fire on the workspace owner; host and file scopes
-//! parse and are refused (`docs/design/condition-triggers/1_scope.md`).
+//! parse and are refused (`docs/design/condition-triggers/2_design.md`).
 
 use serde::{Deserialize, Serialize};
 

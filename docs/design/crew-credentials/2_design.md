@@ -1,38 +1,20 @@
 ---
-title: "Scope: per-crew credentials (`crews.<name>.env`)"
+title: Crew Credentials — Design
 owner: claude
-status: Draft
-stage: shipped
-next: "—"
-feature: crew-credentials
-doc_role: scope
-type: design
-summary: "Scope: a crew-level env list, so one crew can run on a different provider account (an API key with prepaid credits) than the rest of its provider"
-tags: [crew-credentials, crews, execution-env, provider-limits]
 created_date: 2026-10-20
-updated_date: 2026-11-27
+updated_date: 2026-11-28
 last_validated: 2026-11-08
+status: Draft
+feature: crew-credentials
+doc_role: design
+type: design
+summary: "Design: a crew-level env list, so one crew can run on a different provider account (an API key with prepaid credits) than the rest of its provider"
+tags: [crew-credentials, crews, execution-env, provider-limits]
 ---
 
-# Scope: per-crew credentials (`crews.<name>.env`)
+# Crew Credentials — Design
 
-Status: phase 1 (`crews.<name>.env`, [ORB-17287]), phase 2 (crew as account, [ORB-17288])
-and file-backed sources ([ORB-20547]) have landed. [ORB-17462] completed same-provider
-auth-failure attribution to the failing crew account. No committed implementation remains.
-Bearing: [`[execution.env]`](../../config/execution.md#executionenv--the-agent-subprocess-environment) is an
-allowlist of names, never values; [provider usage limits](../../config/crews.md#provider-usage-limits)
-and [auth recovery probes](../../config/providers.md#executor-authentication-recovery-probes) are keyed by
-provider account: the provider's default login, or a crew that sets `env`.
-
-## Problem
-
-A crew is `provider` + `model` + `effort`. The credential its CLI uses comes from the agent
-environment, which is one `execution.env.pass` list per workspace. So every crew of a provider
-shares one account, and an operator with a second account (prepaid Anthropic API credits next
-to a Claude subscription) cannot point one crew at it. The only lever today is per drain: list
-`ANTHROPIC_API_KEY` in `pass` and set it only in the shell that starts that drain. Then every
-Claude activity in the drain moves to the paid account, pilot, review and recovery included,
-and exporting the key anywhere persistent moves every Claude run on the host.
+This doc holds the mechanisms behind [1_overview.md](./1_overview.md), which states the problem and the goal.
 
 ## Shape
 
@@ -106,18 +88,6 @@ Rules:
    crew to followers that lack it?
 2. **Exact-version admission.** An older follower that does not know `env` must refuse the crew,
    not run it on the default login.
-
-## Acceptance (feature level)
-
-- With the example config and `ANTHROPIC_CREDITS_API_KEY_1` set, an `opus-credits` activity's
-  agent env holds `ANTHROPIC_API_KEY` and no `CLAUDE_CODE_OAUTH_TOKEN` or
-  `ANTHROPIC_CREDITS_API_KEY_1`; an `opus` activity in the same drain holds the OAuth token and
-  neither key name.
-- `crews.<name>.env` in a workspace file fails load naming the crew; no value appears in any
-  output.
-- With the source unset, a drain start warns and its window excludes `opus-credits`.
-- After phase 2, a usage-limit failure on `opus` holds only the subscription Claude crews;
-  `opus-credits` keeps dispatching, and the reverse.
 
 ## Task References
 

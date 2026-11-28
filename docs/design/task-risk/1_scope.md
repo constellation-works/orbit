@@ -18,7 +18,7 @@ tags: [task-risk, backlog-forecast, agent-scorecards]
 
 Status: Draft; design only. No scoring, routing or implementation change is approved.
 
-Bearing: The [backlog forecast](../backlog-forecast/1_scope.md#per-task-riskiness-estimator)
+Bearing: The [backlog forecast](../backlog-forecast/2_design.md#per-task-riskiness-estimator)
 consumes the task riskiness estimator; [agent scorecards](../agent-scorecards/2_design.md)
 already distinguish execution provenance and role attribution. The
 [task risk display](../user-interface/2_design.md) serves the same derived estimate

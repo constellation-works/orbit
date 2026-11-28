@@ -789,11 +789,11 @@ the run, isn't kept with the run and can't be read from another host's dashboard
   unchanged: the scheduler adds no execution surface, and the job's steps carry their
   own authority.
 - **Condition triggers** ([ORB-19288] designed them). Their phase 2 actions are routine job runs
-  ([condition triggers §6](../condition-triggers/1_scope.md#6-actions)). A condition
+  ([condition triggers §6](../condition-triggers/2_design.md#6-actions)). A condition
   whose routine runs a job with a script step passes its `subject` as job input, and
   the script reads it on stdin. A script step that needs the operator gate a release
   job needs declares it on the job (`authority: operator`,
-  [condition triggers §7](../condition-triggers/1_scope.md#7-authority-for-high-authority-actions)),
+  [condition triggers §7](../condition-triggers/2_design.md#7-authority-for-high-authority-actions)),
   and both grants apply: the condition's grant to fire, and the script grant to run.
 - **Agent and deterministic steps.** These mix freely. A later step reads
   `steps.<script>.output` and `steps.<script>.files`, and a script reads earlier

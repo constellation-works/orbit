@@ -3,7 +3,7 @@
 //! normalized tokens, as p50 and p90 from resampled delivery history, plus
 //! the calibration of earlier stored forecasts.
 //!
-//! The method is documented in `docs/design/backlog-forecast/1_scope.md`. In short:
+//! The method is documented in `docs/design/backlog-forecast/2_design.md`. In short:
 //!
 //! - A delivering attempt draws one completed delivery: a task that reached
 //!   `done` inside the lookback, with every managed invocation linked to it
