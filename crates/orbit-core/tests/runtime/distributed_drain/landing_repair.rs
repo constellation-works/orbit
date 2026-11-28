@@ -36,6 +36,7 @@ mod owner_fallback;
 mod waiting;
 
 use super::*;
+use orbit_core::unit::landing;
 use orbit_engine::ReviewGate;
 use std::io::Write;
 
@@ -813,8 +814,7 @@ impl OwnerLocal {
             handoff_id,
             job_run_id,
             ..
-        } = owner
-            .landing_attempts()
+        } = landing::landing_attempts(owner)
             .unwrap()
             .into_iter()
             .find(|attempt| {
@@ -963,10 +963,7 @@ impl OwnerLocal {
 
     /// The handoff of `task`'s dispatched landing attempt.
     fn dispatched_handoff(&self, task: &str) -> String {
-        self.pair
-            .wire
-            .owner
-            .landing_attempts()
+        landing::landing_attempts(&self.pair.wire.owner)
             .unwrap()
             .into_iter()
             .find(|attempt| {
@@ -985,8 +982,7 @@ impl OwnerLocal {
         evidence: &str,
     ) -> String {
         let runtime = &self.pair.wire.owner;
-        let attempt = runtime
-            .landing_attempts()
+        let attempt = landing::landing_attempts(runtime)
             .unwrap()
             .into_iter()
             .find(|attempt| {
@@ -1023,7 +1019,7 @@ impl Drop for OwnerLocal {
     fn drop(&mut self) {
         let cleanup = || -> Result<(), OrbitError> {
             let runtime = &self.pair.wire.owner;
-            for attempt in runtime.landing_attempts()? {
+            for attempt in landing::landing_attempts(runtime)? {
                 for number in 1..=attempt.attempt {
                     let Some(run) = self.pair.follower_jobs.automation_job_for_key(&format!(
                         "landing:{}:{number}",
@@ -1111,11 +1107,7 @@ fn owner_landing_refusal(reason: &str, sentinel: &str) -> String {
 }
 
 fn attempt_evidence(owner: &OwnerLocal, handoff_id: &str) -> Option<String> {
-    owner
-        .pair
-        .wire
-        .owner
-        .landing_attempt_record(handoff_id, 1)
+    landing::landing_attempt_record(&owner.pair.wire.owner, handoff_id, 1)
         .unwrap()
         .expect("landing attempt")
         .evidence

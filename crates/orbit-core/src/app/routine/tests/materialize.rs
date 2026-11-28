@@ -19,7 +19,7 @@ mod confinement {
         current_template, manifest_tracks, outcome_of, record_as_orbit_written, render,
         retired_template,
     };
-    use crate::application::managed_assets::{
+    use crate::unit::managed_asset::{
         ManagedAssetOutcome, ManagedAssetReconcileMode, ManagedAssetReconciliation,
     };
 
@@ -233,7 +233,7 @@ use super::super::seed::{
     BASE_BRANCH_PLACEHOLDER, DEFAULT_ROUTINE_FILES, OWNER_MACHINE_PLACEHOLDER,
     RETIRED_ROUTINE_FILES,
 };
-use crate::application::managed_assets::{
+use crate::unit::managed_asset::{
     MANAGED_ASSET_MANIFEST_FILE, ManagedAssetLayout, ManagedAssetOutcome,
     ManagedAssetReconciliation, encode_managed_asset_manifest, load_managed_asset_manifest,
 };

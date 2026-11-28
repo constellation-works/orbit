@@ -7,6 +7,7 @@ use std::time::Duration;
 #[cfg(unix)]
 use chrono::Utc;
 use orbit_common::OrbitError;
+use orbit_core::app::gc::test_support as gc;
 use orbit_core::runtime::OrbitRuntime;
 #[cfg(unix)]
 use orbit_engine::RunLifecycle;
@@ -111,13 +112,13 @@ fn retention_retries_busy_batches_and_keeps_live_rows() {
         )
         .unwrap();
     }
-    let audit = with_concurrent_writer(&store, || runtime.gc_audit(true, Some(30)));
+    let audit = with_concurrent_writer(&store, || gc::gc_audit(&runtime, true, Some(30)));
     assert_eq!(audit.tables[0].rows_removed, 2001);
     assert_eq!(
         audit.writes.batches, 3,
         "each audit batch removes at most 1,000 rows"
     );
-    let runs = with_concurrent_writer(&store, || runtime.gc_runs(true, Some(30)));
+    let runs = with_concurrent_writer(&store, || gc::gc_runs(&runtime, true, Some(30)));
     assert_eq!(runs.runs_archived, 1);
     assert_eq!(
         runs.resource_minutes

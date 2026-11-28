@@ -1,6 +1,7 @@
 //! Admission receipt maintenance through the owner's public runtime API.
 
 use orbit_core::runtime::task_pr_forge::{ForgePullRequest, MergedPullRequest, TaskPrForge};
+use orbit_core::unit::landing;
 use orbit_engine::ReviewGate;
 use orbit_store::contract::{ClaimEvidence, ClaimInvocation, ClaimMutation};
 
@@ -256,7 +257,7 @@ fn landed_no_diff_completion_replays_after_admission_receipt_compaction() {
     assert_eq!(compacted.storage.full_receipts.count, 0);
     assert_eq!(compacted.storage.tombstones.count, 1);
     let history = owner.get_task_history(&fixture.task).unwrap();
-    let attempts = owner.landing_attempts().unwrap();
+    let attempts = landing::landing_attempts(owner).unwrap();
     let update = orbit_engine::HandoffLandingUpdate {
         handoff_id: fixture.accepted(&handoff).handoff_id,
         step: orbit_engine::HandoffLandingStep::Complete,
@@ -275,7 +276,7 @@ fn landed_no_diff_completion_replays_after_admission_receipt_compaction() {
     assert!(error.to_string().contains("mutation_mismatch"), "{error}");
     fixture.assert_status("done");
     assert_eq!(owner.get_task_history(&fixture.task).unwrap(), history);
-    assert_eq!(owner.landing_attempts().unwrap(), attempts);
+    assert_eq!(landing::landing_attempts(owner).unwrap(), attempts);
     assert_eq!(
         owner.inspect_admission_receipt_storage().unwrap(),
         compacted.storage

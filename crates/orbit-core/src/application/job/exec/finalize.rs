@@ -1,5 +1,6 @@
 use super::entry::V2JobRunResult;
 use crate::OrbitRuntime;
+use crate::app::gc;
 use crate::application::job::log_best_effort;
 use crate::application::job::resume::ResumePlan;
 use crate::runtime::audit::run::AuditStepOutcome;
@@ -323,7 +324,7 @@ impl OrbitRuntime {
     /// visible to `run show`, while the hourly GC routine remains the backstop
     /// for an infrastructure error here.
     fn record_delivered_worktree_cleanup(&self, run_id: &str) {
-        let cleanup = match self.cleanup_delivered_worktree(run_id) {
+        let cleanup = match gc::cleanup_delivered_worktree(self, run_id) {
             Ok(Some(result)) => serde_json::to_value(result).unwrap_or_else(|error| {
                 json!({
                     "dry_run": false,

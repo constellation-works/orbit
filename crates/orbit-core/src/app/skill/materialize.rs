@@ -3,10 +3,10 @@ use std::path::Path;
 
 use orbit_common::OrbitError;
 
-use crate::application::managed_assets::{
+use crate::paths::ORBIT_ROOT_TOKEN;
+use crate::unit::managed_asset::{
     ManagedAssetLayout, ManagedAssetReconciliation, reconcile_managed_assets,
 };
-use crate::paths::ORBIT_ROOT_TOKEN;
 
 use super::catalog::DEFAULT_SKILL_FILES;
 

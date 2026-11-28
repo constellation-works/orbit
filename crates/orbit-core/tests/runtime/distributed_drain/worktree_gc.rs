@@ -1,6 +1,7 @@
 //! Follower worktree garbage collection for claimed leaves.
 
 use super::*;
+use orbit_core::app::gc::test_support as gc;
 
 /// GC must see distinct machine namespaces, including tasks this follower
 /// minted before it became a replica.
@@ -314,9 +315,7 @@ fn delivery_retains_a_shared_worktree_until_every_mapped_run_is_terminal() {
                 "delivery retains unrelated worktrees"
             );
 
-            let scheduled = runtime
-                .gc_worktrees(true, None, None, false, false)
-                .unwrap();
+            let scheduled = gc::gc_worktrees(&runtime, true, None, None, false, false).unwrap();
             for run in [&delivered.run_id, &other.run_id] {
                 assert_eq!(
                     gc_report(&scheduled, run, &worktree)["action"],
@@ -439,10 +438,7 @@ fn an_accepted_handoff_gives_back_its_build_output_and_then_its_worktree() {
         "the checkout stays for worktree GC"
     );
 
-    let gc = pair
-        .follower
-        .gc_worktrees(true, None, None, false, false)
-        .unwrap();
+    let gc = gc::gc_worktrees(&pair.follower, true, None, None, false, false).unwrap();
     let report = gc_report(&gc, &leaf, &worktree);
     assert_eq!(report["action"], "removed", "{report:#}");
     assert!(
@@ -505,10 +501,7 @@ fn a_linked_replica_reclaims_a_settled_leafs_host_validation_output() {
     std::fs::create_dir_all(stray.join("debug")).unwrap();
     std::fs::write(stray.join("debug/output"), "unattributed").unwrap();
 
-    let gc = pair
-        .follower
-        .gc_worktrees(true, None, None, false, false)
-        .unwrap();
+    let gc = gc::gc_worktrees(&pair.follower, true, None, None, false, false).unwrap();
     let reports = serde_json::to_value(&gc).unwrap()["reports"].clone();
     let at = |path: &Path| {
         reports
@@ -580,10 +573,7 @@ fn a_released_claim_keeps_its_backlogged_worktree_and_unhanded_commit() {
         Some(ClaimMutation::Release(_))
     ));
 
-    let gc = pair
-        .follower
-        .gc_worktrees(true, None, None, false, false)
-        .unwrap();
+    let gc = gc::gc_worktrees(&pair.follower, true, None, None, false, false).unwrap();
     let report = gc_report(&gc, &leaf, &worktree);
     assert_eq!(
         report["action"], "skipped:task_status_ineligible",
@@ -599,10 +589,7 @@ fn a_released_claim_keeps_its_backlogged_worktree_and_unhanded_commit() {
     );
 
     *pair.wire.task_reads_fail.lock().unwrap() = Some("owner unreachable".into());
-    let gc = pair
-        .follower
-        .gc_worktrees(true, None, None, false, false)
-        .unwrap();
+    let gc = gc::gc_worktrees(&pair.follower, true, None, None, false, false).unwrap();
     let report = gc_report(&gc, &leaf, &worktree);
     assert_eq!(report["action"], "skipped:owner_unreachable", "{report:#}");
     assert!(worktree.join("unfinished.rs").exists());
@@ -634,10 +621,7 @@ fn an_unsettled_claimed_worktree_asks_its_owner_and_reports_a_transport_failure(
     let timeout = "ssh: connect to host owner port 22: Connection timed out";
     *pair.wire.task_reads_fail.lock().unwrap() = Some(timeout.into());
 
-    let unreachable = pair
-        .follower
-        .gc_worktrees(false, None, None, false, false)
-        .unwrap();
+    let unreachable = gc::gc_worktrees(&pair.follower, false, None, None, false, false).unwrap();
     let report = gc_report(&unreachable, &leaf, &worktree);
     assert_eq!(report["action"], "skipped:owner_unreachable", "{report:#}");
     assert!(
@@ -658,10 +642,7 @@ fn an_unsettled_claimed_worktree_asks_its_owner_and_reports_a_transport_failure(
         "execution_failed".into(),
         "owner task store unavailable".into(),
     ));
-    let owner_error = pair
-        .follower
-        .gc_worktrees(false, None, None, false, false)
-        .unwrap();
+    let owner_error = gc::gc_worktrees(&pair.follower, false, None, None, false, false).unwrap();
     let report = gc_report(&owner_error, &leaf, &worktree);
     assert_eq!(
         report["action"], "skipped:owner_lookup_failed",
@@ -675,10 +656,7 @@ fn an_unsettled_claimed_worktree_asks_its_owner_and_reports_a_transport_failure(
     );
 
     *pair.wire.task_reads_remote_error.lock().unwrap() = None;
-    let answered = pair
-        .follower
-        .gc_worktrees(false, None, None, false, false)
-        .unwrap();
+    let answered = gc::gc_worktrees(&pair.follower, false, None, None, false, false).unwrap();
     let report = gc_report(&answered, &leaf, &worktree);
     assert_eq!(
         report["action"], "skipped:task_status_ineligible",
@@ -701,10 +679,7 @@ fn a_replica_collects_a_local_done_task_without_asking_the_owner() {
     let (missing_leaf, missing_path) = terminal_worktree(&pair, &[&missing]);
     *pair.wire.task_reads_fail.lock().unwrap() = Some("owner unavailable".into());
 
-    let gc = pair
-        .follower
-        .gc_worktrees(true, None, None, false, false)
-        .unwrap();
+    let gc = gc::gc_worktrees(&pair.follower, true, None, None, false, false).unwrap();
     assert_eq!(gc_report(&gc, &leaf, &path)["action"], "removed");
     assert!(!path.exists());
     assert_eq!(
@@ -731,10 +706,7 @@ fn replica_gc_routes_owner_ids_and_keeps_other_prefixes_independent() {
     let selector = pair.destination["selector"].as_str().unwrap();
 
     *pair.wire.task_reads_fail.lock().unwrap() = Some("owner unreachable".into());
-    let outage = pair
-        .follower
-        .gc_worktrees(true, None, None, false, false)
-        .unwrap();
+    let outage = gc::gc_worktrees(&pair.follower, true, None, None, false, false).unwrap();
     for (leaf, path) in [
         (&owner_leaf, &owner_path),
         (&second_owner_leaf, &second_owner_path),
@@ -768,10 +740,7 @@ fn replica_gc_routes_owner_ids_and_keeps_other_prefixes_independent() {
     ] {
         *pair.wire.task_reads_remote_error.lock().unwrap() =
             Some((code.into(), "owner refused lookup".into()));
-        let gc = pair
-            .follower
-            .gc_worktrees(true, None, None, false, false)
-            .unwrap();
+        let gc = gc::gc_worktrees(&pair.follower, true, None, None, false, false).unwrap();
         assert_eq!(gc_report(&gc, &owner_leaf, &owner_path)["action"], action);
         assert_eq!(
             gc_report(&gc, &third_leaf, &third_path)["action"],
@@ -813,10 +782,7 @@ fn replica_gc_looks_each_id_up_on_the_host_its_prefix_names() {
     let (unregistered_leaf, unregistered_path) = terminal_worktree(&pair, &[&unregistered]);
 
     // Before the host file registers THIRD, its ids are unroutable too.
-    let unknown = pair
-        .follower
-        .gc_worktrees(false, None, None, false, false)
-        .unwrap();
+    let unknown = gc::gc_worktrees(&pair.follower, false, None, None, false, false).unwrap();
     for (leaf, path) in [
         (&third_leaf, &third_path),
         (&unregistered_leaf, &unregistered_path),
@@ -834,10 +800,7 @@ fn replica_gc_looks_each_id_up_on_the_host_its_prefix_names() {
         .lock()
         .unwrap()
         .insert("THIRD".into(), ("hm_third".into(), third.clone()));
-    let routed = pair
-        .follower
-        .gc_worktrees(false, None, None, false, false)
-        .unwrap();
+    let routed = gc::gc_worktrees(&pair.follower, false, None, None, false, false).unwrap();
     assert_eq!(
         gc_report(&routed, &owner_leaf, &owner_path)["task_status"],
         "backlog"
@@ -870,10 +833,7 @@ fn replica_gc_looks_each_id_up_on_the_host_its_prefix_names() {
     // The owner's outage fails only the owner route; the third host's lookup
     // goes by id and is left alone.
     *pair.wire.task_reads_fail.lock().unwrap() = Some("owner unreachable".into());
-    let outage = pair
-        .follower
-        .gc_worktrees(true, None, None, false, false)
-        .unwrap();
+    let outage = gc::gc_worktrees(&pair.follower, true, None, None, false, false).unwrap();
     assert_eq!(
         gc_report(&outage, &owner_leaf, &owner_path)["action"],
         "skipped:owner_unreachable"
@@ -961,10 +921,7 @@ fn a_parked_tasks_failed_worktree_goes_only_when_its_commits_survive() {
     let branch = format!("orbit/{committed}");
     let (backlogged, backlog_path) = terminal_worktree(&pair, &[&backlog_task]);
 
-    let preview = pair
-        .follower
-        .gc_worktrees(false, None, None, false, false)
-        .unwrap();
+    let preview = gc::gc_worktrees(&pair.follower, false, None, None, false, false).unwrap();
     for (leaf, path, action) in [
         (&clean, &clean_path, "would_remove"),
         (&locked, &locked_path, "skipped:worktree_locked"),
@@ -982,10 +939,7 @@ fn a_parked_tasks_failed_worktree_goes_only_when_its_commits_survive() {
         "{preview:#?}"
     );
 
-    let swept = pair
-        .follower
-        .gc_worktrees(true, None, None, false, false)
-        .unwrap();
+    let swept = gc::gc_worktrees(&pair.follower, true, None, None, false, false).unwrap();
     assert_eq!(gc_report(&swept, &clean, &clean_path)["action"], "removed");
     assert!(!clean_path.exists());
     for (leaf, path) in [
@@ -1024,10 +978,7 @@ fn a_parked_tasks_failed_worktree_goes_only_when_its_commits_survive() {
         &pair.follower_repo,
         &["update-ref", "-d", &format!("refs/remotes/origin/{branch}")],
     );
-    let published = pair
-        .follower
-        .gc_worktrees(true, None, None, false, false)
-        .unwrap();
+    let published = gc::gc_worktrees(&pair.follower, true, None, None, false, false).unwrap();
     let report = gc_report(&published, &committed, &committed_path);
     assert_eq!(report["action"], "removed", "{report:#}");
     assert_eq!(
@@ -1048,10 +999,7 @@ fn a_parked_age_is_measured_from_the_status_change() {
         terminal_worktree_at(&pair, &[&task], Utc::now() - chrono::Duration::days(30));
     park(&pair, &task);
 
-    let gc = pair
-        .follower
-        .gc_worktrees(true, None, Some(24), false, false)
-        .unwrap();
+    let gc = gc::gc_worktrees(&pair.follower, true, None, Some(24), false, false).unwrap();
     let report = gc_report(&gc, &leaf, &path);
     assert_eq!(report["action"], "skipped:parked_too_recent", "{report:#}");
     assert_eq!(report["task_status"], "someday", "{report:#}");

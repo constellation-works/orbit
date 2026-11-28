@@ -8,6 +8,7 @@ use super::write::TaskWriteOutput;
 use crate::OrbitRuntime;
 use crate::adapter::tool_host::input::parse_task_status;
 use crate::adapter::tool_host::json::serialize_error;
+use crate::unit::landing;
 use orbit_common::OrbitError;
 use orbit_common::governance::operation::OperationVerb;
 use orbit_common::governance::task::TaskVerb;
@@ -217,7 +218,7 @@ pub(super) fn dispatch(
             let request = serde_json::from_value(request).map_err(|error| {
                 OrbitError::InvalidInput(format!("invalid retry request: {error}"))
             })?;
-            let dispatch = runtime.retry_handoff_as_operator(&owner, &request, &actor)?;
+            let dispatch = landing::retry_handoff_as_operator(runtime, &owner, &request, &actor)?;
             let response = serde_json::to_value(&dispatch)
                 .map_err(serialize_error("serialize landing retry"))?;
             Ok((response, Some(dispatch.task_id)))

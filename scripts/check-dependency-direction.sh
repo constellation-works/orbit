@@ -1651,13 +1651,24 @@ for layer in application adapter; do
   fi
 done
 
-# Runtime is the lowest core layer. Composition supplies its application port;
-# runtime must not name higher layers or call their inherent runtime methods.
-if ! super_chains_into "$core_src/runtime" "" 'application|adapter|bootstrap|composition' crate-root ||
+# Runtime is the lowest core layer. It must not name higher layers or call
+# their inherent runtime methods.
+if ! super_chains_into "$core_src/runtime" "" 'application|adapter|bootstrap|composition|unit' crate-root ||
+  ! super_chains_into "$core_src/runtime" "" 'crate::app::gc' named-path ||
   ! inherent_calls_into "$core_src/runtime" "" 'application|adapter' '' '' "$core_src"; then
   echo "orbit-core runtime must not name higher layers or call application or adapter inherent OrbitRuntime methods"
   fail=1
 fi
+
+# These moved application subjects still reach adapters or the joiners only
+# through application-owned ports.
+for moved_subject in app/gc unit/landing unit/managed_asset; do
+  if ! super_chains_into "$core_src" "$moved_subject" 'crate::adapter|crate::bootstrap|crate::composition' named-path ||
+    ! inherent_calls_into "$core_src" "$moved_subject" 'adapter|bootstrap|composition' '' '' "$core_src"; then
+    echo "orbit-core ${moved_subject/\//::} must reach adapters, bootstrap and composition through application-owned ports"
+    fail=1
+  fi
+done
 
 # [ORB-17924], [ORB-17943] `task` reaches the state scheduler and its bounded
 # `Source` Git reader only through `task::TaskAutomationPort` and
@@ -1881,20 +1892,12 @@ if ! super_chains_into "$core_src/runtime" "" "$experiment_path" named-path; the
   fail=1
 fi
 
-# [ORB-22708] Landing sits above distributed. Task
-# owns the pure handoff-to-claim read; review records authority and reaches
-# dispatch only through its own ReviewLandingDispatchPort. Refuse paths,
-# grouped trees, relative chains and calls into landing's inherent methods.
-# These exact lines read the task store, whose method shares a runtime name.
-landing_store_reads_allowed='^task/external_merge/candidate\.rs:[0-9]+:\s+\.landing_attempts\(\)$|^task/external_merge/rescued\.rs:[0-9]+:\s+if tasks\.landing_attempts\(\)\?\.iter\(\)\.any\(\|attempt\| \{$|^review/handoff/console\.rs:[0-9]+:\s+self\.stores\(\)\.tasks\(\)\.landing_attempts\(\)\?$'
+# [ORB-22708] Landing sits above distributed. Task owns the pure
+# handoff-to-claim read. Review reaches dispatch through its own
+# ReviewLandingDispatchPort, bound in app::port.
 for lower_module in task job review distributed; do
-  if dependency_matches -n 'crate::application::landing\b' \
-    "$app_src/$lower_module" -g '*.rs' -g '!**/tests/**' ||
-    dependency_matches -n -U 'crate::application::\{[^}]*\blanding\b' \
-      "$app_src/$lower_module" -g '*.rs' -g '!**/tests/**' ||
-    ! inherent_calls_into "$app_src" "$lower_module" landing "$landing_store_reads_allowed" '' ||
-    ! super_chains_into "$app_src" "$lower_module" landing; then
-    echo "orbit-core ${lower_module} must not name landing or call its inherent methods; task owns handoff claim resolution, and review dispatches through review::ReviewLandingDispatchPort"
+  if ! super_chains_into "$app_src" "$lower_module" 'crate::unit::landing' named-path; then
+    echo "orbit-core ${lower_module} must not name unit::landing; task owns handoff claim resolution, and review dispatches through review::ReviewLandingDispatchPort"
     fail=1
   fi
 done

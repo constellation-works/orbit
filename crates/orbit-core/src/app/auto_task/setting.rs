@@ -25,7 +25,7 @@ use orbit_types::workflow::AutoTaskDefinition;
 use serde::Serialize;
 
 use crate::OrbitRuntime;
-use crate::application::managed_assets::{
+use crate::unit::managed_asset::{
     ConfinedAssetPath, MANAGED_ASSET_MANIFEST_FILE, ManagedAssetAction, ManagedAssetLayout,
     ManagedAssetOutcome, ManagedAssetReconcileMode, load_managed_asset_manifest,
     resolve_confined_asset_path, restore_managed_asset,

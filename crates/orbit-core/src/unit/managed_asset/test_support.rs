@@ -7,6 +7,7 @@ thread_local! {
 }
 
 type ReadHook = Box<dyn FnOnce()>;
+
 struct RestoreHook(Option<ReadHook>);
 
 impl Drop for RestoreHook {

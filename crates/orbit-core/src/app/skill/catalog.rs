@@ -1,7 +1,8 @@
 /// Every shipped skill file, keyed by its path relative to the skills root.
 ///
 /// Skills are directory trees rather than single documents, so their managed
-/// manifest keys on the relative path ([`ManagedAssetLayout::RelativePath`](crate::application::managed_assets::ManagedAssetLayout::RelativePath))
+/// manifest uses the
+/// [relative path](crate::unit::managed_asset::ManagedAssetLayout::RelativePath)
 /// instead of a bare definition name.
 ///
 /// Routers separate everyday task work, backlog orchestration and machine setup.

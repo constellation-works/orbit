@@ -1,4 +1,5 @@
 use crate::app::resident;
+use crate::unit::landing;
 use std::cell::RefCell;
 use std::collections::{BTreeSet, HashMap};
 use std::path::Path;
@@ -462,7 +463,7 @@ fn run_work_admission(
                 skipped_workspaces.insert(workspace.name.clone());
                 continue;
             }
-            if let Err(error) = runtime.dispatch_landing_requests_at(now_utc) {
+            if let Err(error) = landing::dispatch_landing_requests_at(runtime, now_utc) {
                 tracing::warn!(
                     target: "orbit_core::application::routines::sweep",
                     workspace = %workspace.name,

@@ -7,6 +7,7 @@ use orbit_store::contract::{
 use orbit_types::workflow::handoff::{HandoffCandidate, LandingStartRequest, TaskHandoff};
 
 use crate::OrbitRuntime;
+use crate::app::port::ReviewLandingDispatch;
 use crate::application::job::JobDrainPort;
 use crate::application::review::ReviewLandingDispatchPort;
 
@@ -81,7 +82,7 @@ impl OrbitRuntime {
                 super::super::flaky::record_frictions(self, &accepted.handoff.task_id, flaky)?;
             }
         }
-        self.dispatch_recorded_landing_authority();
+        ReviewLandingDispatch(self).dispatch_recorded_landing_authority();
         Ok(outcome)
     }
 
@@ -121,7 +122,7 @@ impl OrbitRuntime {
                 candidate,
             },
         )?;
-        self.dispatch_recorded_landing_authority();
+        ReviewLandingDispatch(self).dispatch_recorded_landing_authority();
         Ok(result)
     }
 

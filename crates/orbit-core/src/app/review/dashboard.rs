@@ -16,6 +16,7 @@ use crate::Core;
 use crate::app::exec::{DashboardOrigin, DashboardRow, Operation};
 use crate::application::operator_input;
 use crate::application::task::with_task_write_provenance;
+use crate::unit::landing;
 
 /// Actor recorded for a dashboard-authored owner decision. The dashboard is a
 /// human surface, so approval is attributed to a human even when the server
@@ -76,7 +77,8 @@ pub(super) fn write(core: &Core, action: DashboardAction) -> Result<DashboardWri
                 &format!("dashboard-approve:{handoff_id}:{request_id}"),
             ),
             PreparedWrite::Retry { request } => {
-                let dispatch = runtime.retry_handoff_as_operator(
+                let dispatch = landing::retry_handoff_as_operator(
+                    runtime,
                     &runtime.workspace_id()?,
                     &request,
                     OPERATOR_ACTOR,

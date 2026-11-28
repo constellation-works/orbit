@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::Path;
 
-use super::super::tmp::{TmpGcResult, filesystem};
+use crate::app::gc::tmp::{TmpGcResult, filesystem};
 
 #[test]
 fn preview_skips_entries_removed_after_the_listing() {

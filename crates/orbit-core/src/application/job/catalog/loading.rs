@@ -20,7 +20,7 @@ use serde_json::Value;
 use super::DEFAULT_JOB_FILES;
 use super::projection::{JobCatalogEntry, JobCatalogFilter};
 use crate::OrbitRuntime;
-use crate::application::managed_assets::{
+use crate::unit::managed_asset::{
     ManagedAssetLayout, ManagedAssetReconciliation, reconcile_managed_assets,
 };
 

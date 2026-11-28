@@ -774,7 +774,7 @@ owner's prefix uses the owner route from the claim or registered workspace.
 An unregistered foreign prefix is retained as
 `skipped:task_prefix_unroutable` without a remote call. These lookups write
 nothing to the remote task store. The implementation is
-`crates/orbit-core/src/application/gc/worktrees.rs::worktree_gc_task_lookup`.
+`crates/orbit-core/src/app/gc/worktree.rs::worktree_gc_task_lookup`.
 
 `job:store_gc_pipeline` prunes this host's own store [ORB-16354]. The activity
 opens the local sqlite store and this workspace's audit directory. It deletes

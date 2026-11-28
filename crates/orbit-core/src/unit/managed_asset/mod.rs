@@ -3,10 +3,13 @@
 //! in a per-directory manifest.
 
 mod manifest;
+
 mod reconcile;
+
 mod retired;
+
 #[cfg(feature = "test-support")]
-pub(crate) mod test_support;
+mod test_support;
 
 pub(crate) use manifest::{
     ConfinedAssetPath, record_managed_manifest_write, resolve_confined_asset_path,
@@ -21,6 +24,8 @@ pub(crate) use reconcile::{
 };
 pub(crate) use retired::preserve_modified_retired_asset;
 pub(crate) use retired::retired_preservation_path;
+#[cfg(feature = "test-support")]
+pub use test_support::with_auto_task_manifest_read_hook;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
@@ -28,6 +33,7 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
 pub(crate) const MANAGED_ASSET_MANIFEST_FILE: &str = ".orbit-managed-assets.json";
+
 const MANAGED_ASSET_MANIFEST_SCHEMA_VERSION: u32 = 1;
 
 pub(crate) const ROUTINE_MANAGED_ASSET_MANIFEST_SCHEMA_VERSION: u32 = 2;

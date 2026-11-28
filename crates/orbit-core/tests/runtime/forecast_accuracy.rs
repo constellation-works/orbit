@@ -1,6 +1,7 @@
 //! Forecast maturity through the public read-only runtime API at a fixed time.
 
 use chrono::{DateTime, Duration, DurationRound, Utc};
+use orbit_core::app::gc::test_support as gc;
 use orbit_core::runtime::OrbitRuntime;
 use orbit_core::runtime::host_resource::accuracy::AccuracySelection;
 use orbit_store::contract::{
@@ -370,7 +371,7 @@ fn gc_retained_forecast_excludes_missing_worker_attribution() {
     let before = report();
     assert_eq!(before.pairs[0].attributed_cpu_cores, Some(5.0));
     assert_eq!(before.pairs[0].attributed_memory_bytes, Some(5_000.0));
-    runtime.gc_runs(true, Some(30)).unwrap();
+    gc::gc_runs(&runtime, true, Some(30)).unwrap();
     assert!(
         !store
             .read()

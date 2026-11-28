@@ -29,15 +29,30 @@
 //! external state again, and the coordination store rechecks authorization,
 //! candidate identity and digest-pinned validation inside the transaction.
 
-mod attempts;
+mod attempt;
+
 mod context;
+
 mod dispatch;
+
 mod retry;
+
 mod review_port;
+
 mod waiting;
 
-pub use dispatch::LandingDispatch;
+#[cfg(feature = "test-support")]
+pub use attempt::{landing_attempt_record, landing_attempts};
+pub(crate) use context::{
+    handoff_landing_context, record_handoff_landing, record_handoff_landing_completion_hold,
+    record_handoff_landing_history, record_handoff_landing_wait,
+};
 pub(crate) use dispatch::dispatch_recorded_authority;
+pub use dispatch::{LandingDispatch, dispatch_landing_requests_at};
+#[cfg(feature = "test-support")]
+pub use dispatch::{dispatch_landing_requests, land_handoff};
+pub(crate) use retry::retry_handoff_as_operator;
+pub(crate) use review_port::ReviewPort;
 
 #[cfg(feature = "test-support")]
 pub use retry::retry_reservation_hook::with_landing_retry_reservation_hook;

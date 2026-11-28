@@ -10,6 +10,7 @@ use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_core::application::task::EXTERNAL_MERGE_SETTLED_EVENT;
 use orbit_core::runtime::task_pr_forge::ForgePullRequest;
+use orbit_core::unit::landing;
 use orbit_store::contract::HandoffObservation;
 use orbit_store::contract::{ClaimInvocation, ClaimMutation, ExecutionClaimPhase};
 use orbit_types::task::ExternalRef;
@@ -472,7 +473,7 @@ fn a_revoked_handoff_and_its_claim_settle_from_its_candidate_pr_merged_outside_o
         // A human merged the handoff's own PR into its landing branch.
         fx.merge(4930, task, "alice", LANDING);
         let requests = fx.runtime.landing_start_requests().unwrap();
-        let attempts = fx.runtime.landing_attempts().unwrap();
+        let attempts = landing::landing_attempts(&fx.runtime).unwrap();
         assert_eq!(requests.len(), 1);
         assert_eq!(requests[0].state, LandingStartState::Revoked);
         assert_eq!(attempts[0].state, LandingAttemptState::Stopped);
@@ -527,7 +528,7 @@ fn a_revoked_handoff_and_its_claim_settle_from_its_candidate_pr_merged_outside_o
         }
         // No authorization, landing request or attempt was added or reopened.
         assert_eq!(fx.runtime.landing_start_requests().unwrap(), requests);
-        assert_eq!(fx.runtime.landing_attempts().unwrap(), attempts);
+        assert_eq!(landing::landing_attempts(&fx.runtime).unwrap(), attempts);
         assert!(
             fx.settle_all().is_empty(),
             "a settled task does not settle twice"
@@ -539,7 +540,7 @@ fn landing_a_stopped_authorized_handoff_reports_its_stop_and_retry_path() {
     for authority in [Authority::Stopped, Authority::Revoked] {
         let fx = Fixture::new();
         let handoff = fx.handed_off(4939, authority);
-        let before = fx.runtime.landing_attempts().unwrap();
+        let before = landing::landing_attempts(&fx.runtime).unwrap();
         let error = fx
             .runtime
             .land_task_pull_request(&handoff.task, None)
@@ -560,7 +561,7 @@ fn landing_a_stopped_authorized_handoff_reports_its_stop_and_retry_path() {
             assert!(error.contains("operator revoked"), "{error}");
         }
         assert_eq!(
-            fx.runtime.landing_attempts().unwrap(),
+            landing::landing_attempts(&fx.runtime).unwrap(),
             before,
             "{authority:?}"
         );
@@ -996,7 +997,7 @@ fn stopped_handoff_settles_a_deleted_branch_after_two_operator_updates() {
                 "stopped landed",
             );
             assert_eq!(
-                fx.runtime.landing_attempts().unwrap()[0].state,
+                landing::landing_attempts(&fx.runtime).unwrap()[0].state,
                 LandingAttemptState::Merged,
                 "stopped attempt merged"
             );

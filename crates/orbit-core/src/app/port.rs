@@ -21,12 +21,14 @@ use crate::app::{agent, codebase};
 use crate::application::automation::AutomationAutoTaskPort;
 use crate::application::distributed::{DistributedAutoTaskPort, DistributedExperimentPort};
 use crate::application::job::{JobAutoTaskPort, JobExperimentPort};
-use crate::application::review::ReviewCandidateSizePort;
+use crate::application::review::{ReviewCandidateSizePort, ReviewLandingDispatchPort};
 use crate::application::tag_instructions::TagInstructionExperimentPort;
 use crate::application::task::{
     TaskCodebasePort, TaskCorpusPort, TaskEvolutionPort, TaskExperimentPort, TaskNoticePort,
     TaskResidentPort,
 };
+use crate::unit::landing;
+pub(crate) use crate::unit::landing::ReviewPort as ReviewLandingDispatch;
 
 const _: () = {
     const fn binds_task_evolution<T: TaskEvolutionPort>() {}
@@ -70,6 +72,12 @@ const _: for<'a> fn(&'a ReviewCandidateSize<'a>) -> &'a dyn ReviewCandidateSizeP
 impl ResidentRoutineStatusPort for ResidentRoutineStatus<'_> {
     fn disabled_resident_cycle_routine_name(&self) -> Option<String> {
         self.disabled_cycle_routine_name()
+    }
+}
+
+impl ReviewLandingDispatchPort for ReviewLandingDispatch<'_> {
+    fn dispatch_recorded_landing_authority(&self) {
+        landing::dispatch_recorded_authority(self.0);
     }
 }
 

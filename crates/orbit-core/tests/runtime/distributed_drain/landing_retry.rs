@@ -2,6 +2,7 @@
 
 use super::*;
 use orbit_common::env_vars::{HOME, ORBIT_MANAGED_RUN_CONTEXT, ORBIT_RUN_ID};
+use orbit_core::unit::landing;
 use orbit_engine::HostEnvironment;
 use orbit_engine::ReviewGate;
 
@@ -74,11 +75,10 @@ fn a_stopped_authorized_handoff_retries_once_through_the_public_operator_tool() 
     assert_eq!(response["run_id"], replay["run_id"]);
     assert_eq!(replay["submitted"], false);
     assert_eq!(
-        runtime.landing_attempts().unwrap()[0].attempt,
+        landing::landing_attempts(runtime).unwrap()[0].attempt,
         stopped.attempt + 1
     );
-    let historical = runtime
-        .landing_attempt_record(&request.handoff_id, stopped.attempt)
+    let historical = landing::landing_attempt_record(runtime, &request.handoff_id, stopped.attempt)
         .unwrap()
         .unwrap();
     assert_eq!(
@@ -89,9 +89,7 @@ fn a_stopped_authorized_handoff_retries_once_through_the_public_operator_tool() 
     assert_eq!(landed["phase"], "landed");
     assert_eq!(owner.pair.owner_status(&task), "done");
     assert_eq!(
-        runtime
-            .landing_attempt_record(&request.handoff_id, stopped.attempt)
-            .unwrap(),
+        landing::landing_attempt_record(runtime, &request.handoff_id, stopped.attempt).unwrap(),
         Some(stopped),
         "completed same-handoff retry preserves the first failed-attempt diagnostic"
     );
@@ -137,8 +135,7 @@ fn terminal_owner_jobs_reconcile_dispatched_attempts_through_the_operator_tool()
         let mut changed = request.clone();
         changed.reason = "changed decision".into();
         assert!(retry_tool(runtime, &changed, McpCapability::Operator).is_err());
-        let history = runtime
-            .landing_attempt_record(&request.handoff_id, prior.attempt)
+        let history = landing::landing_attempt_record(runtime, &request.handoff_id, prior.attempt)
             .unwrap()
             .unwrap();
         assert_eq!(history.state, LandingAttemptState::Stopped);
@@ -218,7 +215,7 @@ fn dispatched_retry_requires_exact_terminal_owner_evidence() {
                     .unwrap();
                 let foreign = jobs
                     .insert_job_run(
-                        orbit_core::application::landing::LANDING_JOB,
+                        orbit_core::unit::landing::LANDING_JOB,
                         1,
                         Utc::now(),
                         Some(json!({"handoff_id": request.handoff_id, "task_id": prior.task_id})),
@@ -237,23 +234,31 @@ fn dispatched_retry_requires_exact_terminal_owner_evidence() {
                         },
                     )
                     .unwrap();
-                prior = runtime.landing_attempts().unwrap().remove(0);
+                prior = landing::landing_attempts(runtime).unwrap().remove(0);
                 request.expected_latest_attempt = prior.attempt;
             }
             _ => unreachable!(),
         }
-        let before = runtime.landing_attempts().unwrap();
+        let before = landing::landing_attempts(runtime).unwrap();
         assert!(
             retry_tool(runtime, &request, McpCapability::Operator).is_err(),
             "{case}"
         );
-        assert_eq!(runtime.landing_attempts().unwrap(), before, "{case}");
+        assert_eq!(
+            landing::landing_attempts(runtime).unwrap(),
+            before,
+            "{case}"
+        );
         if matches!(case, "missing" | "foreign" | "missing_with_intent") {
             assert!(
-                runtime.land_handoff(&request.handoff_id).is_err(),
+                landing::land_handoff(runtime, &request.handoff_id).is_err(),
                 "the shared dispatch boundary also refuses {case} evidence"
             );
-            assert_eq!(runtime.landing_attempts().unwrap(), before, "{case}");
+            assert_eq!(
+                landing::landing_attempts(runtime).unwrap(),
+                before,
+                "{case}"
+            );
         }
         assert!(
             jobs.automation_job_for_key(&format!(
@@ -360,7 +365,7 @@ fn terminal_job_retry_reconciles_external_intent_before_landing() {
 fn replica_and_managed_callers_cannot_recover_a_terminal_owner_job() {
     let (owner, _task, request, prior) = retry_fixture(false, Some(JobRunState::Cancelled));
     let runtime = &owner.pair.wire.owner;
-    let before = runtime.landing_attempts().unwrap();
+    let before = landing::landing_attempts(runtime).unwrap();
     let replica = runtime
         .clone()
         .with_coordination_write_owner(Some("another-owner".into()));
@@ -387,7 +392,7 @@ fn replica_and_managed_callers_cannot_recover_a_terminal_owner_job() {
             "{error}"
         );
     }
-    assert_eq!(runtime.landing_attempts().unwrap(), before);
+    assert_eq!(landing::landing_attempts(runtime).unwrap(), before);
 }
 
 fn a_redacted_retry_reason_preserves_success_audit_and_replay() {
@@ -418,7 +423,7 @@ fn a_redacted_retry_reason_preserves_success_audit_and_replay() {
     sanitized_request.reason = "provider state refreshed under ~/provider".into();
     assert_eq!(receipt.request, sanitized_request);
     assert_eq!(receipt.attempt, stopped.attempt + 1);
-    let attempt = runtime.landing_attempts().unwrap().remove(0);
+    let attempt = landing::landing_attempts(runtime).unwrap().remove(0);
     let run_id = owner
         .pair
         .follower_jobs
@@ -457,14 +462,14 @@ fn a_redacted_retry_reason_preserves_success_audit_and_replay() {
     assert_eq!(replay["run_id"], response["run_id"]);
     assert_eq!(replay["attempt"], response["attempt"]);
     assert_eq!(replay["submitted"], false);
-    assert_eq!(runtime.landing_attempts().unwrap(), vec![attempt]);
+    assert_eq!(landing::landing_attempts(runtime).unwrap(), vec![attempt]);
     assert_eq!(owner.land(&task).unwrap()["phase"], "landed");
-    let settled = runtime.landing_attempts().unwrap();
+    let settled = landing::landing_attempts(runtime).unwrap();
     let replay = retry_tool(runtime, &request, McpCapability::Operator).unwrap();
     assert_eq!(replay["run_id"], response["run_id"]);
     assert_eq!(replay["attempt"], response["attempt"]);
     assert_eq!(replay["submitted"], false);
-    assert_eq!(runtime.landing_attempts().unwrap(), settled);
+    assert_eq!(landing::landing_attempts(runtime).unwrap(), settled);
     assert_eq!(
         boundary
             .landing_retry_receipt(&request.handoff_id, &request.request_key)
@@ -472,9 +477,7 @@ fn a_redacted_retry_reason_preserves_success_audit_and_replay() {
         Some(receipt)
     );
     assert_eq!(
-        runtime
-            .landing_attempt_record(&request.handoff_id, stopped.attempt)
-            .unwrap(),
+        landing::landing_attempt_record(runtime, &request.handoff_id, stopped.attempt).unwrap(),
         Some(stopped)
     );
 }
@@ -562,7 +565,7 @@ fn retry_fixture_with_evidence(
         )
         .unwrap();
     }
-    let stopped = runtime.landing_attempts().unwrap().remove(0);
+    let stopped = landing::landing_attempts(runtime).unwrap().remove(0);
     // Acquire the actual child before settling its run. Cancellation is public;
     // Failed is produced by the real observer after a running child exits.
     let run_id = stopped.job_run_id.as_deref().unwrap();
@@ -607,7 +610,7 @@ fn competing_operator_retries_reserve_one_attempt_and_refuse_stale_inputs() {
             "{field}"
         );
         assert_eq!(
-            runtime.landing_attempts().unwrap().remove(0),
+            landing::landing_attempts(runtime).unwrap().remove(0),
             stopped,
             "refusal changes no attempt: {field}"
         );
@@ -626,7 +629,7 @@ fn competing_operator_retries_reserve_one_attempt_and_refuse_stale_inputs() {
         "{responses:?}"
     );
     assert_eq!(
-        runtime.landing_attempts().unwrap()[0].attempt,
+        landing::landing_attempts(runtime).unwrap()[0].attempt,
         stopped.attempt + 1
     );
     let winner = if responses[0].is_ok() {
@@ -677,7 +680,10 @@ fn operator_retry_reservations_recover_before_submission_and_after_lost_attachme
                 &ClaimMutation::RetryLanding(request.clone()),
             )
             .unwrap();
-        assert_eq!(runtime.landing_attempts().unwrap()[0].job_run_id, None);
+        assert_eq!(
+            landing::landing_attempts(runtime).unwrap()[0].job_run_id,
+            None
+        );
         if crash == "revoked_before_submit" {
             runtime
                 .revoke_handoff_as_operator(
@@ -714,7 +720,7 @@ fn operator_retry_reservations_recover_before_submission_and_after_lost_attachme
                 .pair
                 .follower_jobs
                 .insert_automation_job_run(
-                    orbit_core::application::landing::LANDING_JOB,
+                    orbit_core::unit::landing::LANDING_JOB,
                     json!({"handoff_id": request.handoff_id, "task_id": stopped.task_id}),
                     &format!("landing:{}:{}", request.handoff_id, stopped.attempt + 1),
                 )
@@ -727,7 +733,9 @@ fn operator_retry_reservations_recover_before_submission_and_after_lost_attachme
             owner.workers.persisted_only(&run.run_id);
             run.run_id
         } else {
-            let recovered = runtime.dispatch_landing_requests().unwrap().remove(0);
+            let recovered = landing::dispatch_landing_requests(runtime)
+                .unwrap()
+                .remove(0);
             assert_eq!(recovered.attempt, stopped.attempt + 1);
             recovered.run_id
         };
@@ -735,7 +743,9 @@ fn operator_retry_reservations_recover_before_submission_and_after_lost_attachme
         assert_eq!(replay["run_id"], run_id);
         assert_eq!(replay["submitted"], false);
         assert_eq!(
-            runtime.landing_attempts().unwrap()[0].job_run_id.as_deref(),
+            landing::landing_attempts(runtime).unwrap()[0]
+                .job_run_id
+                .as_deref(),
             Some(run_id.as_str())
         );
         assert_eq!(
@@ -764,12 +774,12 @@ fn operator_retry_reservations_recover_before_submission_and_after_lost_attachme
             competing.request_key = "another-live-retry".into();
             competing.expected_latest_attempt = stopped.attempt + 1;
             competing.expected_latest_state = LandingAttemptState::Dispatched;
-            let before = runtime.landing_attempts().unwrap();
+            let before = landing::landing_attempts(runtime).unwrap();
             assert!(
                 retry_tool(runtime, &competing, McpCapability::Operator).is_err(),
                 "a live owner job cannot get a second uncertain-intent attempt"
             );
-            assert_eq!(runtime.landing_attempts().unwrap(), before);
+            assert_eq!(landing::landing_attempts(runtime).unwrap(), before);
         }
     }
 }
@@ -825,20 +835,20 @@ fn revoked_changed_and_repair_pending_handoffs_refuse_operator_retry() {
                 );
             }
             "repair_pending" => {
-                runtime.land_handoff(&request.handoff_id).unwrap();
+                landing::land_handoff(runtime, &request.handoff_id).unwrap();
                 owner.base_moves(MOVED);
                 owner.land(&task).unwrap_err();
                 assert_eq!(owner.claim_phase(&stopped.claim_id), "repair_pending");
             }
             _ => unreachable!(),
         }
-        let before = runtime.landing_attempts().unwrap();
+        let before = landing::landing_attempts(runtime).unwrap();
         assert!(
             retry_tool(runtime, &request, McpCapability::Operator).is_err(),
             "{case}"
         );
         assert_eq!(
-            runtime.landing_attempts().unwrap(),
+            landing::landing_attempts(runtime).unwrap(),
             before,
             "{case} preserves all attempts"
         );

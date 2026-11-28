@@ -18,14 +18,14 @@ use super::template::{
     ShippedRoutineTemplate, ShippedShape, adoptable_binding, binding_of,
     reconcile_lifecycle_variant, render_refresh, render_routine_template, shipped_shape_of,
 };
-use crate::application::managed_assets::{
+use crate::application::seeding_policy::seeded_defaults;
+use crate::unit::managed_asset::{
     MANAGED_ASSET_MANIFEST_FILE, ManagedAssetAction, ManagedAssetLayout, ManagedAssetManifest,
     ManagedAssetOutcome, ManagedAssetReconcileMode, ManagedAssetReconciliation,
     ROUTINE_MANAGED_ASSET_MANIFEST_SCHEMA_VERSION, RoutineAssetProvenance,
     RoutineMaterializationBinding, encode_managed_asset_manifest, load_managed_asset_manifest,
     preserve_modified_retired_asset, record_managed_manifest_write, retired_preservation_path,
 };
-use crate::application::seeding_policy::seeded_defaults;
 
 /// Why a retired shipped default left the catalog while Orbit still ships it.
 const LEFT_OUT_DETAIL: &str = "`seeding.routines` leaves out this shipped default";
