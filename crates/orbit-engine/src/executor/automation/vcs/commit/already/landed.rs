@@ -329,7 +329,7 @@ fn verify_covering_scope(
         let resolved = canonical_workspace
             .join(&anchor)
             .canonicalize()
-            .map_err(|error| covering_path_refused(&anchor.to_string_lossy(), error))?;
+            .map_err(|error| unavailable_anchor_refused(selector, &anchor, error))?;
         if !resolved.starts_with(&canonical_workspace) {
             return Err(AlreadyLanded::refused(
                 "scope anchor is outside the tested workspace",
@@ -436,6 +436,21 @@ fn covering_path_refused(path: &str, reason: impl std::fmt::Display) -> OrbitErr
     AlreadyLanded::refused(format!(
         "cannot verify coverage for {path:?} ({reason}). Check the acceptance criteria on the pinned current HEAD and deliver any missing change. If the current tree satisfies the task, run all required validation there and attach {} with schema_version 1, task_id, run_id, tested_head, reason and validation entries with command, zero exit_code and log_artifact. Attach each log with its run_id, tested_head, command, zero exit_code and output",
         no_diff::ARTIFACT,
+    ))
+}
+
+/// Refusal for a task selector whose anchor does not resolve in the tested
+/// workspace, typically a file a later commit moved. The diagnostic names the
+/// selector and its relative anchor; the operator instruction stays one clause.
+/// The selector is not remapped here: the operator reconciles it.
+fn unavailable_anchor_refused(
+    selector: &str,
+    anchor: &Path,
+    reason: impl std::fmt::Display,
+) -> OrbitError {
+    AlreadyLanded::refused(format!(
+        "scope anchor is unavailable for selector {selector:?} (anchor {:?}: {reason}); reconcile the task selectors",
+        anchor.to_string_lossy()
     ))
 }
 

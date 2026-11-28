@@ -270,6 +270,7 @@ certifies the repaired head as both the original head and publication lease.
 - `commit_verifier_accepts_already_landed_through_symlinked_parent_workspace`
 - `commit_verifier_refuses_already_landed_with_escaping_anchor_symlink`
 - `commit_verifier_refusal_names_already_landed_field_contract`
+- `commit_verifier_names_a_moved_selector_anchor_and_settles_the_corrected_one`
 
 ### `commit_verifier::commit_evidence_contracts_3`
 
