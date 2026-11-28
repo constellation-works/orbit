@@ -427,13 +427,19 @@ fn before_landing_retained_fixture() -> (Fixture, PathBuf) {
     (f, checkout)
 }
 
-/// A binary retained edit conflicting with a newer integration version leaves
-/// both versions recoverable in the same-PR successor (without leaving
-/// unmerged index entries that would block `git_commit`), while the original
-/// retained checkout stays intact.
-fn retained_binary_conflict_preserves_both_sides_in_successor() {
-    let (f, checkout) = before_landing_retained_fixture();
+/// A binary retained edit and a newer integration version of the same path,
+/// admitted as a same-PR repair whose successor worktree is set up but has not
+/// yet resumed the candidate.
+struct BinaryConflict {
+    id: String,
+    setup: Value,
+    successor: PathBuf,
+    integration_bytes: Vec<u8>,
+    retained_bytes: Vec<u8>,
+    dirty: String,
+}
 
+fn binary_conflict_before_resume(f: &Fixture, checkout: &std::path::Path) -> BinaryConflict {
     // Advance the integration branch with a binary file while the retained
     // checkout independently adds conflicting binary bytes for the same path.
     let integration_bytes = b"\x00\x01\x02integration-binary\x00".to_vec();
@@ -445,10 +451,10 @@ fn retained_binary_conflict_preserves_both_sides_in_successor() {
     git(&f.repo, &["push", "-q", "origin", "HEAD:main"]);
 
     std::fs::write(checkout.join("fixture.bin"), &retained_bytes).unwrap();
-    git(&checkout, &["add", "fixture.bin"]);
-    let dirty = git(&checkout, &["status", "--porcelain"]);
+    git(checkout, &["add", "fixture.bin"]);
+    let dirty = git(checkout, &["status", "--porcelain"]);
 
-    let inspection = adopting_inspection(&f).unwrap();
+    let inspection = adopting_inspection(f).unwrap();
     let patch_text = inspection["retained_patch"].as_str().unwrap();
     assert!(patch_text.contains("GIT binary patch"), "{inspection}");
     assert!(inspection.get("retained_patch_base64").is_none());
@@ -474,6 +480,31 @@ fn retained_binary_conflict_preserves_both_sides_in_successor() {
         json!({"run_id":id,"job_run_id":id,"task_ids":[f.task],"base":"main","base_sync":"remote"}),
     );
     let successor = PathBuf::from(setup["workspace_path"].as_str().unwrap());
+    BinaryConflict {
+        id,
+        setup,
+        successor,
+        integration_bytes,
+        retained_bytes,
+        dirty,
+    }
+}
+
+/// A binary retained edit conflicting with a newer integration version leaves
+/// both versions recoverable in the same-PR successor (without leaving
+/// unmerged index entries that would block `git_commit`), while the original
+/// retained checkout stays intact.
+fn retained_binary_conflict_preserves_both_sides_in_successor() {
+    let (f, checkout) = before_landing_retained_fixture();
+
+    let BinaryConflict {
+        id,
+        setup,
+        successor,
+        integration_bytes,
+        retained_bytes,
+        dirty,
+    } = binary_conflict_before_resume(&f, &checkout);
     let resumed = f.action(
         "candidate_resume",
         json!({
@@ -585,6 +616,62 @@ fn retained_binary_conflict_preserves_both_sides_in_successor() {
     assert_eq!(
         std::fs::read(checkout.join("fixture.bin")).unwrap(),
         retained_bytes
+    );
+}
+
+/// A conflict side that cannot be saved refuses the successor without
+/// resetting the index: the unmerged entries still hold every unsaved side, the
+/// refusal says so, and the retained checkout stays intact.
+fn retained_conflict_save_failure_keeps_unmerged_sides_and_explains() {
+    let (f, checkout) = before_landing_retained_fixture();
+    let conflict = binary_conflict_before_resume(&f, &checkout);
+    let successor = &conflict.successor;
+
+    // A file where the saved-sides directory belongs makes every write fail.
+    std::fs::create_dir_all(successor.join(".orbit/tmp")).unwrap();
+    std::fs::write(
+        successor.join(".orbit/tmp/retained-patch-conflicts"),
+        b"blocked",
+    )
+    .unwrap();
+
+    let refusal = f.action_error(
+        "candidate_resume",
+        json!({
+            "job_run_id": conflict.id,
+            "task_ids": [f.task],
+            "workspace_path": successor,
+            "base_sha": conflict.setup["base_sha"]
+        }),
+    );
+    assert!(refusal.contains("source repair refused"), "{refusal}");
+    assert!(
+        refusal.contains("a conflict side could not be saved"),
+        "{refusal}"
+    );
+    assert!(refusal.contains("`fixture.bin`"), "{refusal}");
+    assert!(refusal.contains("was not reset"), "{refusal}");
+    assert!(
+        refusal.contains("inspect the source repair again"),
+        "{refusal}"
+    );
+
+    // Both added sides survive as unmerged stages (no common ancestor exists).
+    assert_eq!(
+        git(successor, &["diff", "--name-only", "--diff-filter=U"]),
+        "fixture.bin"
+    );
+    let stages = git(successor, &["ls-files", "--unmerged"]);
+    for stage in [" 2\t", " 3\t"] {
+        assert!(stages.contains(stage), "{stages}");
+    }
+
+    // The original retained checkout stays intact.
+    assert_eq!(git(&checkout, &["status", "--porcelain"]), conflict.dirty);
+    assert_eq!(git(&checkout, &["rev-parse", "HEAD"]), f.head);
+    assert_eq!(
+        std::fs::read(checkout.join("fixture.bin")).unwrap(),
+        conflict.retained_bytes
     );
 }
 
@@ -753,6 +840,7 @@ crate::scenario_table!(
     retained_edit_scenarios,
     retained_final_recovery_edits_reach_a_fresh_same_pr_repair,
     retained_binary_conflict_preserves_both_sides_in_successor,
+    retained_conflict_save_failure_keeps_unmerged_sides_and_explains,
     retained_symlink_conflict_to_directory_preserves_both_sides_in_successor,
     non_utf8_patch_is_reconstructable_from_the_inspection,
     adoption_refuses_a_clean_checkout,

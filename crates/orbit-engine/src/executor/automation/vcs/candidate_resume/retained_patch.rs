@@ -20,6 +20,10 @@ use crate::executor::automation::vcs::git::{
 
 const CONFLICT_SIDES_DIR: &str = ".orbit/tmp/retained-patch-conflicts";
 
+const RECOVERY: &str = "The source run's checkout and recorded patch are untouched, so inspect the \
+     source repair again and submit it once the cause is fixed; this successor checkout is \
+     disposable.";
+
 /// Saved index stage bytes for a conflicting path whose working file carries
 /// no inline merge markers (for example a binary conflict).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -68,41 +72,101 @@ pub(super) fn apply_retained_patch(
     // candidate for the apply and unstage everything after, so the successor
     // still sees one plain dirty checkout without unmerged index entries.
     git_success(process_env, workspace, &["add", "--all"])?;
-    let applied = git_run_bytes(
+    let applied = match git_run_bytes(
         process_env,
         workspace,
         &["apply", "--3way", "--whitespace=nowarn", "-"],
         Some(bytes),
-    )?;
+    ) {
+        Ok(applied) => applied,
+        Err(error) => {
+            let state = release_index(process_env, workspace);
+            return Ok(RetainedApplied::Refused(format!(
+                "retained final-recovery edits could not be applied: {error}. {state} {RECOVERY}"
+            )));
+        }
+    };
     if applied.timed_out {
+        let state = release_index(process_env, workspace);
         return Err(timeout_recovery_error(
             applied.timeout_ms,
             format!(
-                "retained edits: git apply timed out after {}ms",
+                "retained edits: git apply timed out after {}ms. {state} {RECOVERY}",
                 applied.timeout_ms
             ),
         ));
     }
     if applied.success {
-        git_success(process_env, workspace, &["reset", "--quiet"])?;
-        return Ok(RetainedApplied::Clean);
+        return Ok(match reset_index(process_env, workspace) {
+            Ok(()) => RetainedApplied::Clean,
+            Err(error) => RetainedApplied::Refused(format!(
+                "retained final-recovery edits applied, but unstaging them failed: {error}. \
+                 The successor index still holds the candidate and the edits staged; \
+                 `git reset` in it clears them without touching the working files. {RECOVERY}"
+            )),
+        });
     }
 
-    let unmerged = read_unmerged_stages(process_env, workspace)?;
+    let unmerged = match read_unmerged_stages(process_env, workspace) {
+        Ok(unmerged) => unmerged,
+        Err(error) => {
+            return Ok(RetainedApplied::Refused(format!(
+                "retained final-recovery edits do not apply cleanly ({}) and the conflicting \
+                 index entries could not be read: {error}. The successor index was left as Git \
+                 wrote it, with the candidate staged and any unmerged entries intact, so no \
+                 conflict side is lost. {RECOVERY}",
+                applied.stderr.trim()
+            )));
+        }
+    };
     if unmerged.is_empty() {
-        git_success(process_env, workspace, &["reset", "--quiet"])?;
-        return Ok(RetainedApplied::Refused(format!(
-            "retained final-recovery edits do not apply to the candidate: {}",
-            applied.stderr.trim()
-        )));
+        return Ok(match reset_index(process_env, workspace) {
+            Ok(()) => RetainedApplied::Refused(format!(
+                "retained final-recovery edits do not apply to the candidate: {}",
+                applied.stderr.trim()
+            )),
+            Err(error) => RetainedApplied::Refused(format!(
+                "retained final-recovery edits do not apply to the candidate: {}. Unstaging the \
+                 candidate also failed: {error}. The successor index still holds the candidate \
+                 staged; `git reset` in it clears that. {RECOVERY}",
+                applied.stderr.trim()
+            )),
+        });
     }
 
     // Materialize stage blobs for binary/unmarked conflicts before resetting the
     // index; otherwise `reset` destroys stage 3 and leaves only the integration
-    // working file. Reset runs only after the files are durably written.
-    let preserved_sides =
-        preserve_unmarked_conflict_sides(process_env, workspace, &bound.sha256, &unmerged)?;
-    git_success(process_env, workspace, &["reset", "--quiet"])?;
+    // working file. Reset runs only after the files are durably written, and a
+    // failure before that leaves the unmerged entries as the remaining evidence.
+    let paths_list = list_paths(unmerged.keys());
+    let mut written = Vec::new();
+    let preserved_sides = match preserve_unmarked_conflict_sides(
+        process_env,
+        workspace,
+        &bound.sha256,
+        &unmerged,
+        &mut written,
+    ) {
+        Ok(sides) => sides,
+        Err(error) => {
+            return Ok(RetainedApplied::Refused(format!(
+                "retained final-recovery edits conflict in {paths_list}, but a conflict side \
+                 could not be saved: {error}. The successor index was not reset: it keeps the \
+                 unmerged stage entries for {paths_list}, the only copy of any side not \
+                 saved, and the working files hold Git's merge result. Saved so far: {}. {RECOVERY}",
+                list_paths(written.iter())
+            )));
+        }
+    };
+    if let Err(error) = reset_index(process_env, workspace) {
+        return Ok(RetainedApplied::Refused(format!(
+            "retained final-recovery edits conflict in {paths_list}; the unmarked sides are saved \
+             ({}), but unstaging failed: {error}. The successor index still holds the unmerged \
+             entries for {paths_list}; every side is now durable, so `git reset` in it is safe. \
+             {RECOVERY}",
+            list_paths(written.iter())
+        )));
+    }
 
     let paths = unmerged.into_keys().collect();
     Ok(RetainedApplied::Conflict {
@@ -110,6 +174,45 @@ pub(super) fn apply_retained_patch(
         output: applied.stderr,
         preserved_sides,
     })
+}
+
+fn reset_index(process_env: &orbit_common::Env, workspace: &Path) -> Result<(), OrbitError> {
+    git_success(process_env, workspace, &["reset", "--quiet"])
+}
+
+fn list_paths<'a>(paths: impl Iterator<Item = &'a String>) -> String {
+    let joined = paths
+        .map(|path| format!("`{path}`"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    if joined.is_empty() {
+        "none".into()
+    } else {
+        joined
+    }
+}
+
+/// Unstage the candidate after an apply that never reported a result, but only
+/// when no unmerged entry is left to lose. Returns the index state to report.
+fn release_index(process_env: &orbit_common::Env, workspace: &Path) -> String {
+    match read_unmerged_stages(process_env, workspace) {
+        Ok(unmerged) if unmerged.is_empty() => match reset_index(process_env, workspace) {
+            Ok(()) => "The staged candidate was unstaged; the successor index matches HEAD.".into(),
+            Err(error) => format!(
+                "Unstaging the candidate failed ({error}); the successor index still holds it \
+                 staged and `git reset` in it clears that."
+            ),
+        },
+        Ok(unmerged) => format!(
+            "The successor index keeps unmerged entries for {}: no side was saved, so they are \
+             the only copy and were not reset.",
+            list_paths(unmerged.keys())
+        ),
+        Err(error) => format!(
+            "The successor index was left as Git wrote it (its unmerged entries could not be \
+             read: {error})."
+        ),
+    }
 }
 
 fn read_unmerged_stages(
@@ -152,66 +255,78 @@ fn read_unmerged_stages(
     Ok(entries)
 }
 
+/// Save the sides of every unmarked conflict, recording each durable file in
+/// `written` so a failure can still name what survives.
 fn preserve_unmarked_conflict_sides(
     process_env: &orbit_common::Env,
     workspace: &Path,
     patch_sha256: &str,
     unmerged: &BTreeMap<String, UnmergedStages>,
+    written: &mut Vec<String>,
 ) -> Result<Vec<RetainedConflictSide>, OrbitError> {
     let short_digest = &patch_sha256[..patch_sha256.len().min(12)];
     let conflict_root = format!("{CONFLICT_SIDES_DIR}/{short_digest}");
     let mut preserved = Vec::new();
-
-    for (path, [stage1, stage2, stage3]) in unmerged {
-        let Some(retained_oid) = stage3.as_deref() else {
-            continue;
-        };
-        validate_safe_relative_path(path)?;
-        let current_bytes = stage2
-            .as_deref()
-            .map(|oid| git_output_bytes(process_env, workspace, &["cat-file", "blob", oid]))
-            .transpose()?;
-        let working_bytes = read_optional_file(workspace, path)?;
-        let working_matches_current = current_bytes
-            .as_ref()
-            .is_some_and(|ours| working_bytes.as_ref() == Some(ours));
-        let lacks_markers = working_bytes
-            .as_deref()
-            .is_none_or(|bytes| !has_conflict_markers(bytes));
-        if !working_matches_current && !lacks_markers {
-            continue;
-        }
-
-        let retained_bytes =
-            git_output_bytes(process_env, workspace, &["cat-file", "blob", retained_oid])?;
-        let retained_path =
-            write_conflict_side(workspace, &conflict_root, "retained", path, &retained_bytes)?;
-        let current_path = current_bytes
-            .as_deref()
-            .map(|bytes| write_conflict_side(workspace, &conflict_root, "current", path, bytes))
-            .transpose()?;
-        let base_path = match stage1.as_deref() {
-            Some(base_oid) => {
-                let bytes =
-                    git_output_bytes(process_env, workspace, &["cat-file", "blob", base_oid])?;
-                Some(write_conflict_side(
-                    workspace,
-                    &conflict_root,
-                    "base",
-                    path,
-                    &bytes,
-                )?)
-            }
-            None => None,
-        };
-        preserved.push(RetainedConflictSide {
-            path: path.clone(),
-            retained_path,
-            current_path,
-            base_path,
-        });
+    for (path, stages) in unmerged {
+        let side = preserve_path(
+            process_env,
+            workspace,
+            &conflict_root,
+            path,
+            stages,
+            written,
+        )
+        .map_err(|error| OrbitError::Execution(format!("`{path}`: {error}")))?;
+        preserved.extend(side);
     }
     Ok(preserved)
+}
+
+fn preserve_path(
+    process_env: &orbit_common::Env,
+    workspace: &Path,
+    conflict_root: &str,
+    path: &str,
+    [stage1, stage2, stage3]: &UnmergedStages,
+    written: &mut Vec<String>,
+) -> Result<Option<RetainedConflictSide>, OrbitError> {
+    let Some(retained_oid) = stage3.as_deref() else {
+        return Ok(None);
+    };
+    validate_safe_relative_path(path)?;
+    let blob = |oid: &str| git_output_bytes(process_env, workspace, &["cat-file", "blob", oid]);
+    let current_bytes = stage2.as_deref().map(blob).transpose()?;
+    let working_bytes = read_optional_file(workspace, path)?;
+    let working_matches_current = current_bytes
+        .as_ref()
+        .is_some_and(|ours| working_bytes.as_ref() == Some(ours));
+    let lacks_markers = working_bytes
+        .as_deref()
+        .is_none_or(|bytes| !has_conflict_markers(bytes));
+    if !working_matches_current && !lacks_markers {
+        return Ok(None);
+    }
+
+    let mut save = |side: &str, bytes: &[u8]| -> Result<String, OrbitError> {
+        let relative = write_conflict_side(workspace, conflict_root, side, path, bytes)?;
+        written.push(relative.clone());
+        Ok(relative)
+    };
+    let retained_path = save("retained", &blob(retained_oid)?)?;
+    let current_path = current_bytes
+        .as_deref()
+        .map(|bytes| save("current", bytes))
+        .transpose()?;
+    let base_path = stage1
+        .as_deref()
+        .map(|oid| save("base", &blob(oid)?))
+        .transpose()?;
+    Ok(Some(RetainedConflictSide {
+        path: path.to_owned(),
+        retained_path,
+        current_path,
+        base_path,
+    }))
 }
 
 /// Read `relative_path` beneath `workspace` only when every traversed component

@@ -695,6 +695,20 @@ impl Fixture {
             .unwrap_or_else(|error| panic!("{name}: {error}"))
         }
     }
+    /// The refusal a deterministic action returns instead of a result.
+    pub(super) fn action_error(&self, name: &str, input: Value) -> String {
+        execute_deterministic_action(
+            &orbit_core::test_support::EngineHost::new(&self.runtime),
+            name,
+            &json!({}),
+            &input,
+            false,
+            &HashMap::new(),
+            None,
+        )
+        .expect_err(name)
+        .to_string()
+    }
     pub(super) fn assert_original(&self) {
         assert_eq!(
             self.runtime
