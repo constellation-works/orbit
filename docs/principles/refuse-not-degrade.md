@@ -35,7 +35,7 @@ The code-level split between checks that must refuse and side channels that may 
 
 - **Fail-open cases.** A few failures are logged or reported, and the operation goes on. None of them gates a claim Orbit has verified.
   - A step checkpoint that cannot be written logs a warning, and the run continues without a durable checkpoint for that step, so a later resume cannot skip it ([activity-job design](../design/activity-job/2_design.md#86-persisted-state-for-v2-job-runs)). Checked in `crates/orbit-engine/src/activity_job/job_executor/execute.rs`.
-  - An unreadable, stale or malformed validation-environment warning cache is recomputed, and an unwritable one only logs at debug level ([CONFIG](../CONFIG.md)). Checked in `crates/orbit-runtime/src/orbit_runtime/validation_warning.rs`.
+  - An unreadable, stale or malformed validation-environment warning cache is recomputed, and an unwritable one only logs at debug level ([CONFIG](../config/workflow-validation.md#workflowvalidation_env--the-toolchain-required-validation-runs-with)). Checked in `crates/orbit-runtime/src/orbit_runtime/validation_warning.rs`.
   - An audit row that cannot be written does not fail a successful call. A read-only result returns with a warning. A mutating call returns success with an `audit_row_unpersisted` warning, because the mutation has already committed ([command audit rows](../design/auditability/2_design.md#2-command-audit-rows)). Checked in `crates/orbit-core/src/adapter/command/dispatch/execute/finalize.rs`.
 
 ## What it costs
