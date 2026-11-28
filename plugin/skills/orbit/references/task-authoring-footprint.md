@@ -97,72 +97,6 @@ exist follows the creation-intent rules below; without that authorization,
 name it as an evidence gap rather than declaring its missing selector, and
 never invent a filename.
 
-A builtin MCP tool surface change has companions that authors usually do not
-declare.
-
-When a plan adds, removes or renames a builtin MCP tool, or changes
-its advertised placement, id route, advertised description or input schema,
-locate the applicable companions at the revision being scoped (`rg -l` on the
-named test or table, `rg --files` for a named golden file), then declare each
-as a `file:` selector only when its trigger below applies. Do so only in a
-workspace that keeps the companion. The first four kinds apply:
-
-- The handwritten exact advertised-name list, asserted by the test
-  `canonical_builtin_definitions_preserve_the_exact_workspace_surface`, changes
-  with an advertised add, remove, rename or placement change. Its id-route
-  tables, asserted by `every_builtin_id_route_is_declared_and_preserves_the_former_tables`,
-  change with an id-route change. Declare that fixture for either.
-- The derived golden `authorization_matrix.json`, asserted by the test
-  `authorization_matrix_matches_live_registry`, has one row per registered
-  builtin, advertised or not, and per governed operation. Declare it when a
-  builtin tool is added, removed or renamed; placement and id-route changes alone
-  do not change it. Regenerate it with the workspace's documented golden command
-  and review the diff; never hand-edit it.
-- The handwritten `GOVERNED_TOOL_PLACEMENT` table, asserted against the live
-  registry in the same test module, must be inspected for each such plan. Declare
-  its file only when the table must change: a placement change, or a governed
-  tool operation added, removed or renamed.
-- The claimed-worker routing match in `worker_tools.rs`
-  (`src/adapter/tool_host/worker_tools.rs` in the `orbit-core` crate; declare
-  it as the workspace-relative `file:` selector for that path), routed by the
-  exhaustive `worker_route` match (`worker_tools.rs:51-150`; the file header
-  notes a new tool family or verb must be placed there before the crate
-  compiles).
-  - Declare its `file:` selector when the plan adds, removes or
-    renames a builtin orbit.* tool or verb. A placement or id-route change alone
-    does not change it.
-
-A body-only tool edit that keeps the name, verbs, placement and id route
-declares none of these four companions.
-
-The fifth companion is the handwritten per-role MCP surface budget
-(`mcp_role_budgets.json`, in the `orbit-mcp` crate's `tests/boundary/`
-directory), read by `role_surface_budget` in `role_surface.rs`.
-Locate it at the revision being scoped with `rg --files -g 'mcp_role_budgets.json'`,
-verify the matching include in `role_surface.rs`, and declare its exact
-workspace-relative path as a `file:` selector.
-
-Its ceilings bound each role's
-tool count and approximate tokens (serialized name, description and
-input-schema byte count divided by four). Declare this fixture when a plan adds,
-removes or renames a builtin MCP tool, or changes its advertised description or input
-schema.
-
-A placement-only change, id-route-only change, or implementation-only
-edit that leaves the advertised name, description and input schema unchanged
-does not trigger it. Keep the measured surface within the recorded ceilings.
-If a change requires more surface, raise only the affected ceiling in this
-file as a reviewed decision and explain in the PR why the role needs the extra
-surface, as the file comment requires.
-
-Resident tool rights, control actions and descriptions are defined in the
-`orbit-common` crate's `src/governance/resident.rs`; include that source when a
-change modifies a resident right, a control action or a `tool_description`.
-Any MCP-visible change also affects the derived tool-list goldens in the
-`orbit-cli` crate: `tests/output_goldens/tool_list.json` and
-`tests/output_goldens/tool_list.plain.txt`. Include both and regenerate them
-with `make goldens UPDATE=1`, never by hand.
-
 When the planned change establishes a new or renamed action, or a changed
 cross-module interface, follow it through the existing registration wiring
 it requires and declare the exact existing sites that source evidence shows
@@ -205,8 +139,6 @@ then keeps its empty footprint. Drop reasons do not replace the existing
 already-landed or invalid-finding proof.
 A record cannot override a proposed change target or an operator-declared
 creation target. Keep evidence references in the finding's description.
-
-Check helper filenames against `.github/codeql/codeql-config.yml` exclusions before prescribing them; production helpers must remain in CodeQL's source selection.
 
 For a known new target, explain creation intent. A missing `file:` selector
 whose parent exists is accepted with a warning; other missing targets require
