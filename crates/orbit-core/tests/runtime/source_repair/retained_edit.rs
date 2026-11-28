@@ -875,7 +875,15 @@ fn retained_crlf_unmarked_conflict_preserves_all_sides() {
         json!({"run_id":id,"job_run_id":id,"task_ids":[f.task],"base":"main","base_sync":"remote"}),
     );
     let successor = PathBuf::from(setup["workspace_path"].as_str().unwrap());
-    let resumed = f.action("candidate_resume", json!({"job_run_id":id,"task_ids":[f.task],"workspace_path":successor,"base_sha":setup["base_sha"]}));
+    let resumed = f.action(
+        "candidate_resume",
+        json!({
+            "job_run_id": id,
+            "task_ids": [f.task],
+            "workspace_path": successor,
+            "base_sha": setup["base_sha"]
+        }),
+    );
     assert_eq!(resumed["repair"]["trigger"], "conflict", "{resumed}");
     let sides = resumed["repair"]["retained_conflict_sides"]
         .as_array()
