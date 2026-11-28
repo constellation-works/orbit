@@ -4,7 +4,7 @@ This page names the parts that shape work on Orbit and links each to the documen
 
 ## Tasks and delivery
 
-Every change starts as a task, and the task id appears in the commit. Delivery follows the stances in [`docs/principles/`](../principles/CONVENTIONS.md): agents propose and the operator admits ([operator admission](../principles/operator-admission.md)), a task is checked against the current code before it enters the backlog ([pilot before promote](../principles/pilot-before-promote.md)), tasks run in parallel only when their declared files do not overlap ([declared footprints](../principles/declared-footprints.md)), and changes merge on required checks rather than serial approval ([optimistic merging](../principles/optimistic-merging.md)). What Orbit is for, and what it is not, is in [positioning](../principles/positioning.md).
+Every change starts as a [task](https://orbit-cli.com/concepts/tasks/), and the task id appears in the commit. Delivery follows the stances in [`docs/principles/`](../principles/CONVENTIONS.md): agents propose and the operator admits ([operator admission](../principles/operator-admission.md)), a task is checked against the current code before it enters the backlog ([pilot before promote](../principles/pilot-before-promote.md)), tasks run in parallel only when their declared files do not overlap ([declared footprints](../principles/declared-footprints.md)), and changes merge on required checks rather than serial approval ([optimistic merging](../principles/optimistic-merging.md)). What Orbit is for, and what it is not, is in [positioning](../principles/positioning.md).
 
 ## Standards
 
