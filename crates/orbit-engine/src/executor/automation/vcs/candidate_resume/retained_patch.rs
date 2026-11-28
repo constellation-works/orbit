@@ -166,11 +166,12 @@ fn preserve_unmarked_conflict_sides(
         let Some(retained_oid) = stage3.as_deref() else {
             continue;
         };
+        validate_safe_relative_path(path)?;
         let current_bytes = stage2
             .as_deref()
             .map(|oid| git_output_bytes(process_env, workspace, &["cat-file", "blob", oid]))
             .transpose()?;
-        let working_bytes = read_optional_file(&workspace.join(path))?;
+        let working_bytes = read_optional_file(workspace, path)?;
         let working_matches_current = current_bytes
             .as_ref()
             .is_some_and(|ours| working_bytes.as_ref() == Some(ours));
@@ -180,7 +181,6 @@ fn preserve_unmarked_conflict_sides(
         if !working_matches_current && !lacks_markers {
             continue;
         }
-        validate_safe_relative_path(path)?;
 
         let retained_bytes =
             git_output_bytes(process_env, workspace, &["cat-file", "blob", retained_oid])?;
@@ -214,13 +214,57 @@ fn preserve_unmarked_conflict_sides(
     Ok(preserved)
 }
 
-fn read_optional_file(path: &Path) -> Result<Option<Vec<u8>>, OrbitError> {
-    match std::fs::read(path) {
+/// Read `relative_path` beneath `workspace` only when every traversed component
+/// is a real directory and the leaf is a regular file. Symlinks, directories
+/// and missing paths cannot hold inline merge markers and return `Ok(None)`
+/// without following symlinks.
+fn read_optional_file(
+    workspace: &Path,
+    relative_path: &str,
+) -> Result<Option<Vec<u8>>, OrbitError> {
+    let mut current = workspace.to_path_buf();
+    let mut leaf_is_file = false;
+    for component in Path::new(relative_path).components() {
+        current.push(component);
+        let metadata = match std::fs::symlink_metadata(&current) {
+            Ok(metadata) => metadata,
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+                ) =>
+            {
+                return Ok(None);
+            }
+            Err(error) => {
+                return Err(OrbitError::Io(format!(
+                    "read conflicting file '{}': {error}",
+                    current.display()
+                )));
+            }
+        };
+        let file_type = metadata.file_type();
+        if file_type.is_symlink() {
+            return Ok(None);
+        }
+        leaf_is_file = file_type.is_file();
+    }
+    if !leaf_is_file {
+        return Ok(None);
+    }
+    match std::fs::read(&current) {
         Ok(bytes) => Ok(Some(bytes)),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+            ) =>
+        {
+            Ok(None)
+        }
         Err(error) => Err(OrbitError::Io(format!(
             "read conflicting file '{}': {error}",
-            path.display()
+            current.display()
         ))),
     }
 }
