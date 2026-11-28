@@ -3,9 +3,7 @@ title: Project Learnings — Overview
 owner: claude
 created_date: 2026-11-28
 updated_date: 2026-11-28
-status: Accepted
-stage: parked
-next: "Retired by decision (ORB-10736); candidate to move under _archived"
+status: Deprecated
 feature: project-learnings
 doc_role: overview
 type: design
@@ -17,10 +15,12 @@ related_artifacts: [ORB-10736, ORB-12718]
 
 # Project Learnings — Overview
 
+Retired by [ORB-10736]: the native subsystem has no replacement, and durable project rules now live in reviewed docs and the [workspace agent corpus](../../workspace-agent-corpus/1_overview.md).
+
 Project learnings were a native Orbit resource that stored scoped project rules under
 `.orbit/learnings/` and delivered them to agents automatically. [ORB-10736] removed the
-subsystem and every surface that depended on it; the feature is parked until its folder
-moves under `_archived`. What remains is described in [2_design.md](./2_design.md), and
+subsystem and every surface that depended on it; this archived folder keeps the design as
+history. What remains is described in [2_design.md](./2_design.md), and
 why it was removed is in [4_decisions.md](./4_decisions.md).
 
 ## 1. Motivation
@@ -28,7 +28,7 @@ why it was removed is in [4_decisions.md](./4_decisions.md).
 Automatic scope-matched delivery did not justify a separate model, store, projections,
 lifecycle API, tool surface, dashboard and curation machinery. Durable guidance now lives
 in ordinary reviewed documentation and, for agent activities, the
-[workspace agent corpus](../workspace-agent-corpus/1_overview.md).
+[workspace agent corpus](../../workspace-agent-corpus/1_overview.md).
 
 ## 2. Core Concepts
 

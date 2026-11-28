@@ -3,7 +3,7 @@ title: Project Learnings — Design
 owner: claude
 created_date: 2026-11-28
 updated_date: 2026-11-28
-status: Accepted
+status: Deprecated
 feature: project-learnings
 doc_role: design
 type: design

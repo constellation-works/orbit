@@ -2,7 +2,7 @@
 title: Operations as Data — Decisions
 owner: claude
 created_date: 2026-07-26
-updated_date: 2026-11-14
+updated_date: 2026-11-28
 last_validated: 2026-11-04
 status: Accepted
 feature: operations-as-data
@@ -17,7 +17,7 @@ related_artifacts: [ORB-10358, ORB-10453, ORB-10478, ORB-12563, ORB-12582, ORB-1
 
 # Operations as Data — Decisions
 
-> **Retired learning clauses:** [ORB-10736] / [Remove the native project-learning subsystem](../project-learnings/4_decisions.md#remove-the-native-project-learning-subsystem) removed the native
+> **Retired learning clauses:** [ORB-10736] / [Remove the native project-learning subsystem](../_archived/project-learnings/4_decisions.md#remove-the-native-project-learning-subsystem) removed the native
 > project-learning CLI and tool operations. Learning-specific examples in
 > earlier entries are retained as historical context only.
 

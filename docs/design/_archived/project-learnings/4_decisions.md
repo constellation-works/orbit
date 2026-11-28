@@ -6,7 +6,7 @@ owner: claude
 created_date: 2026-05-09
 updated_date: 2026-11-28
 last_validated: 2026-10-10
-status: Accepted
+status: Deprecated
 feature: project-learnings
 doc_role: decisions
 tags: ["project-learnings"]
@@ -14,7 +14,7 @@ tags: ["project-learnings"]
 
 # Project Learnings — Decisions
 
-The native project-learning subsystem is retired; [1_overview.md](./1_overview.md) states the feature's parked stage and [2_design.md](./2_design.md) what remains of it. This file keeps only the two decisions that still govern behavior: why the subsystem was removed and how leftover files are treated. The earlier design decisions it superseded are in git history.
+The native project-learning subsystem is retired; [1_overview.md](./1_overview.md) records its retirement and [2_design.md](./2_design.md) what remains of it. This file keeps only the two decisions that still govern behavior: why the subsystem was removed and how leftover files are treated. The earlier design decisions it superseded are in git history.
 
 ## Remove the native project-learning subsystem
 
@@ -27,7 +27,7 @@ The native resource was justified primarily by automatic scope-matched delivery.
 
 ### Decision
 
-Remove the native project-learning subsystem and every executable or advertised surface that depends on it. Existing files under `.orbit/learnings/**` remain byte-for-byte inert historical data: they are not read, indexed, injected, migrated, rewritten, or copied elsewhere. Preserve the shipped SQLite migration ledger and append a forward migration that drops the retired tables and learning vector rows for both upgraded and freshly initialized databases. At the time, unified search covered tasks, docs, ADRs, and frictions and rejected the retired learning kind. The separate ADR search kind was later retired when decision bodies moved into the docs corpus (see [Design Doc Conventions §4b](../CONVENTIONS.md#4b-why-ids-and-lifecycle-records-were-retired)).
+Remove the native project-learning subsystem and every executable or advertised surface that depends on it. Existing files under `.orbit/learnings/**` remain byte-for-byte inert historical data: they are not read, indexed, injected, migrated, rewritten, or copied elsewhere. Preserve the shipped SQLite migration ledger and append a forward migration that drops the retired tables and learning vector rows for both upgraded and freshly initialized databases. At the time, unified search covered tasks, docs, ADRs, and frictions and rejected the retired learning kind. The separate ADR search kind was later retired when decision bodies moved into the docs corpus (see [Design Doc Conventions §4b](../../CONVENTIONS.md#4b-why-ids-and-lifecycle-records-were-retired)).
 
 ### Consequences
 
@@ -44,7 +44,7 @@ Remove the native project-learning subsystem and every executable or advertised 
 
 ### Context
 
-The original design stored learnings under `.orbit/learnings/` so they travelled with the repo. [Remove the native project-learning subsystem](#remove-the-native-project-learning-subsystem) left those files as inert historical data. The orbit repo's `.gitignore` still re-included `!.orbit/learnings/` even though the managed init block never did. [Per-user ownership of `.orbit/` (no git re-includes)](../routines/4_decisions.md#per-user-ownership-of-orbit-no-git-re-includes) asked whether learnings should be the one remaining exception.
+The original design stored learnings under `.orbit/learnings/` so they travelled with the repo. [Remove the native project-learning subsystem](#remove-the-native-project-learning-subsystem) left those files as inert historical data. The orbit repo's `.gitignore` still re-included `!.orbit/learnings/` even though the managed init block never did. [Per-user ownership of `.orbit/` (no git re-includes)](../../routines/4_decisions.md#per-user-ownership-of-orbit-no-git-re-includes) asked whether learnings should be the one remaining exception.
 
 No runtime consumer reads `.orbit/learnings/`. Shared knowledge already has the docs corpus and task publication.
 
