@@ -273,6 +273,21 @@ class SourceStyleDiffGate(unittest.TestCase):
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn("src/outer.rs:1: R1", result.stderr)
 
+    def test_inline_module_rename_cannot_spend_unrelated_removed_debt(self):
+        root, _ = make_repo(self)
+        singular = "pub mod item {\n    pub fn live() {}\n}\n"
+        unrelated = "pub mod items {\n    pub fn old() {}\n}\n"
+        commit(root, {"src/outer.rs": singular, "src/group/mod.rs": unrelated}, "add modules")
+        base = run_git(root, "rev-parse", "HEAD")
+        commit(
+            root,
+            {"src/outer.rs": singular.replace("mod item {", "mod items {"), "src/group/mod.rs": ""},
+            "rename a module and remove unrelated debt",
+        )
+        result = gate(root, base)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("src/outer.rs:1: R1", result.stderr)
+
     def test_generated_source_is_exempt(self):
         root, base = make_repo(self)
         commit(root, {"src/generated.rs": GENERATED}, "add a generated file")
