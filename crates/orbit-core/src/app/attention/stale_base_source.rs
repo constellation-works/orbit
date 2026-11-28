@@ -3,12 +3,11 @@
 use super::source::{
     AttentionCandidates, AttentionSourceContext, attention_reason, workspace_degraded,
 };
-use orbit_common::{OrbitError, governance::attention::cursor};
+use orbit_common::OrbitError;
+use orbit_common::governance::attention::cursor;
 use orbit_store::contract::JobRunQuery;
-use orbit_types::{
-    tool::{AttentionItem, AttentionKind, AttentionNext, AttentionSeverity},
-    workflow::{DELIVERY_LEAF_JOBS, JobRun, JobRunState},
-};
+use orbit_types::tool::{AttentionItem, AttentionKind, AttentionNext, AttentionSeverity};
+use orbit_types::workflow::{DELIVERY_LEAF_JOBS, JobRun, JobRunState};
 use serde_json::json;
 use std::time::Instant;
 
@@ -120,7 +119,11 @@ fn observe(
             .find_commit(oid.map_err(|e| OrbitError::Execution(e.to_string()))?)
             .map_err(|e| OrbitError::Execution(e.to_string()))?;
         let message = commit.summary().ok().flatten().unwrap_or("");
-        commits.push(json!({"sha": commit.id().to_string(), "summary": message, "task_id": task_from_message(message)}));
+        commits.push(json!({
+            "sha": commit.id().to_string(),
+            "summary": message,
+            "task_id": task_from_message(message),
+        }));
     }
     let commit_hint = commits
         .first()
@@ -132,16 +135,47 @@ fn observe(
         .and_then(|c| c["task_id"].as_str())
         .map(|id| format!(" ({id})"))
         .unwrap_or_default();
-    let detail = json!({"base": branch, "ahead": ahead, "behind": behind, "owner_commit": owner.to_string(), "origin_commit": remote.to_string(), "owner_only_commits": commits, "tracked_changes": dirty});
+    let detail = json!({
+        "base": branch,
+        "ahead": ahead,
+        "behind": behind,
+        "owner_commit": owner.to_string(),
+        "origin_commit": remote.to_string(),
+        "owner_only_commits": commits,
+        "tracked_changes": dirty,
+    });
     let refs = json!({});
     let since = run.finished_at.unwrap_or(run.created_at);
     let mut item = AttentionItem {
         id: cursor::attention_item_id(KIND, &context.host.machine_id, &context.workspace.id, &refs),
-        kind: KIND, severity: AttentionSeverity::Medium, workspace: context.workspace.clone(), host: context.host.clone(), refs,
-        task: None, since: Some(since), age_seconds: Some((context.now - since).num_seconds().max(0) as u64), expires_at: None,
-        reason: attention_reason(&format!("Deliveries held: {branch} is ahead {ahead}, behind {behind} of origin/{branch}; owner-only commit {commit_hint}{task_hint}")),
+        kind: KIND,
+        severity: AttentionSeverity::Medium,
+        workspace: context.workspace.clone(),
+        host: context.host.clone(),
+        refs,
+        task: None,
+        since: Some(since),
+        age_seconds: Some((context.now - since).num_seconds().max(0) as u64),
+        expires_at: None,
+        reason: attention_reason(&format!(
+            "Deliveries held: {branch} is ahead {ahead}, behind {behind} of origin/{branch}; owner-only commit {commit_hint}{task_hint}"
+        )),
         detail: detail.clone(),
-        next: AttentionNext { summary: "Preserve owner-only commits and tracked changes, reconcile the base with origin, then retry delivery".into(), tool: None, input: None, command: format!("git log --oneline '{}'", format!("origin/{branch}..{branch}").replace('\'', "'\\''")), needs: vec![], also: vec![] },
+        next: AttentionNext {
+            summary: concat!(
+                "Preserve owner-only commits and tracked changes, ",
+                "reconcile the base with origin, then retry delivery"
+            )
+            .into(),
+            tool: None,
+            input: None,
+            command: format!(
+                "git log --oneline '{}'",
+                format!("origin/{branch}..{branch}").replace('\'', "'\\''")
+            ),
+            needs: vec![],
+            also: vec![],
+        },
         fingerprint: String::new(),
     };
     if item.age_seconds.is_some_and(|age| age >= 24 * 3600) {
