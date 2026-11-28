@@ -47,15 +47,23 @@ path, so the remaining question is how the shipped definitions map onto it.
 
 | Concern | Where | Task |
 | --- | --- | --- |
-| Executor type enum and definition schema | `crates/orbit-types/src/workflow/executor_def.rs` | [ORB-10395] |
-| Shipped executor definitions | `crates/orbit-core/assets/executors/` | — |
-| Agent and shell executor resolution | `crates/orbit-core/src/adapter/engine_host/actions/cli_executor.rs` | [ORB-11294] |
-| Deterministic shell action | `crates/orbit-engine/src/executor/automation/shell.rs` | [ORB-11294] |
-| Local-shell contract | [specs/local-shell.md](./specs/local-shell.md) | [ORB-11294] |
+| Executor type enum and definition schema | `crates/orbit-types/src/workflow/executor_def.rs` | [ORB-10395], [ORB-11294], [ORB-11589], [ORB-19977], [ORB-25764] |
+| Shipped executor definitions | `crates/orbit-core/assets/executors/` | [ORB-10112], [ORB-11290], [ORB-11294], [ORB-29847] |
+| Agent and shell executor resolution | `crates/orbit-core/src/adapter/engine_host/actions/cli_executor.rs` | [ORB-11294], [ORB-19977] |
+| Deterministic shell action | `crates/orbit-engine/src/executor/automation/shell.rs` | [ORB-11294], [ORB-18833] |
+| Local-shell contract | [specs/local-shell.md](./specs/local-shell.md) | [ORB-11294], [ORB-29816], [ORB-29847] |
 
 ## Task References
 
+- [ORB-10112] — selected shipped agent executor sandbox settings by host platform.
 - [ORB-10395] — retired the v1 executor stack and the External Executor Protocol.
+- [ORB-11290] — removed `model_pair_override` from shipped executor definitions while preserving legacy parsing.
 - [ORB-11294] — restored local shell execution as the `local_shell` deterministic action.
+- [ORB-11589] — added `ExecutorSandboxKind::Off` and persisted explicit sandbox-off operator choices.
+- [ORB-18833] — exposed bounded `local_shell` step output summaries (`exit_code`, `log_tail`) on run views.
+- [ORB-19977] — added executor `image_input` declarations and propagation through `resolve_cli_executor`.
+- [ORB-25764] — retired the `cli_command` read alias of `ExecutorType::LocalShell`.
+- [ORB-29816] — corrected local-shell filesystem authority descriptions in shipped executor and contributor docs.
+- [ORB-29847] — corrected Linux Bubblewrap read-policy and fallback guarantees in `local-shell.yaml` and the local-shell spec.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

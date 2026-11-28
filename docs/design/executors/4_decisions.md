@@ -3,7 +3,7 @@ title: Executors — Decisions
 owner: claude
 created_date: 2026-06-13
 updated_date: 2026-11-28
-last_validated: 2026-10-12
+last_validated: 2026-11-28
 status: Draft
 feature: executors
 doc_role: decisions
@@ -29,7 +29,7 @@ exception.
 **Recorded:** 2026-09-05 · [ORB-11294]
 **Paths:** `crates/orbit-engine/src/executor/automation/shell.rs`, `crates/orbit-core/assets/executors/local-shell.yaml`, [specs/local-shell.md](./specs/local-shell.md)
 
-> **Clarified — ORB-29832.** The `fsProfile` that the Consequences below ask operators to add is optional. A `sandbox:` on the executor definition selects the OS backend, which wraps every activity that uses it. An activity's `fsProfile` selects a named policy profile; without one, the built-in `unrestricted` profile applies with the policy's denies. The current contract is in [specs/local-shell.md](./specs/local-shell.md#filesystem-authority). The recorded decision text below is unchanged.
+> **Clarified — [ORB-29832].** The `fsProfile` that the Consequences below ask operators to add is optional. A `sandbox:` on the executor definition selects the OS backend, which wraps every activity that uses it. An activity's `fsProfile` selects a named policy profile; without one, the built-in `unrestricted` profile applies with the policy's denies. The current contract is in [specs/local-shell.md](./specs/local-shell.md#filesystem-authority). The recorded decision text below is unchanged.
 
 **Context.** [ORB-10395] deleted the v1 executor stack, including the
 `cli_command` implementation, but `assets/executors/local-shell.yaml` kept
@@ -95,7 +95,7 @@ shell step an injection surface.
 **Recorded:** 2026-06-14 00:40:41.791069Z · [ORB-00384], [ORB-10395]
 **Paths:** `crates/orbit-types/src/workflow/executor_def.rs`, `docs/design/executors/**`
 
-> **RETIRED 2026-07-26 — ORB-10395.** The External Executor Protocol is not a supported Orbit surface. Retiring the v1 executor stack removed everything this decision stood up: `ExternalExecutor`, the shared `direct_agent` subprocess transport, `ActivityExecutorRegistry`, the `ActivityExecutor` trait, the v1 `ExecutionContext`, the `external.example.yaml` template, and the conformance fixture. v2 dispatch (`orbit-engine::activity_job`) is the only execution path and consults no executor registry, so an `executor_type: external` def is now inert — it deserializes and stores, but nothing spawns it. `ExecutorType::External` survives in the wire enum only so pre-existing defs keep parsing; dropping the variant is a separate release decision, tracked alongside the same call for `ExecutorType::AgentCli`. The Consequences below are history, not live obligations — in particular the wire protocol is **no longer** a backward-compatibility obligation. Any future out-of-process extension point must be decided afresh against the v2 dispatch path.
+> **RETIRED 2026-07-26 — [ORB-10395].** The External Executor Protocol is not a supported Orbit surface. Retiring the v1 executor stack removed everything this decision stood up: `ExternalExecutor`, the shared `direct_agent` subprocess transport, `ActivityExecutorRegistry`, the `ActivityExecutor` trait, the v1 `ExecutionContext`, the `external.example.yaml` template, and the conformance fixture. v2 dispatch (`orbit-engine::activity_job`) is the only execution path and consults no executor registry, so an `executor_type: external` def is now inert — it deserializes and stores, but nothing spawns it. `ExecutorType::External` survives in the wire enum only so pre-existing defs keep parsing; dropping the variant is a separate release decision, tracked alongside the same call for `ExecutorType::AgentCli`. The Consequences below are history, not live obligations — in particular the wire protocol is **no longer** a backward-compatibility obligation. Any future out-of-process extension point must be decided afresh against the v2 dispatch path.
 
 **Context.** Orbit's `ExecutorType` is a sealed enum and `load_from_defs` is a closed `match`, so a homegrown executor can only be added by forking orbit-engine — an `internal`-tier crate with no downstream guarantees. Yet `DirectAgentExecutor` already implements an out-of-process transport (spawn `command`, write a prompt envelope to stdin, map a stdout result envelope to an outcome): the capability exists but is undocumented and coupled to the agent-family `direct_agent` path.
 
@@ -114,11 +114,11 @@ shell step an injection surface.
 
 ### Context
 
-The Stage 3 v1 runtime-host phase-out design deletes the v1 executor stack once planning duel is ported to v2 (ORB-10393). `ExternalExecutor` implements the External Executor Protocol v1 — a documented public extension point recorded in the retired protocol spec and the External Executor Protocol retirement decision (ORB-10395), alongside `assets/executors/external.example.yaml` — and shares the `direct_agent` subprocess transport slated for deletion. The phase-out design flagged an open question: if external executors remain a supported surface, the transport must be rehomed rather than deleted.
+The Stage 3 v1 runtime-host phase-out design deletes the v1 executor stack once planning duel is ported to v2 ([ORB-10393]). `ExternalExecutor` implements the External Executor Protocol v1 — a documented public extension point recorded in the retired protocol spec and the External Executor Protocol retirement decision ([ORB-10395]), alongside `assets/executors/external.example.yaml` — and shares the `direct_agent` subprocess transport slated for deletion. The phase-out design flagged an open question: if external executors remain a supported surface, the transport must be rehomed rather than deleted.
 
 ### Decision
 
-Daniel decided on 2026-07-25: the External Executor Protocol is not a supported surface and is retired. `ExternalExecutor` and the shared `direct_agent` transport are deleted with the rest of the v1 executor stack in Stage 3 (ORB-10395); nothing is rehomed. The protocol spec and example asset were retired or removed in the same change. This entry supersedes the original External Executor Protocol decision above.
+Daniel decided on 2026-07-25: the External Executor Protocol is not a supported surface and is retired. `ExternalExecutor` and the shared `direct_agent` transport are deleted with the rest of the v1 executor stack in Stage 3 ([ORB-10395]); nothing is rehomed. The protocol spec and example asset were retired or removed in the same change. This entry supersedes the original External Executor Protocol decision above.
 
 ### Consequences
 
@@ -128,8 +128,11 @@ Daniel decided on 2026-07-25: the External Executor Protocol is not a supported 
 
 ## Task References
 
-- **[ORB-00384]** — External Executor Protocol v1: define the contract, add `ExecutorType::External`, register a generic external-process executor, document the spec, ship a conformance test.
-- **[ORB-00400]** — recorded the `executors` folder as a decisions+specs-only layout exception while refreshing design-doc ownership conventions.
-- **[ORB-10395]** — retired the External Executor Protocol with the rest of the v1 executor stack: deleted `ExternalExecutor`, the shared subprocess transport, the executor registry, the example def template, and the conformance fixture.
+- [ORB-00384] — defined External Executor Protocol v1 (`ExecutorType::External`, generic external-process executor, spec, and conformance test; retired by [ORB-10395]).
+- [ORB-00400] — recorded the `executors` folder as a decisions+specs-only layout exception while refreshing design-doc ownership conventions.
+- [ORB-10393] — ported planning duel to the v2 pipeline, unblocking Stage 3 v1 executor stack deletion.
+- [ORB-10395] — retired the External Executor Protocol with the rest of the v1 executor stack: deleted `ExternalExecutor`, the shared subprocess transport, the executor registry, the example def template, and the conformance fixture.
+- [ORB-11294] — restored local-shell execution as the `local_shell` deterministic v2 action.
+- [ORB-29832] — clarified that `fsProfile` on a `local_shell` activity is optional and defaults to `unrestricted`.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

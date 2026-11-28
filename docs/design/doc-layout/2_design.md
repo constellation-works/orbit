@@ -3,8 +3,8 @@ title: Doc Layout — Design
 owner: claude
 created_date: 2026-11-27
 updated_date: 2026-11-28
-last_validated: 2026-11-27
-status: Accepted
+last_validated: 2026-11-28
+status: Implemented
 feature: doc-layout
 doc_role: design
 type: design
@@ -147,14 +147,14 @@ page holds no procedure.
 
 | Section | Says | Links to |
 |---|---|---|
-| Tasks and delivery | Every change starts as a task, the task id is in the commit, and delivery follows the principles. | `docs/principles/`, the task concept page |
+| Tasks and delivery | Every change starts as a task, the task id is in the commit, and delivery follows the principles. | `docs/principles/`, the task concept page ([ORB-29729]) |
 | Standards | A set of shared engineering standards is vendored read-only under `docs/standards/` and is normative. A deviation is a decision that cites the rule and its version. Copies are updated by a sync, never by hand. | [the standards index](../../standards/README.md), the managed block in `AGENTS.md` |
 | Designs | One folder per feature scaffolded with an overview, a design and a decisions doc, a delivery stage separate from the document's status, and a generated board. | [the design conventions](../CONVENTIONS.md), [the feature board](../FEATURES.md) |
 | Agent rules and records | Rule files and the decision corpus are guidance. Records are dated evidence and describe no current behaviour. | `docs/agents/` |
 | Companion tools | Orbit is developed with two companion tools, each in its own public repository: one staffs and coordinates agent sessions, the other records preferences and session history so a session can resume. A private workspace repository holds knowledge that spans repositories and the coordinating sessions' own task records. | The two public repositories |
 
-The README of `docs/development/` stays the index [ORB-29291] makes it and gains one line linking
-this page first.
+The README of `docs/development/` stays the index [ORB-29291] made it and gained one line linking
+this page first ([ORB-29316]).
 
 The private workspace keeps the full account of how it, the session tool and the memory tool
 are used. This repository states their roles only, because it is public and those procedures
@@ -184,15 +184,15 @@ change faster than Orbit does.
 
 ## Phasing
 
-1. **Folder, moves and index** ([ORB-29310]). Create `docs/principles/` with `CONVENTIONS.md`, move the three
-   pages, update inbound links, add the Principles table and the root rule to the generator.
-   Runs after [ORB-29290], the last chained task that edits the generator.
-2. **Four principle pages.** One task per page ([ORB-29312], [ORB-29313], [ORB-29314],
+1. **Folder, moves and index** ([ORB-29310], **done**). Created `docs/principles/` with `CONVENTIONS.md`, moved the three
+   pages, updated inbound links, and added the Principles table and the root rule to the generator.
+   Landed after [ORB-29290], the last chained task that edited the generator.
+2. **Four principle pages** (**done**). One task per page ([ORB-29312], [ORB-29313], [ORB-29314],
    [ORB-29315]), each reading the sources named above and replacing restated arguments in designs,
    runbooks and rule files with links where the page now carries them. The task for
-   `operator-admission.md` also trims the positioning page. Runs after phase 1.
-3. **Operating-model page** ([ORB-29316]). Add `operating-model.md` to `docs/development/`, and the README line. Runs
-   after [ORB-29291], which creates the folder's README.
+   `operator-admission.md` also trimmed the positioning page.
+3. **Operating-model page** ([ORB-29316], **done**; Tasks link in [ORB-29729], **done**). Added `operating-model.md` to `docs/development/`, and the README line,
+   after [ORB-29291] created the folder's README.
 4. **Standards citation.** Tracked in the workspace that owns the canon. Correct the STD-05 exemplar paths in the shared canon and sync the
    vendored copy. The operator approves that change to the canon. Runs after phase 1.
 
@@ -215,14 +215,15 @@ The operator settled these on 2026-11-27, each as recommended:
 
 ## Task References
 
-- [ORB-29290] — moves `docs/dev/` records and examples.
-- [ORB-29291] — splits `docs/DEVELOPMENT.md` into `docs/development/`.
-- [ORB-29292] — splits `docs/CONFIG.md` into `docs/config/`.
-- [ORB-29310] — creates `docs/principles/`, moves the three pages, adds the Principles index and the root rule.
-- [ORB-29312] — writes the declared-footprints page.
-- [ORB-29313] — writes the operator-admission page and trims the positioning page.
-- [ORB-29314] — writes the pilot-before-promote page.
-- [ORB-29315] — writes the refuse-not-degrade page.
-- [ORB-29316] — adds the operating-model page.
+- [ORB-29290] — moved `docs/dev/` records and examples (done).
+- [ORB-29291] — split `docs/DEVELOPMENT.md` into `docs/development/` (done).
+- [ORB-29292] — split `docs/CONFIG.md` into `docs/config/` (done).
+- [ORB-29310] — created `docs/principles/`, moved the three pages, and added the Principles index and the root rule (done).
+- [ORB-29312] — wrote the `declared-footprints.md` principle page (done).
+- [ORB-29313] — wrote the `operator-admission.md` principle page and trimmed the positioning page (done).
+- [ORB-29314] — wrote the `pilot-before-promote.md` principle page (done).
+- [ORB-29315] — wrote the `refuse-not-degrade.md` principle page (done).
+- [ORB-29316] — added the `operating-model.md` page (done).
+- [ORB-29729] — linked the Tasks concept from `docs/development/operating-model.md` (done).
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

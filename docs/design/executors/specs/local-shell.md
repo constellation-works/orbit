@@ -2,7 +2,7 @@
 type: design
 summary: "Spec: the local-shell executor and the local_shell deterministic action"
 tags: ["executors", "activity-job"]
-last_validated: 2026-11-08
+last_validated: 2026-11-28
 ---
 
 # Spec: `local-shell`
@@ -108,7 +108,7 @@ does not advance the resume cursor. Successful commands retain their normal
 stdout and stderr for templates alongside the bounded summary.
 
 `orbit run show <RUN_ID> --json` and `orbit.run` action `show` expose that
-summary in each displayed step's `output`, including `success`, `exit_code`,
+summary in each displayed step's `output` ([ORB-18833]), including `success`, `exit_code`,
 `duration_ms`, `timed_out`, `log_tail` and `log_tail_truncated`. The bounded run
 view exposes the same summary under `run.steps`. Its step-level `exit_code`
 also uses the command result when the step record has no status. Other step
@@ -220,7 +220,7 @@ Script form:
 
 `local_shell` is the current spelling of the executor family that older
 definitions called `cli_command`. The `cli_command` value is no longer accepted
-for `executor_type`; change it to `local_shell` before loading an older
+for `executor_type` ([ORB-25764]); change it to `local_shell` before loading an older
 definition.
 
 After that change, the definition's fields keep working as step defaults:

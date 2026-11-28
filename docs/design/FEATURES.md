@@ -15,16 +15,16 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Backlog Forecast](./backlog-forecast/1_overview.md) | Residual rules (review phases, shadow resource-fit, follower capacity, richer calibration) are not filed | claude |
 | [Claude Code Mod](./claude-code-mod/1_overview.md) | Trial peer-message links in Claude Code [ORB-28918] | claude |
 | [Condition Triggers](./condition-triggers/1_overview.md) | File phase 3: host scope and notifications | claude |
-| [Doc Layout](./doc-layout/1_overview.md) | Phase 2: the four principle pages [ORB-29312, ORB-29313, ORB-29314, ORB-29315] | claude |
 | [Experiments](./experiments/1_overview.md) | The horizon decision-channel step remains unfiled | claude |
 | [Model Ranking](./model-ranking/1_overview.md) | R4 has no open task (ORB-23305 rejected): file the freeze and 4-week shadow run | claude |
 | [Operations as Data](./operations-as-data/1_overview.md) | Restore ORB-15934 after 2026-11-12 to refuse unknown fields | claude |
+| [Pilot Notes](./pilot-notes/1_overview.md) | Land config & prompt section [ORB-29586] (in review), then build assessment & readout [ORB-29588] | claude |
 | [Plugin Pages](./plugin-pages/1_overview.md) | First pages: a Formation page and a Scribe page, each designed in its own repository | claude |
 | [Resident Orchestrator](./resident-orchestrator/1_overview.md) | Re-file slice 10 pilot (ORB-21251 archived) once mandate, authority grant & manager are ready | claude |
 | [Script Steps](./script-steps/1_overview.md) | File the explicit script_grant raise surface for orbit-office proposals (phase 4 part; unfiled) | claude |
 | [Standing Drain](./standing-drain/1_overview.md) | Phases 1 (intent and surfaces) and 2 (the opt-in keeper) are built; enabling the keeper is Daniel's; next is the deploy hold, ORB-25992 | claude |
 
-### Designing (8)
+### Designing (7)
 
 | Feature | Next | Lead |
 | --- | --- | --- |
@@ -32,12 +32,11 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Context Index](./context-index/1_overview.md) | Decide from the [ORB-24866] measurement whether to file 2_design.md §13 tasks 1–5 in ws_orbit-graph | claude |
 | [Eval Harness](./eval-harness/1_overview.md) | Daniel accepted every recommendation in 2_design.md §14; file build-order tasks 1 to 5 once he names the Q7 spend cap and confirms the Q2 box | claude |
 | [Owner Failover](./owner-failover/1_overview.md) | Daniel reviews the proposal and answers its open questions | claude |
-| [Pilot Notes](./pilot-notes/1_overview.md) | Add the config table and the pilot's prompt section [ORB-29586] | claude |
 | [Signal Acknowledgement](./signal-acknowledgement/1_overview.md) | Daniel promotes ORB-27754 from someday to start phase 1; phases 2 and 3 are unfiled | claude |
 | [Symbol Risk Index](./symbol-risk-index/1_overview.md) | Daniel reviews this overview and 2_design.md; implementation tasks are filed after acceptance | claude |
 | [Task Risk](./task-risk/1_overview.md) | Review estimands and evidence prerequisites before authorizing implementation. | codex |
 
-### Shipped (38)
+### Shipped (39)
 
 | Feature | Next | Lead |
 | --- | --- | --- |
@@ -51,6 +50,7 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Crew Credentials](./crew-credentials/1_overview.md) | — | claude |
 | [Distributed Drain](./distributed-drain/1_overview.md) | — | claude |
 | [Distributions](./distributions/1_overview.md) | — | claude |
+| [Doc Layout](./doc-layout/1_overview.md) | Correct STD-05 exemplar paths in the shared canon and sync docs/standards/ | claude |
 | [Executors](./executors/1_overview.md) | — | claude |
 | [Federated MCP](./federated-mcp/1_overview.md) | — | grok |
 | [Fleet Notices](./fleet-notices/1_overview.md) | — | claude |
