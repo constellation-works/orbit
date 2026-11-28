@@ -87,14 +87,22 @@ bytes served are the bytes that were hashed.
 Nothing in a page file is parsed or rewritten. There is no route for a single file, because
 the frame never asks for one.
 
-The response carries this policy, and the dashboard frames the page with the matching
-`sandbox="allow-scripts"`:
+The dashboard shell serves an explicit `frame-src 'self'; child-src 'self'` policy, the
+dashboard frames the page with `sandbox="allow-scripts"` and `referrerpolicy="no-referrer"`,
+and the page response carries this policy:
 
 ```
 sandbox allow-scripts; default-src 'none'; script-src 'sha256-<kit>' 'sha256-<script>' …;
 style-src 'unsafe-inline'; img-src data: blob:; font-src data:; connect-src 'none';
-form-action 'none'; base-uri 'none'; frame-ancestors 'self'
+frame-src 'none'; object-src 'none'; form-action 'none'; base-uri 'none'; frame-ancestors 'self'
 ```
+
+`GET /api/plugins/<ns>/pages/<page>/` also requires Fetch Metadata proving a same-origin
+dashboard iframe navigation (`Sec-Fetch-Site: same-origin`, `Sec-Fetch-Dest: iframe`,
+`Sec-Fetch-Mode: navigate`). Direct top-level browser loads, opaque-origin self-navigations
+(`Sec-Fetch-Site: cross-site`), non-navigation fetches, and unsupported browsers or proxies
+that omit Fetch Metadata fail closed with `403` (`frame_required`), `no-store`, and
+`Content-Security-Policy: sandbox; default-src 'none'`.
 
 `script-src` lists one SHA-256 hash per script Orbit writes, computed from its
 HTML-preprocessed UTF-8 text: the bytes are decoded lossily as UTF-8, with CRLF and lone
@@ -107,21 +115,39 @@ workspace each answer 404 with the reason.
 
 What that gives:
 
-- **A unique origin.** The page cannot read the dashboard's document or storage.
-- **One request.** The frame's only request is its own navigation. The dashboard starts it,
-  so it is a same-origin request that carries the dashboard's session, and the router's origin
-  guard admits it as it stands. The frame asks for nothing afterwards, so the guard never
-  meets a request from the frame's unique origin.
+- **A unique origin.** The page cannot read the dashboard's document or storage, and the
+  bridge relay requires both `event.source === activeFrame.contentWindow` and
+  `event.origin === "null"`.
+- **One host-owned document.** The dashboard starts the initial load on a fresh `<iframe>`
+  (and dashboard Reload replaces the `<iframe>` with a new one), so each legitimate load is a
+  same-origin iframe navigation admitted by both the origin guard and the Fetch Metadata gate.
+  A page cannot load outside the dashboard frame, and any subsequent `load` event on the same
+  `<iframe>` or parent `frame-src`/`child-src` `securitypolicyviolation` tears down the frame,
+  revokes the bridge, and shows a diagnostic card with Reload recovery. Same-document fragment
+  navigation (`#hash`) stays inside the document without triggering teardown.
 - **Only the listed scripts run.** A script that reached the page another way has no hash in
   the policy: one written into the markup, one a tool's output smuggled in, or one a running
   script adds. `eval` is refused as well.
-- **No direct network from the frame.** `connect-src 'none'` stops fetches, sockets and
-  event streams from the frame itself, and no directive admits a file from any server.
-  This restricts direct requests only: the declared tool-call bridge in
+- **No direct external network from the frame.** `connect-src 'none'` stops fetches, sockets
+  and event streams from the frame itself, `frame-src 'none'; object-src 'none'` blocks nested
+  frames and objects inside the page, and no directive admits a subresource from any server.
+  Because WHATWG HTML `sandbox="allow-scripts"` still permits a frame's own navigation and CSP
+  `navigate-to` is unimplemented across browsers, the external navigation boundary is enforced
+  by the dashboard host's `frame-src 'self'` (blocking external origins, `data:`, and `blob:`
+  via `location`, links, or `<meta http-equiv="refresh">` before a request leaves the browser)
+  together with the server's iframe-only Fetch Metadata gate (preventing unframed top-level
+  loads that would lack that host policy). Same-origin self-navigations from the opaque-origin
+  frame cannot reach `/api/*` or `/healthz` (`Sec-Fetch-Site: cross-site` answers `403`) or
+  render dashboard shell/static routes (`frame-ancestors 'none'`), and trigger immediate frame
+  teardown on load. This restricts direct requests only: the declared tool-call bridge in
   [The bridge](#3-the-bridge) can still pass schema-valid page input to the plugin backend
   through the dashboard-relayed `POST .../call`.
 - **No way out of the frame.** Without the other sandbox tokens it cannot open a window,
   navigate the dashboard, submit a form or start a download.
+- **Supported browsers fail closed when missing prerequisites.** Enforcement requires a
+  browser supporting CSP `frame-src` + `sandbox` and Fetch Metadata (`Sec-Fetch-Site`,
+  `Sec-Fetch-Dest`, `Sec-Fetch-Mode` — Chromium 76+, Firefox 90+, Safari 16.4+). Older
+  browsers or intermediaries that strip Fetch Metadata fail closed with `403` (`frame_required`).
 
 ## 3. The bridge
 
@@ -259,6 +285,23 @@ whose manifest has pages lists them in the consent prompt.
   canary request. All three refused the attempted unlisted or later-added scripts, imports,
   `eval`, external assets, storage access, parent DOM access, fetch, form submission,
   popup and top navigation. Evidence and the probe are attached to [ORB-29532].
+- **Navigation-boundary evidence.** On 2026-11-28, live browser verification ran against
+  candidate `orbit web serve` in headless Chromium 156.0.8078.4 on Linux x64 ([ORB-29773]).
+  The dashboard emitted `frame-src 'self'; child-src 'self'`, and the page route emitted
+  `frame-src 'none'; object-src 'none'` while refusing direct top-level browser tab navigation
+  with `403` `frame_required` (`sandbox; default-src 'none'`). Normal host-owned load,
+  dashboard Reload, declared read-only `orbit.call`, mutating-tool refusal (`403 tool_refused`),
+  `orbit.setQuery`, and same-document `#hash` navigation all succeeded. Eight navigation and
+  nesting probes (`location.href`, `<a href>`, `<meta http-equiv="refresh">`, `data:text/html`,
+  same-origin `/api/tasks`, `location.reload()`, `about:blank`, and nested `<iframe>`) produced
+  zero requests to the external listener, tore down the frame and revoked the bridge on
+  unsolicited frame navigation, and recovered cleanly via dashboard Reload. Same-origin
+  self-navigation attempts may still issue a loopback request to the local Orbit server before
+  hitting `403` or `frame-ancestors 'none'` and parent teardown; zero external requests leave
+  the host. Firefox and WebKit binaries were not installed on this Linux host for a live
+  re-run; their Fetch Metadata iframe headers were verified in [ORB-29532] (Firefox 157.0,
+  WebKit 26.0), and CSP3 `frame-src` governs child frame navigations across all three engines.
+  Evidence and screenshots are attached to [ORB-29773].
 - **No file is fetched at run time.** A page that splits its code into chunks or loads an
   image by URL has to bundle them into its listed scripts and styles. `data:` URLs cost about
   a third more bytes than the files they carry, and the size bound counts the document as
@@ -290,5 +333,6 @@ whose manifest has pages lists them in the consent prompt.
 - [ORB-29537] — built the Plugins sub-tabs, the sandboxed page frame, the strip and the bridge relay.
 - [ORB-29532] — measured the initial frame policy in Chromium and WebKit, then validated the one-document policy in Chromium, WebKit and Firefox.
 - [ORB-29573] — revised the page contract to one document after that measurement.
+- [ORB-29773] — enforced plugin page document navigation boundaries across dashboard CSP, Fetch Metadata iframe admission, and frame-controller teardown.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

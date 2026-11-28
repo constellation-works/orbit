@@ -607,6 +607,8 @@ pub(crate) const DASHBOARD_CSP: &str = concat!(
     "font-src 'self'; ",
     "img-src 'self' data: blob:; ",
     "connect-src 'self'; ",
+    "frame-src 'self'; ",
+    "child-src 'self'; ",
     "object-src 'none'; ",
     "base-uri 'none'; ",
     "frame-ancestors 'none'"

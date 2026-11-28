@@ -195,10 +195,20 @@ fn expected_policy(scripts: &[&str]) -> String {
         .collect();
     format!(
         "sandbox allow-scripts; default-src 'none'; script-src {}; style-src 'unsafe-inline'; \
-         img-src data: blob:; font-src data:; connect-src 'none'; form-action 'none'; \
-         base-uri 'none'; frame-ancestors 'self'",
+         img-src data: blob:; font-src data:; connect-src 'none'; frame-src 'none'; \
+         object-src 'none'; form-action 'none'; base-uri 'none'; frame-ancestors 'self'",
         hashes.join(" ")
     )
+}
+
+fn get_page_frame(server: &Server, path: &str) -> reqwest::blocking::Response {
+    server
+        .request("GET", path)
+        .header("sec-fetch-site", "same-origin")
+        .header("sec-fetch-dest", "iframe")
+        .header("sec-fetch-mode", "navigate")
+        .send()
+        .unwrap()
 }
 
 fn header<'a>(response: &'a reqwest::blocking::Response, name: &str) -> &'a str {
@@ -211,7 +221,7 @@ fn header<'a>(response: &'a reqwest::blocking::Response, name: &str) -> &'a str 
 }
 
 fn not_found_naming(server: &Server, path: &str, reason: &str) {
-    let response = server.get(path);
+    let response = get_page_frame(server, path);
     let status = response.status().as_u16();
     let body = response.text().unwrap();
     assert_eq!(status, 404, "{path}: {body}");
@@ -237,7 +247,7 @@ fn script_hash_matches_html_preprocessing_while_response_preserves_script_bytes(
             );
             let server = fixture.server(false);
 
-            let response = server.get(&page_path("preprocessing", "preprocessing"));
+            let response = get_page_frame(&server, &page_path("preprocessing", "preprocessing"));
             assert_eq!(response.status().as_u16(), 200);
             let policy = header(&response, "content-security-policy").to_string();
             let body = response.bytes().unwrap();
@@ -283,7 +293,21 @@ fn a_page_is_one_document_under_its_frame_policy_and_only_while_active() {
             install(&fixture, "pages", PAGES);
             let server = fixture.server(false);
 
-            let response = server.get(&page_path("pages", "overview"));
+            // The trusted dashboard host policy establishes the external frame
+            // navigation boundary for plugin iframes.
+            let dashboard = server.get("/");
+            assert_eq!(dashboard.status().as_u16(), 200);
+            let dashboard_csp = header(&dashboard, "content-security-policy");
+            assert!(
+                dashboard_csp.contains("frame-src 'self'"),
+                "dashboard CSP must constrain plugin frame navigations to 'self': {dashboard_csp}"
+            );
+            assert!(
+                dashboard_csp.contains("child-src 'self'"),
+                "dashboard CSP must keep child-src aligned with frame-src: {dashboard_csp}"
+            );
+
+            let response = get_page_frame(&server, &page_path("pages", "overview"));
             assert_eq!(response.status().as_u16(), 200);
             assert_eq!(
                 header(&response, "content-type"),
@@ -325,7 +349,7 @@ fn a_page_is_one_document_under_its_frame_policy_and_only_while_active() {
             assert_eq!(policy, expected_policy(&scripts));
 
             // A page without `kit` gets no kit and no hash for it.
-            let response = server.get(&page_path("pages", "plain"));
+            let response = get_page_frame(&server, &page_path("pages", "plain"));
             assert_eq!(response.status().as_u16(), 200);
             let policy = header(&response, "content-security-policy").to_string();
             let body = response.text().unwrap();
@@ -353,23 +377,99 @@ fn a_page_is_one_document_under_its_frame_policy_and_only_while_active() {
                 assert_eq!(status, 404, "{path}: {}", response.text().unwrap());
             }
 
-            // The origin guard is unchanged: cross-site and opaque-origin
-            // requests are refused, the dashboard's own navigation admitted.
+            // The origin guard and iframe-navigation boundary fail closed:
+            // unsupported clients without Fetch Metadata, top-level browser
+            // navigations, non-navigation fetches, and cross-site or
+            // opaque-origin requests are refused; only a same-origin dashboard
+            // iframe navigation is admitted.
             let path = page_path("pages", "overview");
-            for (name, value) in [("sec-fetch-site", "cross-site"), ("origin", "null")] {
-                let response = server
-                    .request("GET", &path)
-                    .header(name, value)
-                    .send()
-                    .unwrap();
-                assert_eq!(response.status().as_u16(), 403, "{name}: {value}");
+            for (label, headers, expected_code) in [
+                ("missing fetch metadata", vec![], Some("frame_required")),
+                (
+                    "top-level navigation (none/document)",
+                    vec![
+                        ("sec-fetch-site", "none"),
+                        ("sec-fetch-dest", "document"),
+                        ("sec-fetch-mode", "navigate"),
+                    ],
+                    Some("frame_required"),
+                ),
+                (
+                    "same-origin top-level navigation",
+                    vec![
+                        ("sec-fetch-site", "same-origin"),
+                        ("sec-fetch-dest", "document"),
+                        ("sec-fetch-mode", "navigate"),
+                    ],
+                    Some("frame_required"),
+                ),
+                (
+                    "same-origin fetch",
+                    vec![
+                        ("sec-fetch-site", "same-origin"),
+                        ("sec-fetch-dest", "empty"),
+                        ("sec-fetch-mode", "cors"),
+                    ],
+                    Some("frame_required"),
+                ),
+                (
+                    "non-navigate iframe request",
+                    vec![
+                        ("sec-fetch-site", "same-origin"),
+                        ("sec-fetch-dest", "iframe"),
+                        ("sec-fetch-mode", "cors"),
+                    ],
+                    Some("frame_required"),
+                ),
+                (
+                    "duplicate sec-fetch-dest",
+                    vec![
+                        ("sec-fetch-site", "same-origin"),
+                        ("sec-fetch-dest", "iframe"),
+                        ("sec-fetch-dest", "document"),
+                        ("sec-fetch-mode", "navigate"),
+                    ],
+                    Some("frame_required"),
+                ),
+                (
+                    "cross-site / opaque-origin iframe self-navigation",
+                    vec![
+                        ("sec-fetch-site", "cross-site"),
+                        ("sec-fetch-dest", "iframe"),
+                        ("sec-fetch-mode", "navigate"),
+                    ],
+                    None,
+                ),
+                (
+                    "opaque origin header",
+                    vec![
+                        ("origin", "null"),
+                        ("sec-fetch-site", "same-origin"),
+                        ("sec-fetch-dest", "iframe"),
+                        ("sec-fetch-mode", "navigate"),
+                    ],
+                    None,
+                ),
+            ] {
+                let mut request = server.request("GET", &path);
+                for (name, value) in headers {
+                    request = request.header(name, value);
+                }
+                let response = request.send().unwrap();
+                assert_eq!(response.status().as_u16(), 403, "{label}");
+                assert_eq!(header(&response, "x-content-type-options"), "nosniff");
+                if let Some(code) = expected_code {
+                    assert_eq!(header(&response, "cache-control"), "no-store", "{label}");
+                    assert_eq!(
+                        header(&response, "content-security-policy"),
+                        "sandbox; default-src 'none'",
+                        "{label}"
+                    );
+                    let payload: Value = response.json().unwrap();
+                    assert_eq!(payload["code"], code, "{label}: {payload}");
+                }
             }
-            let response = server
-                .request("GET", &path)
-                .header("sec-fetch-site", "same-origin")
-                .header("sec-fetch-dest", "iframe")
-                .send()
-                .unwrap();
+            let response = get_page_frame(&server, &path);
             assert_eq!(response.status().as_u16(), 200);
             drop(server);
 
@@ -383,7 +483,9 @@ fn a_page_is_one_document_under_its_frame_policy_and_only_while_active() {
             let server = fixture.server(false);
             not_found_naming(&server, &page_path("pages", "overview"), "recorded");
             assert_eq!(
-                server.get(&page_path("pages", "plain")).status().as_u16(),
+                get_page_frame(&server, &page_path("pages", "plain"))
+                    .status()
+                    .as_u16(),
                 200
             );
             drop(server);

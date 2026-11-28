@@ -154,3 +154,40 @@ fn dashboard_task_create_keeps_uncertain_submission_on_retry_authorization_refus
         "task-create must still clear the saved submission for a first-attempt or body-definitive refusal (e.g. 413/415), as intended by the plain-text framework-refusal handling"
     );
 }
+
+#[test]
+fn dashboard_plugin_page_frame_enforces_navigation_and_bridge_guards() {
+    assert!(
+        crate::assets::DASHBOARD_CSP.contains("frame-src 'self'"),
+        "DASHBOARD_CSP must explicitly restrict plugin iframe navigations to 'self' so external frame navigation fails closed"
+    );
+    assert!(
+        crate::assets::DASHBOARD_CSP.contains("child-src 'self'"),
+        "DASHBOARD_CSP must align child-src with frame-src for plugin iframe navigation containment"
+    );
+    let sources = first_party_dashboard_sources();
+    let source = sources
+        .iter()
+        .find(|(name, _)| name == "js/plugin-page.js")
+        .unwrap_or_else(|| panic!("dashboard test cannot find js/plugin-page.js"))
+        .1
+        .as_str();
+    assert!(
+        source.contains(r#"frame.setAttribute("sandbox", "allow-scripts");"#),
+        "plugin-page frame must keep the opaque-origin allow-scripts sandbox contract"
+    );
+    assert!(
+        source.contains(r#"if (event.origin !== "null") return;"#),
+        "plugin-page bridge must reject messages whose origin is not the sandboxed opaque origin \"null\""
+    );
+    assert!(
+        source.contains(
+            r#"window.addEventListener("securitypolicyviolation", handleFramePolicyViolation);"#
+        ),
+        "plugin-page controller must tear down the frame when the dashboard frame-src policy blocks a navigation"
+    );
+    assert!(
+        source.contains("if (meta.loaded)") && source.contains("blockFrameNavigation("),
+        "plugin-page controller must allow only the initial host-owned load per mounted iframe and tear down on unsolicited navigation"
+    );
+}

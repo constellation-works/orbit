@@ -14,6 +14,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use axum::body::Bytes;
+use axum::http::HeaderMap;
 use base64::Engine as _;
 use orbit_common::OrbitError;
 use orbit_core::app::plugin::{PageCall, PageSource};
@@ -36,7 +37,8 @@ const POLICY_HEAD: &str = "sandbox allow-scripts; default-src 'none'; script-src
 
 /// The frame policy of design §2 after its `script-src` hashes.
 const POLICY_TAIL: &str = "; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; \
-     connect-src 'none'; form-action 'none'; base-uri 'none'; frame-ancestors 'self'";
+     connect-src 'none'; frame-src 'none'; object-src 'none'; form-action 'none'; \
+     base-uri 'none'; frame-ancestors 'self'";
 
 /// One page as its frame receives it.
 pub(crate) struct PageDocument {
@@ -264,4 +266,38 @@ fn frame_policy(hashes: &[String]) -> String {
         })
     };
     format!("{POLICY_HEAD}{sources}{POLICY_TAIL}")
+}
+
+/// Require Fetch Metadata proving a same-origin dashboard iframe navigation.
+///
+/// WHATWG HTML's `sandbox="allow-scripts"` still permits a frame to navigate
+/// itself, and CSP `navigate-to` is unimplemented across browsers. The external
+/// navigation boundary therefore depends on the dashboard host's
+/// `frame-src 'self'` policy framing the document. Direct top-level loads
+/// (`Sec-Fetch-Dest: document`, `Sec-Fetch-Site: none`), opaque-origin
+/// self-navigations (`Sec-Fetch-Site: cross-site`), non-navigation fetches, and
+/// unsupported browsers that omit Fetch Metadata fail closed.
+pub(crate) fn require_dashboard_frame_navigation(headers: &HeaderMap) -> Result<(), &'static str> {
+    if !single_header_eq(headers, "sec-fetch-site", "same-origin") {
+        return Err(
+            "plugin pages require a same-origin dashboard iframe navigation (Sec-Fetch-Site: same-origin)",
+        );
+    }
+    if !single_header_eq(headers, "sec-fetch-dest", "iframe") {
+        return Err(
+            "plugin pages may load only inside a dashboard iframe (Sec-Fetch-Dest: iframe)",
+        );
+    }
+    if !single_header_eq(headers, "sec-fetch-mode", "navigate") {
+        return Err("plugin pages require an iframe navigation request (Sec-Fetch-Mode: navigate)");
+    }
+    Ok(())
+}
+
+fn single_header_eq(headers: &HeaderMap, name: &str, expected: &str) -> bool {
+    let mut values = headers.get_all(name).iter();
+    let Some(first) = values.next() else {
+        return false;
+    };
+    values.next().is_none() && first.to_str().is_ok_and(|value| value == expected)
 }

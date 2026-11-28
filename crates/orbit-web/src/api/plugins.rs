@@ -8,7 +8,8 @@
 //!   source tool returns.
 //! * `POST /api/plugins/<ns>/{enable,disable}` — toggle host or workspace.
 //! * `GET /api/plugins/<ns>/pages/<page>/` — an active page as one document
-//!   under its frame policy (plugin-pages design §2).
+//!   under its frame policy, served only to same-origin dashboard iframe
+//!   navigations (plugin-pages design §2).
 //! * `POST /api/plugins/<ns>/pages/<page>/call` — one call the page makes
 //!   to a `read_only` tool it declares (plugin-pages design §3).
 //!
@@ -24,7 +25,7 @@ use std::ffi::OsStr;
 use std::path::Path as FsPath;
 
 use axum::extract::{Path, State};
-use axum::http::{HeaderValue, StatusCode, header};
+use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Json, Response};
 use orbit_common::OrbitError;
 use orbit_common::governance::authorization::{DASHBOARD_PLUGIN_DISABLE, DASHBOARD_PLUGIN_ENABLE};
@@ -199,8 +200,20 @@ pub(super) async fn read_panel(
 pub(super) async fn read_page(
     State(state): State<DashboardState>,
     workspace: PluginPanelWs,
+    headers: HeaderMap,
     Path((namespace, page)): Path<(String, String)>,
 ) -> Response {
+    if let Err(reason) = crate::plugin_page::require_dashboard_frame_navigation(&headers) {
+        let mut response =
+            page_refusal(StatusCode::FORBIDDEN, "frame_required", reason.to_string());
+        let response_headers = response.headers_mut();
+        response_headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+        response_headers.insert(
+            header::CONTENT_SECURITY_POLICY,
+            HeaderValue::from_static("sandbox; default-src 'none'"),
+        );
+        return response;
+    }
     for (label, value) in [("plugin", &namespace), ("page", &page)] {
         if let Err(message) = validate_id(value) {
             return super::bad_request(format!("{label} {message}"));
