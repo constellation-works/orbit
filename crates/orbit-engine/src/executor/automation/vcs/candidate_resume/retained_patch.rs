@@ -300,9 +300,13 @@ fn preserve_path(
     let working_matches_current = current_bytes
         .as_ref()
         .is_some_and(|ours| working_bytes.as_ref() == Some(ours));
-    let lacks_markers = working_bytes
-        .as_deref()
-        .is_none_or(|bytes| !has_conflict_markers(bytes));
+    let lacks_markers = match working_bytes.as_deref() {
+        Some(bytes) if !working_matches_current => {
+            let configured_width = configured_conflict_marker_size(process_env, workspace, path);
+            !has_conflict_markers(bytes, configured_width)
+        }
+        _ => true,
+    };
     if !working_matches_current && !lacks_markers {
         return Ok(None);
     }
@@ -327,6 +331,24 @@ fn preserve_path(
         current_path,
         base_path,
     }))
+}
+
+fn configured_conflict_marker_size(
+    process_env: &orbit_common::Env,
+    workspace: &Path,
+    path: &str,
+) -> Option<usize> {
+    let raw = git_output_bytes(
+        process_env,
+        workspace,
+        &["check-attr", "-z", "conflict-marker-size", "--", path],
+    )
+    .ok()?;
+    let mut fields = raw.split(|byte| *byte == 0);
+    let _attr_path = fields.next()?;
+    let _attr_name = fields.next()?;
+    let value = std::str::from_utf8(fields.next()?).ok()?;
+    value.parse::<usize>().ok().filter(|width| *width > 0)
 }
 
 /// Read `relative_path` beneath `workspace` only when every traversed component
@@ -384,24 +406,51 @@ fn read_optional_file(
     }
 }
 
-fn has_conflict_markers(bytes: &[u8]) -> bool {
-    let mut saw_ours = false;
-    let mut saw_sep = false;
+fn has_conflict_markers(bytes: &[u8], configured_width: Option<usize>) -> bool {
+    // Track per-width marker progress (`false` = saw opening `<`, `true` = also
+    // saw matching `=` separator) so custom marker sizes match consistently
+    // without tripping on literal 7-char underlines inside wider conflict hunks.
+    let mut active_widths: BTreeMap<usize, bool> = BTreeMap::new();
     for raw_line in bytes.split(|byte| *byte == b'\n') {
         let line = raw_line.strip_suffix(b"\r").unwrap_or(raw_line);
-        if !saw_ours {
-            if line.starts_with(b"<<<<<<<") {
-                saw_ours = true;
+        if let Some(width) =
+            marker_run(line, b'<', true).filter(|width| width_matches(*width, configured_width))
+        {
+            active_widths.entry(width).or_insert(false);
+        } else if let Some(width) =
+            marker_run(line, b'=', false).filter(|width| width_matches(*width, configured_width))
+        {
+            if let Some(saw_separator) = active_widths.get_mut(&width) {
+                *saw_separator = true;
             }
-        } else if !saw_sep {
-            if line == b"=======" {
-                saw_sep = true;
-            }
-        } else if line.starts_with(b">>>>>>>") {
+        } else if let Some(width) =
+            marker_run(line, b'>', true).filter(|width| width_matches(*width, configured_width))
+            && active_widths.get(&width).copied() == Some(true)
+        {
             return true;
         }
     }
     false
+}
+
+fn marker_run(line: &[u8], marker: u8, allow_label: bool) -> Option<usize> {
+    let width = line.iter().take_while(|&&byte| byte == marker).count();
+    if width == 0 {
+        return None;
+    }
+    let rest = &line[width..];
+    if rest.is_empty() || (allow_label && rest.starts_with(b" ")) {
+        Some(width)
+    } else {
+        None
+    }
+}
+
+fn width_matches(width: usize, configured_width: Option<usize>) -> bool {
+    match configured_width {
+        Some(expected) => width == expected,
+        None => width >= 7,
+    }
 }
 
 fn validate_safe_relative_path(path: &str) -> Result<(), OrbitError> {
