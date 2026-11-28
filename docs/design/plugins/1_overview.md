@@ -16,7 +16,7 @@ tags: [plugins, tools, routines, auto-tasks, dashboard, cli]
 
 # Plugins — Overview
 
-The plugin standard lets one manifest declare everything an add-on contributes to Orbit (tools, CLI, dashboard panels, routines, auto-tasks, activities, jobs, skills and config) and record what it is allowed to do, under one lifecycle and one execution protocol. A plugin is data plus one backend executable.
+The plugin standard lets one manifest declare everything an add-on contributes to Orbit (tools, CLI, dashboard panels and links, sandboxed dashboard pages, routines, auto-tasks, activities, jobs, skills and config) and record what it is allowed to do, under one lifecycle and one execution protocol. A plugin is data plus one backend executable. A page it declares is a static bundle that runs in a sandboxed frame, never with the dashboard's authority.
 
 Status: phases 1–4 shipped; provider plugins (phase 5) remain deferred vision.
 
@@ -39,10 +39,11 @@ is *allowed* to do; a first-party surface cost up to nine hand edits [ORB-12724]
 ### Intended outcome
 
 One manifest (`plugin.yaml`, `schemaVersion: 2`, superseding the v1 tool sidecar) declaring
-every contribution (tools, CLI, dashboard panels, routines, auto-tasks, activities, jobs,
-skills, config); one lifecycle (`orbit plugin …`); one execution protocol; one set of
-invariants enforced at load, enable and call time. A plugin is **data plus one backend
-executable**: no Rust, no dashboard JavaScript. The committed standard shipped in
+every contribution (tools, CLI, dashboard panels and links, sandboxed pages, routines,
+auto-tasks, activities, jobs, skills, config); one lifecycle (`orbit plugin …`); one execution
+protocol; one set of invariants enforced at load, enable and call time. A plugin is **data plus
+one backend executable**: no Rust, and no dashboard code with the dashboard's authority. A page's
+script runs only in its sandboxed frame. The committed standard shipped in
 [ORB-12735]–[ORB-12738]; the host-side broker and consented install-time builds
 are also implemented (see [2_design.md §7](./2_design.md#7-phases-each-its-own-pr-into-agent-main)).
 
@@ -53,18 +54,18 @@ are also implemented (see [2_design.md §7](./2_design.md#7-phases-each-its-own-
 - New **agent providers / executor types**; opening `ProviderRegistry` is Phase 5.
 - **Dashboard code with the dashboard's authority, top-level destinations or built-in
   feature toggles.** Plugins get declarative panels and links, and
-  [pages](../plugin-pages/1_overview.md): sub-tabs under Plugins that run in a sandboxed
-  frame and reach data only through the plugin's own `read_only` tools; a page runs one of
-  its plugin's mutating tools only as a consented action the operator confirms in a dialog
-  the dashboard draws outside the frame. A plugin adds no destination to the rail.
+  [pages](../plugin-pages/1_overview.md) declared under `spec.web.pages`: sub-tabs under
+  Plugins that run in a sandboxed frame and reach data only through the plugin's own
+  `read_only` tools; a page runs one of its plugin's mutating tools only as a consented action
+  the operator confirms in a dialog the dashboard draws outside the frame. A plugin adds no destination to the rail.
 - Marketplace/discovery. Sources are a path, a git URL or an archive.
 
 The full specification and contracts are in [2_design.md](./2_design.md); recorded decisions are in [4_decisions.md](./4_decisions.md).
 
 ## 2. Core Concepts
 
-- **Plugin.** Data plus one backend executable: a `plugin.yaml` manifest (`schemaVersion: 2`) and a program, with no Rust and no dashboard JavaScript.
-- **Contribution.** One thing a manifest declares: a tool, CLI group, dashboard panel, routine, auto-task, activity, job, skill or config entry.
+- **Plugin.** Data plus one backend executable: a `plugin.yaml` manifest (`schemaVersion: 2`) and a program, with no Rust. Its dashboard JavaScript, if any, is a page bundle that runs in a sandboxed frame, never with the dashboard's authority.
+- **Contribution.** One thing a manifest declares: a tool, CLI group, dashboard panel or link, sandboxed dashboard page, routine, auto-task, activity, job, skill or config entry.
 - **Lifecycle.** The `orbit plugin …` commands that install, consent to, enable and remove a plugin; definitions a plugin seeds land disabled until an operator act.
 - **Execution protocol.** The one way Orbit calls a plugin's backend, under invariants enforced at load, enable and call time and a sandbox with nothing granted by default.
 - **Placement, never permission.** A plugin's declared contribution says where it appears; what it may do is a separate, operator-consented grant.
@@ -78,6 +79,7 @@ The full specification and contracts are in [2_design.md](./2_design.md); record
 | Lifecycle and state | [2_design.md §3](./2_design.md#3-lifecycle-and-state) | [ORB-12735] |
 | Contracts Orbit enforces | [2_design.md §4](./2_design.md#4-contracts-orbit-enforces) | [ORB-12735] |
 | Schema-derived CLI and dashboard panels | [2_design.md §4.6–4.7](./2_design.md#46-cli) | [ORB-12738] |
+| Sandboxed dashboard pages (`spec.web.pages`) | [plugin pages](../plugin-pages/1_overview.md); manifest in [plugin-pages 2_design.md §1](../plugin-pages/2_design.md#1-the-manifest), frame and serving in [§2](../plugin-pages/2_design.md#2-serving) | [ORB-29534], [ORB-29536], [ORB-29537] |
 | Install-time build | [specs/install-time-build.md](./specs/install-time-build.md) | — |
 | Agent call broker | [specs/agent-call-broker.md](./specs/agent-call-broker.md) | — |
 | Phases | [2_design.md §7](./2_design.md#7-phases-each-its-own-pr-into-agent-main) | [ORB-12735], [ORB-12738] |
