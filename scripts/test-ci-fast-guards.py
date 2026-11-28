@@ -3995,7 +3995,7 @@ class PythonPreflightTests(unittest.TestCase):
         self.stub_python("3.9.6")
         self.stub("cargo", '#!/bin/sh\necho "$@" >> "$GUARD_TEST_LOG"\n')
         self.stub("rg", "#!/bin/sh\nexit 0\n")
-        for target in ("ci-fast", "ci-lint"):
+        for target in ("ci-fast", "ci-lint", "ci-lint-affected"):
             with self.subTest(target=target):
                 result = self.run_command("make", target, f"CARGO={self.bin}/cargo")
                 self.assertNotEqual(result.returncode, 0)

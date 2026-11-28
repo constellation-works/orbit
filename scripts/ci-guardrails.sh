@@ -623,6 +623,7 @@ if [[ "$static" == false && "$checks" == false ]]; then
     run_exclusive_guard "$repo_root/scripts/test-ci-workspace-cache.py"
     run_exclusive_guard "$repo_root/scripts/test-installer-security.sh"
     run_exclusive_guard "$repo_root/scripts/test-ci-test-affected.py"
+    run_exclusive_guard "$repo_root/scripts/test-ci-lint-affected.py"
     run_exclusive_guard "$repo_root/scripts/test-codeql-rust-local.py"
     run_exclusive_guard "$repo_root/scripts/test-compiler-cache.sh"
     run_exclusive_guard "$repo_root/scripts/test-compiler-cache-namespaces.sh"

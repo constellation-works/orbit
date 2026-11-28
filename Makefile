@@ -1,4 +1,4 @@
-.PHONY: help build release run check test fmt fmt-check clippy clean install uninstall dev watch audit tree ci check-ci-macos ci-guards ci-fast ci-test-affected ci-lint goldens stability release-check docs-index cleanup-branches build-budget-test build-budget-bench compiler-cache-status compiler-cache-setup compiler-cache-bench cross-revision-check-test web-memory-soak
+.PHONY: help build release run check test fmt fmt-check clippy clean install uninstall dev watch audit tree ci check-ci-macos ci-guards ci-fast ci-test-affected ci-lint ci-lint-affected goldens stability release-check docs-index cleanup-branches build-budget-test build-budget-bench compiler-cache-status compiler-cache-setup compiler-cache-bench cross-revision-check-test web-memory-soak
 
 # ------------------------------------------------------------
 # Config
@@ -57,6 +57,7 @@ help:
 	@echo "  make ci-test-affected  Full tests for changed crates and workspace dependents; also checks ci-macos.yml when tests or the workflow change (CI_TEST_BASE=<commit> pins the base)"
 	@echo "  make check-ci-macos  Verify native macOS CI filters still select compiled tests"
 	@echo "  make ci-lint      Pre-handoff clippy gate for agents (compiles all workspace targets)"
+	@echo "  make ci-lint-affected  Clippy (production + all-targets) and rustdoc for changed crates (CI_TEST_BASE=<commit> pins the base)"
 	@echo "  make goldens      Pre-handoff golden gate (CLI/MCP, CI logs, and sandbox profiles; UPDATE=1 regenerates)"
 	@echo "  make docs-index   Regenerate docs/INDEX.md and docs/design/FEATURES.md"
 	@echo "  make stability    Verify per-crate stability tier markers"
@@ -205,6 +206,14 @@ ci-lint:
 	$(BUILD_BUDGET) -- ./scripts/with-test-build-lint.sh --check $(CARGO) check $(WORKSPACE) --lib --bins --message-format=json
 	$(BUILD_BUDGET) -- ./scripts/with-test-build-lint.sh --check $(CARGO) check $(WORKSPACE) --all-targets --message-format=json
 	RUSTDOCFLAGS="-D warnings" $(BUILD_BUDGET) -- ./scripts/with-test-build-lint.sh --check $(CARGO) doc --no-deps $(WORKSPACE) --message-format=json
+
+# Diff-scoped pre-handoff lint gate: runs the production, all-targets and
+# warnings-denied rustdoc wrapper checks sequentially under build-budget
+# admission for each workspace crate changed against CI_TEST_BASE (or the merge
+# base with origin/agent-main). Exits 0 without compiling when no crate changed.
+ci-lint-affected:
+	./scripts/require-python.sh
+	CARGO="$(CARGO)" BUILD_BUDGET="$(BUILD_BUDGET)" python3 ./scripts/ci-lint-affected.py
 
 # Focused pre-review golden gate: CLI long-help text, output_goldens, the
 # MCP tools/list snapshot, CI/GitHub log fixtures, sandbox profiles, and store and
