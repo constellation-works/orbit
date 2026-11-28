@@ -10,7 +10,7 @@ type: design
 summary: "Scope: a crew-level env list, so one crew can run on a different provider account (an API key with prepaid credits) than the rest of its provider"
 tags: [crew-credentials, crews, execution-env, provider-limits]
 created_date: 2026-10-20
-updated_date: 2026-11-03
+updated_date: 2026-11-27
 last_validated: 2026-11-08
 ---
 
@@ -19,9 +19,9 @@ last_validated: 2026-11-08
 Status: phase 1 (`crews.<name>.env`, [ORB-17287]), phase 2 (crew as account, [ORB-17288])
 and file-backed sources ([ORB-20547]) have landed. [ORB-17462] completed same-provider
 auth-failure attribution to the failing crew account. No committed implementation remains.
-Bearing: [`[execution.env]`](../../CONFIG.md#executionenv--the-agent-subprocess-environment) is an
-allowlist of names, never values; [provider usage limits](../../CONFIG.md#provider-usage-limits)
-and [auth recovery probes](../../CONFIG.md#executor-authentication-recovery-probes) are keyed by
+Bearing: [`[execution.env]`](../../config/execution.md#executionenv--the-agent-subprocess-environment) is an
+allowlist of names, never values; [provider usage limits](../../config/crews.md#provider-usage-limits)
+and [auth recovery probes](../../config/providers.md#executor-authentication-recovery-probes) are keyed by
 provider account: the provider's default login, or a crew that sets `env`.
 
 ## Problem

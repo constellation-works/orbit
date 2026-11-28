@@ -169,7 +169,7 @@ reader who wants only the unexplained holds asks for `--kind held_ready --severi
 - **A workspace with many deliberate holds gets that many `low` items,** up to the
   per-workspace cap. They stay until each hold is released.
 - **The refusal breaks every writer of the tag.** A call that adds `no-drain` and worked
-  before is refused after. The shipped skill text, `docs/CONFIG.md` and the dashboard's tag
+  before is refused after. The shipped skill text, the [configuration reference](../../../config/workflow-tags.md#the-no-drain-task-tag) and the dashboard's tag
   control change in earlier phases, so they pass a hold before the refusal exists. An
   adopter's own skills, briefs and scripts that add the tag have from phase 1 until the
   refusal to do the same, and fail after it if they have not.

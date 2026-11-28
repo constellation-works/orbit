@@ -222,7 +222,7 @@ The plugin has no setting of its own.
 - **Docs**: the mod's README and the website page
   [Use the Claude Code mod](../../../website/src/content/docs/how-to/claude-code.md) are
   rewritten; `hooks.json` and the plugin description lose the band and pane;
-  [CONFIG.md](../../CONFIG.md) gains the key. Removing the settings and commands is a
+  [configuration reference](../../config/README.md) gains the key. Removing the settings and commands is a
   breaking change, so the implementing task carries the `breaking-change` tag.
 - **CI**: the pure linking cases run under Node in `make ci-guards`. The two tests that
   mount the hook stay under `claude plugin test`, run by hand.

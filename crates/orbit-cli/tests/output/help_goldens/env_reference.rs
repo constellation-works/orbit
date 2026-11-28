@@ -11,8 +11,8 @@ const END: &str = "<!-- END GENERATED ENVIRONMENT REFERENCE -->";
 
 #[test]
 fn config_environment_reference_matches_registry() {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/CONFIG.md");
-    let contents = fs::read_to_string(&path).expect("read docs/CONFIG.md");
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/config/environment.md");
+    let contents = fs::read_to_string(&path).expect("read docs/config/environment.md");
     let (before, remainder) = contents
         .split_once(BEGIN)
         .expect("start marker for the generated environment reference");
@@ -47,11 +47,11 @@ fn config_environment_reference_matches_registry() {
 
     if std::env::var(UPDATE_HELP_GOLDENS_ENV).as_deref() == Ok("1") && saved != table {
         fs::write(&path, format!("{before}{BEGIN}{table}{END}{after}"))
-            .expect("update the generated environment reference in docs/CONFIG.md");
+            .expect("update the generated environment reference in docs/config/environment.md");
     } else {
         assert!(
             saved == table,
-            "docs/CONFIG.md environment reference drifted from the registry. \
+            "docs/config/environment.md environment reference drifted from the registry. \
              Regenerate with make goldens UPDATE=1."
         );
     }

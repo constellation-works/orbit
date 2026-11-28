@@ -919,7 +919,7 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
   has never run a template can still claim it. Owner and follower must run
   builds with the same pull request fingerprint, so neither applies a rule
   the other does not (`protocol_skew` otherwise). See
-  [`machine.auto_concurrency`](../CONFIG.md#machineauto_concurrency--host-forecast-admission).
+  [`machine.auto_concurrency`](../config/machine.md#machineauto_concurrency--host-forecast-admission).
 - Each iteration first carries earlier admissions forward — retries an
   unanswered request under the **same** ID, binds, launches, and delivers a
   finished leaf's settlement — then, while the window is open, tops free slots
@@ -1247,7 +1247,7 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
   run publishes the task's next pull request closes any other open Orbit
   pull request of the task (`closed_stale_pull_requests` in its `pr_open`
   output), so a re-admitted task keeps one open pull request
-  ([`[pr]` rules](../CONFIG.md#pr--pull-requests)).
+  ([`[pr]` rules](../config/delivery.md#pr--pull-requests)).
 
   A leaf can also commit past the head it pushed and then fail: a
   before-landing reviewer's fix is committed in the leaf's worktree before
@@ -1310,7 +1310,7 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
   <machine-id>` after it; it lifts at `until` within the same drain. These
   readings come from the executor's local store, independently of the owner's
   login and usage limits. See
-  [provider usage limits](../CONFIG.md#provider-usage-limits)). Each iteration's output carries
+  [provider usage limits](../config/crews.md#provider-usage-limits)). Each iteration's output carries
   the same window as `crews`. Auth exclusions also list provider, host, failure time, error class,
   re-login hint, credential source and next probe time (`auth_exclusions`).
   Doctor warns about these on live drains; the dashboard shows the same data.
@@ -1320,7 +1320,7 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
   restart/resume; a later auth failure starts a new delay. Only active auth
   exclusions are probed while the drain is admitting. Claude ships a minimal
   Haiku probe; other providers currently need a new drain after re-login.
-  See [executor authentication recovery probes](../CONFIG.md#executor-authentication-recovery-probes)
+  See [executor authentication recovery probes](../config/providers.md#executor-authentication-recovery-probes)
   for the declaration and credential-route details. Missing launchers,
   refusal, crew and host exclusions retain their existing behavior.
 - When a capacity backoff holds the owner's review crew, the drain requests
@@ -1705,7 +1705,7 @@ or a `--discard-candidate` requeue out of `blocked`, closes the task's pull
 requests that no live run or claim is delivering. Whichever run publishes the
 task's next pull request closes any other open Orbit pull request of the task.
 Either way, the task keeps one open pull request
-([`[pr]` rules](../CONFIG.md#pr--pull-requests)).
+([`[pr]` rules](../config/delivery.md#pr--pull-requests)).
 
 ### Requeue or salvage an interrupted review
 
@@ -1967,7 +1967,7 @@ one. From then on:
   app's aggregate beside passing analysis jobs, is classified too, so a job
   failure beside it never hides it. Its evidence is its own failure
   annotations, read as `--auto-fix` reads them (see
-  [PR auto-fix repairs](../CONFIG.md#pr-auto-fix-repairs)). It is
+  [PR auto-fix repairs](../config/crew-recovery.md#pr-auto-fix-repairs)). It is
   **candidate** only when every annotated source file is one the candidate
   changed from its base. Annotations on other files, or annotations that
   cannot be read or validated, are **inconclusive**. A failed optional check
@@ -2162,7 +2162,7 @@ as **Retry landing**, preserves the accepted handoff, and records each retry in
 `landing_retry_reserved` history. Automatic retries open at most attempts 2–4,
 waiting at least 60, 120 and 240 seconds after each stop. Explicit retries count
 toward this automatic ceiling and remain available after it is exhausted. See
-[stopped owner landing retries](../CONFIG.md#delivery-refusals-are-held). Older
+[stopped owner landing retries](../config/workflow-validation.md#delivery-refusals-are-held). Older
 stops without typed waiting evidence continue to require explicit recovery.
 
 An authorized, stopped accepted handoff whose exact head is already merged
@@ -2741,7 +2741,7 @@ The keeper is off by default on every workspace and host. Turning it on
 (`workflow.standing_drain.enabled = true`) and choosing its flags, including
 `approve_proposed`, is the operator's (Daniel's) decision. No agent session sets
 it on a live host, for a test or otherwise; QA uses a disposable home. Keys and
-defaults: [CONFIG.md](../CONFIG.md#workflowstanding_drain--the-opt-in-drain-keeper).
+defaults: [configuration reference](../config/workflow.md#workflowstanding_drain--the-opt-in-drain-keeper).
 
 While it is enabled, each clock tick on the workspace's owner host checks, after
 the clock's upgrade resume, whether to submit one drain. It submits only when all
@@ -2800,7 +2800,7 @@ When the host has a shutdown or reboot pending (for example
 `unattended-upgrades` running `shutdown -r 04:00`), Orbit holds new
 unattended work only while that schedule is within
 a fixed 180 minutes (see
-[CONFIG.md](../CONFIG.md#workflowresource_throttle--host-pressure)). A reboot set
+[configuration reference](../config/workflow.md#workflowresource_throttle--host-pressure)). A reboot set
 further ahead is still reported, and routines, auto-tasks, and drain waves
 admit as usual, so the host is not idle for the whole lead time. Inside the
 horizon, routines and auto-tasks do not fire, drain waves admit no leaves, a
@@ -2831,7 +2831,7 @@ cat /run/systemd/shutdown/scheduled   # USEC= / MODE= written by logind
 
 While CPU, memory, Linux disk I/O stall or a checkout/worktree/global-root
 filesystem stays at or above its high mark for ten seconds (`[workflow.resource_throttle]` in
-[CONFIG.md](../CONFIG.md#workflowresource_throttle--host-pressure)), Orbit
+[configuration reference](../config/workflow.md#workflowresource_throttle--host-pressure)), Orbit
 throttles admission until the held resource falls below its resume mark. A
 local drain can still admit eligible CPU-light auto-tasks while CPU alone is
 held and reserved slots remain; memory, disk and I/O pressure hold them too.

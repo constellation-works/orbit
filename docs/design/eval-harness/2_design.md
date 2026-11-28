@@ -111,7 +111,7 @@ The alternative, running replay candidates in the live workspace at `low` priori
 
 ### 3.1 Inputs
 
-`eval.replay-start` takes an eval set (or a list of closed task ids, which it turns into an unnamed set first), a list of arms, a repeat count and a spend cap. An arm is a crew name defined in the evaluation workspace's config, optionally with an effort using the shipped crew-reference syntax (`<crew>@<effort>`, as described in the Crew references section of [CONFIG.md](../../CONFIG.md)). A bare model is not accepted: a crew is the only way a run resolves a provider, model and effort, and `orbit config set` cannot create one ([CONFIG.md](../../CONFIG.md)). Defining crews stays an operator edit.
+`eval.replay-start` takes an eval set (or a list of closed task ids, which it turns into an unnamed set first), a list of arms, a repeat count and a spend cap. An arm is a crew name defined in the evaluation workspace's config, optionally with an effort using the shipped crew-reference syntax (`<crew>@<effort>`, as described in the crew references in [the configuration reference](../../config/crews.md#crewsname--which-provider-model-runs-the-task)). A bare model is not accepted: a crew is the only way a run resolves a provider, model and effort, and `orbit config set` cannot create one ([configuration reference](../../config/README.md#inspecting-and-editing)). Defining crews stays an operator edit.
 
 **Source eligibility.** A set and a list of closed task ids meet the same two checks. Each source needs a recoverable snapshot (§3.3) and must pass the OS rule (§1.3), so a task that needs macOS is never a source. A source that fails either check is refused with its reason in `refused[]` of the set build (§11); `eval.replay-start` returns that list when it started from ids. Nothing is dropped silently.
 
@@ -346,7 +346,7 @@ Losing candidates are not a regression record and not an escaped defect. They ar
 
 ## 9. Capacity and spend
 
-**Hosts.** Every candidate task carries exactly one `os:` tag, `os:linux` (§1.3). Admission reads `os:` tags as any-of and intersects them with the crew executor's `host_os`, on local and pull drains alike ([CONFIG.md](../../CONFIG.md)). A candidate's any-of set is therefore exactly `{linux}`, and no candidate is ever admitted on the Mac: the OS rule refuses every source that carries another `os:` tag, so no source can widen the set. The evaluation workspace exists only on a box.
+**Hosts.** Every candidate task carries exactly one `os:` tag, `os:linux` (§1.3). Admission reads `os:` tags as any-of and intersects them with the crew executor's `host_os`, on local and pull drains alike ([configuration reference](../../config/providers.md#executor-host_os)). A candidate's any-of set is therefore exactly `{linux}`, and no candidate is ever admitted on the Mac: the OS rule refuses every source that carries another `os:` tag, so no source can widen the set. The evaluation workspace exists only on a box.
 
 **Admission.** Candidates are ordinary tasks, so they run only when a drain admits them: there is no separate launcher and no synthetic load.
 
@@ -356,7 +356,7 @@ Losing candidates are not a regression record and not an escaped defect. They ar
 **Priority below delivery.** Within one workspace a `low` task sorts last (`automatic_dispatch_cmp_with_affinity`, `crates/orbit-types/src/task/model/task.rs:848-912`), but no slots are reserved and nothing relates two workspaces' drains. Orbit has no job class or lane below delivery. So for replay, "below delivery" is achieved by three existing limits, and one honest gap:
 
 - the evaluation drain's concurrency is small (default 2) and it runs in an operator-chosen window (`--for`), by default at night;
-- the host resource throttle zeroes free slots under CPU, memory, disk or I/O pressure for every drain on the host ([CONFIG.md](../../CONFIG.md));
+- the host resource throttle zeroes free slots under CPU, memory, disk or I/O pressure for every drain on the host ([configuration reference](../../config/workflow.md#workflowresource_throttle--host-pressure));
 - builds from both workspaces queue in the one host-wide build budget, which also runs them at low CPU and I/O priority ([build-budget runbook](../../runbooks/build-budget.md));
 - **gap:** when both drains want capacity at once, neither yields. If measurement shows replay slowing delivery, the generic fix is a drain option that admits only while the host's other drains have free slots; §14 Q5.
 
@@ -432,7 +432,7 @@ Two earlier mechanisms covered nearby ground and were removed. This design shoul
 | `eval.set-build` | mut | `name`, `source_workspace`, `query?` {`type`, `landed_after`, `min_lines`, `max_lines`}, `task_ids?`, `quota`, `seed?`, `from_bakeoffs?` | `set` {`name`, `revision`, `digest`}, `admitted[]` {`task_id`, `base`, `reference`, `held_out_command`}, `refused[]` {`task_id`, `reason`} |
 | `eval.set-show` | ro | `name`, `revision?` | the set file, without snapshots unless `full` |
 | `eval.set-export` / `eval.set-import` | ro / mut | `name`, `revision?`, `path` | `path`, `digest` |
-| `eval.replay-start` | mut | `set` (`<name>/<revision>`, matching `sets/<name>/<revision>/`; unlike `eval.set-show`, which takes `name` and optional `revision` separately), `arms[]` (crew or `<crew>@<effort>` per the Crew references section of [CONFIG.md](../../CONFIG.md)), `repeats`, `max_usd`, `signals[]`, `for_task?` | `replay_id`, `planned_runs`, `first_wave[]` (candidate task ids), `refused[]` {`task_id`, `reason`} (sources refused by the OS rule or the snapshot checks, §3.1) |
+| `eval.replay-start` | mut | `set` (`<name>/<revision>`, matching `sets/<name>/<revision>/`; unlike `eval.set-show`, which takes `name` and optional `revision` separately), `arms[]` (crew or `<crew>@<effort>` per the crew references in [the configuration reference](../../config/crews.md#crewsname--which-provider-model-runs-the-task)), `repeats`, `max_usd`, `signals[]`, `for_task?` | `replay_id`, `planned_runs`, `first_wave[]` (candidate task ids), `refused[]` {`task_id`, `reason`} (sources refused by the OS rule or the snapshot checks, §3.1) |
 | `eval.replay-advance` | mut | `replay_id` | `filed[]`, `state` (`running`, `capped`, `complete`), `spent_usd` |
 | `eval.replay-status` | ro | `replay_id?` | per-arm progress, `spent_usd`, `state` |
 | `eval.replay-readout` | ro | `replay_id`, `format?` | the readout (§7) |

@@ -4,7 +4,7 @@ type: design
 title: "Auditability — Design"
 owner: codex
 created_date: 2026-04-25
-updated_date: 2026-11-25
+updated_date: 2026-11-27
 last_validated: 2026-11-25
 status: Draft
 feature: auditability
@@ -164,7 +164,7 @@ After [ORB-10519] / [Workflow alone creates shipment commits while dirty failure
 
 After [ORB-16768], the two repair commits Orbit makes on an agent's behalf follow the same `orbit[<model>]` name convention while keeping their role addresses, so GitHub squash `Co-authored-by` lines and rebase evidence still distinguish them from implementer commits (`agent@orbit.invalid`). A recovery repair committed through the shared host path (step failure or final recovery) is authored `orbit[<recovery model>] <orbit-recovery@orbit.local>`, with the model from the recovery activity's dispatched crew draw — never the implementer's model when the two differ. A reviewer repair is authored `orbit[<reviewer model>] <<family>-reviewer@orbit.local>` (for example `orbit[gpt-6.1-sol] <codex-reviewer@orbit.local>`), keeping [ORB-11333]'s reviewer/implementer separation. Conflict recovery uses the host's rebase continuation instead of this repair-commit path. The committer stays `orbit <orbit@orbit.local>` and the `Orbit-Recovery-*` trailers are unchanged. When the model is unknown, each falls back to its historical identity (`orbit-recovery`, `<family>-reviewer`).
 
-After [ORB-25009], one composer writes every Orbit commit and squash message to the [commit-message standard](../../CONFIG.md#the-commit-message-standard), and every identity is `orbit[<model>] <<role>@orbit.invalid>` (role `implementer`, `reviewer`, `recovery` or `orbit`). This supersedes the addresses above: no `@orbit.local` address is written, though a reviewer repair carrying the older `<family>-reviewer@orbit.local` identity is still recognised as the reviewer's own. Squash merges always send Orbit's composed title and body, which fold every inner commit's registered trailers and authors into one final trailer block.
+After [ORB-25009], one composer writes every Orbit commit and squash message to the [commit-message standard](../../config/delivery.md#the-commit-message-standard), and every identity is `orbit[<model>] <<role>@orbit.invalid>` (role `implementer`, `reviewer`, `recovery` or `orbit`). This supersedes the addresses above: no `@orbit.local` address is written, though a reviewer repair carrying the older `<family>-reviewer@orbit.local` identity is still recognised as the reviewer's own. Squash merges always send Orbit's composed title and body, which fold every inner commit's registered trailers and authors into one final trailer block.
 
 The requirement is not to collapse every field into one value. It is that a reviewer can follow task state, command rows, run envelopes, provider/tool traces, and metrics back to a concrete human or agent family. A unified identity glossary and query join story remain open.
 

@@ -24,7 +24,7 @@ Create or extend a runbook when the reader needs to do one of these things:
 - verify that a runtime surface is healthy; or
 - build, validate, or release Orbit.
 
-Keep reference material in [`CONFIG.md`](../CONFIG.md), implementation rationale under
+Keep reference material in [configuration reference](../config/README.md), implementation rationale under
 [`docs/design/`](../design/), and reusable code shapes under
 [`docs/design-patterns/`](../design-patterns/). Host inventories, credentials, ports, unit
 enablement, and machine-specific sync topology belong in a private operations knowledge base.

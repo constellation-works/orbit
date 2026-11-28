@@ -44,7 +44,7 @@ From [Orbit Positioning](positioning.md):
 
 ## Other review modes
 
-Optimistic merging is the preferred default, not the only option. Operators who want a gate can enable one review layer before landing (`review.timing` selects one; see [CONFIG.md](../CONFIG.md)):
+Optimistic merging is the preferred default, not the only option. Operators who want a gate can enable one review layer before landing (`review.timing` selects one; see [configuration reference](../config/review.md#review-and-operation--automatic-review)):
 
 | Mode | Config | Behaviour |
 | --- | --- | --- |

@@ -2,7 +2,7 @@
 title: "Scope: conflict budget for footprint admission"
 owner: claude
 created_date: 2026-10-25
-updated_date: 2026-11-22
+updated_date: 2026-11-27
 last_validated: 2026-11-21
 status: Draft
 stage: parked
@@ -21,14 +21,14 @@ candidate on any overlap with a held claim, reservation or wave member
 (`footprints_block`, defined in [`lock_mode.rs`](../../../crates/orbit-common/src/fs/lock_mode.rs), is consulted by [`coordination/admission/footprint.rs`](../../../crates/orbit-store/src/boundary/coordination/admission/footprint.rs),
 via the `overlaps` closure in `selection.rs`, and by `owner_wave.rs` and the runtime lock index;
 a footprint-less editing task was treated as a whole-tree lock in multi-slot drains by [ORB-15191]). Three settings already
-relax that per path: [`workflow.unlocked_context_paths`](../../CONFIG.md#unlocked-context-paths)
+relax that per path: [`workflow.unlocked_context_paths`](../../config/workflow.md#unlocked-context-paths)
 takes no lock for a matching entry of a task that also declares a non-matching one, so the lock
 never blocks it on that path; a task whose every entry matches keeps them all locked, because two
 rewrites of one document are where a merge produces contradictory text (built-in default
 `["**/*.md"]`; init template value `["**/*.json", "**/*.txt", "**/*.md", "**/mod.rs", "**/*.toml"]`);
-[`workflow.generated_paths`](../../CONFIG.md#generated-paths-are-regenerated-not-merged)
+[`workflow.generated_paths`](../../config/workflow.md#generated-paths-are-regenerated-not-merged)
 ([ORB-16784]) regenerates a conflicting generated file at landing instead of merging it; and
-[`workflow.lock_modes`](../../CONFIG.md#footprint-lock-modes) ([ORB-18157], done) waives an
+[`workflow.lock_modes`](../../config/workflow.md#footprint-lock-modes) ([ORB-18157], done) waives an
 overlap at a path whose mode is `shared`. `unlocked_context_paths` filters the context lock only.
 A live execution claim in a footprint-protecting phase is a separate check: the work-start guard
 ([ORB-23894]) compares a candidate's whole canonical context, unlocked paths included, with the

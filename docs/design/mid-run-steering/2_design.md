@@ -2,7 +2,7 @@
 title: Mid-Run Operator Steering — Design
 owner: codex
 created_date: 2026-10-17
-updated_date: 2026-11-20
+updated_date: 2026-11-27
 last_validated: 2026-11-06
 status: Implemented
 feature: mid-run-steering
@@ -66,7 +66,7 @@ A comment that *asks* for any of those things is legitimate steering text for th
 
 ## 5. Configuration
 
-Two additive keys in the existing `workflow.*` namespace, documented in [CONFIG.md](../../CONFIG.md#workflowmid_run_steering--operator-comments-after-dispatch):
+Two additive keys in the existing `workflow.*` namespace, documented in [configuration reference](../../config/workflow.md#workflowmid_run_steering--operator-comments-after-dispatch):
 
 | Key | Built-in default | Meaning |
 |-----|------------------|---------|

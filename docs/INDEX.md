@@ -20,7 +20,7 @@ operational and contributor procedures, feature designs, and incident reviews.
 
 | Guide | Purpose |
 | --- | --- |
-| [Orbit Configuration](./CONFIG.md) | Orbit Configuration |
+| [Orbit Configuration](./config/README.md) | Reference for Orbit's runtime configuration and environment variables. |
 | [Development Reference](./DEVELOPMENT.md) | Orbit development reference: validation, tests, docs index, MSRV, supply chain, vendored JS |
 
 ### Principles

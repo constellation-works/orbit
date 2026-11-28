@@ -2,7 +2,7 @@
 title: Distributed Drain — Design
 owner: claude
 created_date: 2026-09-18
-updated_date: 2026-11-26
+updated_date: 2026-11-27
 last_validated: 2026-11-16
 status: Draft
 feature: distributed-drain
@@ -178,7 +178,7 @@ ordinary entry using its own `context_files`, and sequencing is expressed with d
 - A task filed by a review (tagged `code-review`, `delivery-code-review`, `qa-full-sweep`,
   `qa-sweep` or `security-review`) keeps selectors the finding names as substantive change
   targets. Read-only evidence belongs in the description, not the lock footprint; incidental
-  shared-reference edits such as a line in `docs/CONFIG.md` also stay out, while the implementer
+  shared-reference edits such as a line in the [configuration reference](../../config/README.md) also stay out, while the implementer
   still updates affected docs in the same PR and auto-fix resolves textual merges. Task-pilot
   may drop a selector it verifies needs no substantive change by recording its exact selector
   and inspection reason in `context_evidence_dropped`. Apply accepts those records only for
@@ -361,12 +361,12 @@ no origin or PR credentials.
   the base and the failures, and the owner accepts it only when that base is in the history of the
   base branch it captured at admission and its own run of that required command on the base fails
   every reported test
-  ([CONFIG.md](../../CONFIG.md#a-red-base-is-held-not-blocked), Followers). Any other command that
+  ([configuration reference](../../config/workflow-validation.md#a-red-base-is-held-not-blocked), Followers). Any other command that
   fails the same way on the candidate's base is a typed `baseline_red` failure. The drain releases the claim with
   `ClaimEvidence.baseline_red`, and the owner records a `baseline_red_hold` in the task's history.
   Owner pull admission defers the task until the held command passes on a new
   base tip ([ORB-14258];
-  [CONFIG.md](../../CONFIG.md#a-red-base-is-held-not-blocked)).
+  [configuration reference](../../config/workflow-validation.md#a-red-base-is-held-not-blocked)).
 - `claim_handoff` re-observes the same identity, refuses a worktree that moved or became dirty, and
   records the typed `TaskHandoff` as the claim's durable pending settlement *before* any owner
   call. The leaf's worker delivers it as the run terminalizes; a disconnect leaves one immutable

@@ -2,7 +2,7 @@
 title: "Scope: standing drain intent for the owner workspace"
 owner: claude
 created_date: 2026-11-19
-updated_date: 2026-11-20
+updated_date: 2026-11-27
 last_validated: 2026-11-20
 status: Draft
 stage: building
@@ -186,8 +186,8 @@ The next keeper drain starts from the configured value, or from the job default 
 The flags are authority: `approve_proposed` lets the drain approve work, and `enabled` lets the
 keeper start drains with nobody present.
 
-- Setting `enabled` and `approve_proposed` is Daniel's, as creating a routine is. docs/CONFIG.md
-  has no operator-only class of config key, so this is a rule, not something code enforces.
+- Setting `enabled` and `approve_proposed` is Daniel's, as creating a routine is. The
+  [configuration reference](../../config/workflow.md#workflowstanding_drain--the-opt-in-drain-keeper) has no operator-only class of config key, so this is a rule, not something code enforces.
 - No session sets `enabled = true` on a live host, for a test or for any other reason. QA runs
   under a disposable home.
 - A keeper-submitted drain is recorded as submitted by the keeper, not by a person.

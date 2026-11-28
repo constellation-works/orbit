@@ -208,7 +208,7 @@ observed but may have merged since, through auto-merge (a held run does not
 cancel it) or another actor, so check the forge. Failed checks that need the
 base's own result are held as `delivery_base_checks_pending` until candidate
 recovery can proceed. Their `delivery_*` diagnostic codes are listed in
-[delivery refusals](../CONFIG.md#delivery-refusals-are-held).
+[delivery refusals](../config/workflow-validation.md#delivery-refusals-are-held).
 `candidate_resume` holds as `delivery_source_repair_decision` when a published
 candidate needs an operator to inspect explicit source repair or discard the
 candidate (no unique requeue binding, a publication that predates the current
@@ -1867,7 +1867,7 @@ claimed leaf on a follower releases its claim the same way, and the owner
 withholds the task from pulls until its own refresh run sees the base pass.
 Both runs' logs are attached to the task: `validation/<run>/<n>.json` and
 `validation/<run>/<n>.baseline.json`. See
-[CONFIG.md](../CONFIG.md#a-red-base-is-held-not-blocked).
+[configuration reference](../config/workflow-validation.md#a-red-base-is-held-not-blocked).
 
 ## A task held after a provider failure
 
@@ -1889,7 +1889,7 @@ To run the task sooner, set its `crew` to one the hold does not exclude, or
 move it through another status: any later status change lifts the hold. If a
 provider keeps refusing the content, pin the task to a crew on another
 provider. See
-[CONFIG.md](../CONFIG.md#provider-failure-holds).
+[configuration reference](../config/crew-recovery.md#provider-failure-holds).
 
 A `[provider_unavailable]` failure (an expired login, say) is the host's. Its
 hold names the host's machine, so a follower whose login works may still pull
@@ -1924,7 +1924,7 @@ candidate is host-local, recover or push the named head before routing a run
 to another host; it cannot fetch a host-local candidate and would implement
 afresh. Do not run `orbit job resume <held_run_id>`: resume refuses held runs
 of this kind.
-See [CONFIG.md](../CONFIG.md#owner-sign-off-holds-the-run-owner_signoff_required).
+See [configuration reference](../config/workflow-validation.md#owner-sign-off-holds-the-run-owner_signoff_required).
 
 ## A task blocked by an implementer's blocker
 
@@ -1953,7 +1953,7 @@ before anything else:
    starts fresh from the base.
 
 The refusal from `orbit job resume` repeats these steps with the run's own
-worktree and branch. See [CONFIG.md](../CONFIG.md#agent-declared-blockers-stop-the-run).
+worktree and branch. See [configuration reference](../config/workflow-validation.md#agent-declared-blockers-stop-the-run).
 
 ## A task waiting on a provider usage limit
 
@@ -1979,7 +1979,7 @@ member of that pool. An explicitly
 crewed task waits by default; with
 `workflow.provider_limit_explicit_crews = "pool"` it is drawn from its
 complexity pool instead. See
-[CONFIG.md](../CONFIG.md#provider-usage-limits).
+[configuration reference](../config/crews.md#provider-usage-limits).
 
 ## A delivery held for the forge
 
@@ -2168,7 +2168,7 @@ to `review`, orphan reconciliation finalizes the run `interrupted`, or `held`
 with `operator_stopped` when the host manager sent the terminating signal, and
 the task waits in `review`. Nothing is watching the pull request at that point. A leaf that died
 before promoting its task leaves the task `blocked` with a `workflow_run_interrupted`
-history entry; the blocked-task recovery backstop ([final recovery pool](../CONFIG.md#final-recovery-pool)) decides that one,
+history entry; the blocked-task recovery backstop ([final recovery pool](../config/crew-recovery.md#final-recovery-pool)) decides that one,
 not the drain.
 
 Each pass of a running owner drain (`orbit run auto`) adopts such a leaf before it
@@ -2231,7 +2231,7 @@ slots, its output carries a `pass_error` and the pass goes on to admission.
 When a leaf is not adopted, resume it yourself with `orbit job resume <leaf-run>`,
 or requeue the task. When an operator moves the task back to `backlog`, any of its
 pull requests that no live run is delivering are closed
-([`[pr]` rules](../CONFIG.md#pr--pull-requests)). A claimed leaf on a follower is
+([`[pr]` rules](../config/delivery.md#pr--pull-requests)). A claimed leaf on a follower is
 never adopted this way: its claim's release keeps the candidate and pull request,
 and the task's next claim continues them ([distributed drain](distributed-drain.md)).
 

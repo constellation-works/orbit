@@ -16,7 +16,7 @@
 //! partial download never reaches this module: bytes arrive only after the
 //! stream ended cleanly.
 //!
-//! Limits (see `docs/CONFIG.md`, "GitHub run-log cache"): the cache directory
+//! Limits (see `docs/config/operations.md`, "GitHub run-log cache"): the cache directory
 //! holds at most [`DEFAULT_MAX_TOTAL_BYTES`] and an entry lives at most
 //! [`DEFAULT_MAX_AGE`] from the moment it was written. Every store removes
 //! entries past either bound, oldest first, and a lookup removes the entry it

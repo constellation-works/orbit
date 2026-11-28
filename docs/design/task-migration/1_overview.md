@@ -2,7 +2,7 @@
 title: Task Migration — Overview
 owner: claude
 created_date: 2026-07-04
-updated_date: 2026-11-15
+updated_date: 2026-11-27
 last_validated: 2026-11-01
 status: Draft
 stage: shipped
@@ -177,7 +177,7 @@ orbit workspace init --task-id-start 10000     # or [tasks] id_start in config.t
 ```
 
 The counter only moves forward — a lower `--task-id-start` is refused; the
-config form (see [../../CONFIG.md](../../CONFIG.md)) is applied as a forward-only
+config form (see [configuration reference](../../config/README.md)) is applied as a forward-only
 floor on every runtime build. An exhausted allocator reports exhaustion during
 this maintenance step as well as during allocation.
 Both paths cap at the allocator's `ORB_TASK_ID_MAX` (`u32::MAX`): five-digit

@@ -16,7 +16,7 @@ tags: [<feature-slug>]
 
 # Scope: <feature in a few words>
 
-Bearing: <!-- The existing mechanisms this builds on, with links to their docs, CONFIG.md
+Bearing: <!-- The existing mechanisms this builds on, with links to their docs, docs/config/
      sections and the tasks that built them. One short paragraph: what is already true. -->
 
 <!-- Keep the whole doc readable in one sitting. If a section needs its own

@@ -116,7 +116,7 @@
 # - Crews under a host `provider_unavailable` or `provider_capacity` hold are
 #   skipped while any other member remains. When that hold covers every crew
 #   the draw would use, the task-pilot routine does not start this job. See
-#   "Routines" under Provider failure holds in docs/CONFIG.md.
+#   "Routines" under Provider failure holds in docs/config/crew-recovery.md.
 # - Change the model behind these pilots by setting the task-pilot purpose
 #   pool, or by editing the low pool while it is unset.
 # - There is deliberately no per-run `crew` job input: the step-level pool key
