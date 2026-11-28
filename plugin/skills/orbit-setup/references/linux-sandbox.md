@@ -19,7 +19,14 @@ On Ubuntu, a UID-map denial loads only the packaged
 profile. Interactive onboarding uses the normal administrator authentication
 prompt. `orbit init --non-interactive` requires root or already-authorized
 passwordless sudo and never waits for a password.
-A failed preparation stops `orbit init` before it writes anything.
+A failed preparation warns, naming the cause, and `orbit init` continues.
+`linux-bwrap` dispatch stays blocked until `orbit doctor providers` reports the
+sandbox ready. Fix that cause, then retry with
+`orbit init --host-prerequisites-only` (that command exits non-zero on failure
+and does not seed a root). On Linux, `orbit init --format json` includes
+`linux_sandbox.status` (`ready`, `skipped` or `not_ready`) and its reason.
+`skipped` means preparation was omitted, including for a custom root or
+`--skip-host-prerequisites`; it does not certify readiness.
 
 When an
 administrator or image build owns the host's packages, `orbit init

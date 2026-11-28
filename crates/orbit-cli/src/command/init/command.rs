@@ -26,11 +26,17 @@ const MAX_TASK_PREFIX_ATTEMPTS: usize = 4;
 #[derive(Args)]
 #[command(
     about = "Initialize the global Orbit root (~/.orbit)",
-    after_help = "On Linux, sandbox preparation failures warn and initialization continues.\n\
-                  linux-bwrap dispatch stays blocked until orbit doctor providers reports\n\
-                  the sandbox ready. Fix the cause named in the warning,\n\
-                  then retry with orbit init --host-prerequisites-only. JSON output includes\n\
-                  linux_sandbox.status (ready, skipped, or not_ready) and its reason."
+    after_help = "On Linux, sandbox preparation failures warn and initialization continues. \
+                  linux-bwrap dispatch stays blocked until `orbit doctor providers` reports \
+                  the sandbox ready. Fix the cause named in the warning, then retry with \
+                  `orbit init --host-prerequisites-only`.",
+    after_long_help = "On Linux, sandbox preparation failures warn and initialization \
+                       continues. linux-bwrap dispatch stays blocked until `orbit doctor \
+                       providers` reports the sandbox ready. Fix the cause named in the \
+                       warning, then retry with `orbit init --host-prerequisites-only`.\n\n\
+                       JSON output includes `linux_sandbox.status` (`ready`, `skipped` or \
+                       `not_ready`) and its reason. What each status means: installed \
+                       orbit-setup skill `references/linux-sandbox.md`."
 )]
 pub struct InitCommand {
     /// Reset the global Orbit root (~/.orbit/) to shipped defaults before

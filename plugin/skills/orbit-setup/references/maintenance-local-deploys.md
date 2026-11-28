@@ -76,8 +76,13 @@ orbit gc deployments            # report each entry, its bytes and whether it is
 orbit gc deployments --confirm  # remove what the report lists as would_remove
 ```
 
-Each class keeps its newest `--keep` entries (default 2). `orbit.previous`, and
-any deployment whose candidate manifest names the installed or rollback
-executable's digest, are always kept and do not count toward `--keep`. Links are
-unlinked, never followed. See the ["Reclaim old deployments and backups"
+Each class keeps its newest `--keep` entries (default 2), judged by the newest
+modification time inside the entry. The classes are top-level entries of
+`~/.orbit/deployments`, copies of replaced executables in `~/.orbit/bin` whose
+names contain a `.bak`, `.before-`, `.pre-`, `.stale` or `-stale-` marker, and
+store copies named `~/.orbit/orbit.db.bak*`. The installed executable, every
+`<executable>.previous` rollback copy (`orbit.previous` for the `orbit`
+binary), and any deployment whose `orbit-local-candidate` manifest names the
+bytes of the installed or rollback executable are always kept and do not count
+toward `--keep`. Links are removed, never followed. See the ["Reclaim old deployments and backups"
 section of the upgrades runbook](https://github.com/constellation-works/orbit/blob/main/docs/runbooks/upgrades.md#reclaim-old-deployments-and-backups) for the full rule.

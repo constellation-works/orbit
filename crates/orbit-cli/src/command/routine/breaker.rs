@@ -13,12 +13,20 @@ use serde_json::json;
 #[command(
     arg_required_else_help = true,
     subcommand_required = true,
-    after_help = "After 3 fires in a row fail with the same error class, the scheduler\n\
-                  stops firing the routine on this host. It tries one trial fire after a\n\
-                  backoff that grows each time a trial fails (15 minutes up to 4 hours),\n\
-                  or at the first tick after Orbit is upgraded; a successful trial\n\
-                  closes the breaker. Breakers are host-local, and every trip, trial,\n\
-                  reset and bypass is recorded (see `orbit routine show <name>`)."
+    after_help = "A tripped breaker stops the routine on this host until reset, a successful \
+                  trial, or one bypass. Breakers are host-local.\n\n\
+                  Examples:\n  \
+                  orbit routine breaker reset <name>\n  \
+                  orbit routine breaker bypass <name>",
+    after_long_help = "After repeated fires fail with the same error class, the scheduler \
+                       stops firing the routine on this host. A successful trial closes the \
+                       breaker. Breakers are host-local, and every trip, trial, reset and \
+                       bypass is recorded (`orbit routine show <name>`).\n\n\
+                       The trip count and the backoff: installed orbit-setup skill \
+                       `references/automation-scheduler.md`.\n\n\
+                       Examples:\n  \
+                       orbit routine breaker reset <name>\n  \
+                       orbit routine breaker bypass <name>"
 )]
 pub struct RoutineBreakerArgs {
     #[command(subcommand)]

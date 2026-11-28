@@ -11,33 +11,29 @@ use crate::command::{CommandOut, ExecuteCore, Payload};
 #[derive(Args)]
 #[command(
     about = "Retune a running drain's admission ceiling",
-    after_help = "Adjusts the worker ceiling of a live `orbit run auto` window, or of a replica's \
-`orbit run auto --pull` drain, in place. The run ID, its deadline, its completion authorization, \
-and every child it has already dispatched are preserved — this is the supported alternative to \
-cancelling the drain and submitting a replacement.\n\n\
-Owner/local drains count every in-flight child against N.\n\
-A pull drain uses N as an admission ceiling with before-landing review\n\
-credit. Before each claim it counts\n\
-`occupied - min(reviewing, N)` against N.\n\
-A leaf counts as reviewing after the owner's persisted before-landing\n\
-admission has `applies=true`; validation and publishing before that\n\
-boundary count as implementing. Later review revalidation and handoff\n\
-remain reviewing.\n\
-The credit is capped at N, but reviewing leaves can exceed N as\n\
-replacements reach review.\n\
-With an unchanged N and no pre-existing excess, occupied leaves stay at\n\
-most 2N and implementing leaves at most N.\n\
-Lowering N preserves running leaves, so existing excess can remain\n\
-temporarily.\n\
-See `orbit run show` for stage counts. Review rebuilds still compete for\n\
-repository build-budget slots.\n\nRaising the ceiling takes effect on the \
-next admission pass. Lowering it stops new admissions until enough children finish; it never \
-cancels or shortens a task already in flight.\n\n`--if-revision` makes the change conditional: \
-pass the revision `orbit run show` reported and a concurrent adjustment is refused rather than \
-overwritten.\n\nExamples:\n  \
-orbit run concurrency jrun-20260905-0546 --set 7\n  orbit run concurrency jrun-20260905-0546 \
---set 3 --reason 'provider rate limited'\n  orbit run concurrency jrun-20260905-0546 --set 7 \
---if-revision 2 --json"
+    after_help = "Adjusts the worker ceiling of a live drain in place. The run ID, its deadline, \
+its completion authorization and every child already dispatched are preserved. Raising the \
+ceiling takes effect on the next admission pass. Lowering it never cancels a task already in \
+flight. `--if-revision` refuses the change when the ceiling has moved.\n\n\
+Examples:\n  \
+orbit run concurrency jrun-20260905-0546 --set 7\n  \
+orbit run concurrency jrun-20260905-0546 --set 3 --reason 'provider rate limited'\n  \
+orbit run concurrency jrun-20260905-0546 --set 7 --if-revision 2 --json",
+    after_long_help = "Adjusts the worker ceiling of a live `orbit run auto` window, or of a \
+replica's `orbit run auto --pull` drain, in place. The run ID, its deadline, its completion \
+authorization and every child already dispatched are preserved. Raising the ceiling takes \
+effect on the next admission pass. Lowering it stops new admissions until enough children \
+finish, and it never cancels a task already in flight. `--if-revision` refuses the change \
+when the ceiling has moved: pass the revision `orbit run show` reported.\n\n\
+Owner and local drains count every in-flight child against the ceiling. A pull drain applies \
+a capped before-landing review credit and can keep more leaves than the ceiling while they \
+are in review.\n\n\
+How that credit is counted: installed orbit-orchestrate skill \
+`references/orchestration-dispatch.md`.\n\n\
+Examples:\n  \
+orbit run concurrency jrun-20260905-0546 --set 7\n  \
+orbit run concurrency jrun-20260905-0546 --set 3 --reason 'provider rate limited'\n  \
+orbit run concurrency jrun-20260905-0546 --set 7 --if-revision 2 --json"
 )]
 pub struct RunConcurrencyArgs {
     /// Job run ID of the drain to retune

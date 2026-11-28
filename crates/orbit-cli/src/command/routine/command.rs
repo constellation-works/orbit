@@ -32,21 +32,26 @@ use crate::entry::resolved::Resolved;
     about = "Inspect and control scheduled routines on this host",
     arg_required_else_help = true,
     subcommand_required = true,
-    after_help = "Routine definitions are YAML files under `.orbit/routines/` in each\n\
-                  registered checkout. `.orbit/` is per-user checkout state that\n\
-                  git ignores, so a definition edit applies to that checkout only.\n\
-                  A replica checkout schedules only its worktree GC and store GC\n\
-                  routines; its other routines are listed as owner-only. Pauses are\n\
-                  host-local and never synced, like circuit breakers: a routine whose\n\
-                  fires fail 3 times in a row with the same error stops firing until\n\
-                  a trial succeeds or `breaker reset`. `enable` and `disable` edit the definition's\n\
-                  versioned `enabled` field like the dashboard toggle, are operator-only\n\
-                  and are audited. A newly initialized workspace seeds `task-pilot`\n\
-                  and `worktree-gc` enabled and the other shipped routines\n\
-                  (`ci-failure-sweep`, `dependabot-alert-sweep`, `resident-cycle`,\n\
-                  `store-gc`, `task-publication`) off until enabled. A workspace initialized earlier keeps the `enabled`\n\
-                  value its definitions already hold. The host scheduler is controlled\n\
-                  through `orbit clock`."
+    after_help = "Definitions are YAML files under `.orbit/routines/` in each checkout, and an \
+                  edit applies to that checkout only. `enable` and `disable` are operator-only. \
+                  Pauses and circuit breakers are host-local. The host scheduler is \
+                  `orbit clock`.\n\n\
+                  Examples:\n  \
+                  orbit routine list\n  \
+                  orbit routine enable <name>",
+    after_long_help = "Definitions are YAML files under `.orbit/routines/` in each checkout. \
+                       `.orbit/` is per-user state that git ignores, so an edit applies to that \
+                       checkout only. `enable` and `disable` edit the definition's versioned \
+                       `enabled` field, are operator-only and are audited. Pauses and circuit \
+                       breakers are host-local and never synced. The host scheduler is \
+                       `orbit clock`.\n\n\
+                       A replica checkout schedules only its worktree GC and store GC routines. \
+                       Which routines a new workspace seeds on, and when a breaker stops a \
+                       routine: installed orbit-setup skill \
+                       `references/automation-scheduler.md`.\n\n\
+                       Examples:\n  \
+                       orbit routine list\n  \
+                       orbit routine enable <name>"
 )]
 pub struct RoutineCommand {
     #[command(subcommand)]

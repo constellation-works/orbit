@@ -20,12 +20,23 @@ use crate::command::{Block, CommandOut, Payload};
 #[derive(Args)]
 #[command(
     about = "Evaluate due routines and auto-tasks on this host",
-    after_help = "Loads routines and auto-task definitions from every registered, active owner\n\
-                  checkout on this host, and a replica's host-local worktree GC and store GC.\n\
-                  Due routines dispatch normal runs; due auto-tasks mint tasks in-process. The\n\
-                  OS clock invokes this pass, for example:\n  orbit clock tick --json\n\n\
-                  By default only noteworthy rows print. Use --verbose for every row.\n\n\
-                  Pass the global `--workspace <selector>` to evaluate only that workspace."
+    after_help = "Evaluates due routines and auto-tasks. By default only noteworthy rows \
+                  print. `--dry-run` dispatches nothing, but it still persists checkout \
+                  validation. Pass the global `--workspace` to evaluate one workspace.\n\n\
+                  Examples:\n  \
+                  orbit clock tick --json\n  \
+                  orbit clock tick --dry-run",
+    after_long_help = "Evaluates due routines and auto-tasks on this host. Due routines \
+                       dispatch normal runs; due auto-tasks mint tasks in-process. The OS \
+                       clock invokes this pass. By default only noteworthy rows print; \
+                       `--verbose` prints every row. `--dry-run` dispatches nothing, but it \
+                       still persists checkout validation and opens the scheduler store. Pass \
+                       the global `--workspace` to evaluate one workspace.\n\n\
+                       Which checkouts a tick loads: installed orbit-setup skill \
+                       `references/automation-scheduler.md`.\n\n\
+                       Examples:\n  \
+                       orbit clock tick --json\n  \
+                       orbit --workspace <name> clock tick --dry-run --verbose"
 )]
 pub struct ClockTickArgs {
     /// Report what would fire without dispatching or minting it. Still persists checkout validation and opens the scheduler store.

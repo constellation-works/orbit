@@ -13,13 +13,23 @@ use crate::command::{CommandOut, ExecuteCore};
     about = "Grant and inspect workspace scripts a job step may run",
     arg_required_else_help = true,
     subcommand_required = true,
-    after_help = "A script is a manifest at `.orbit/resources/scripts/<name>.yaml` whose\n\
-                  `entry` names a program file in the workspace. A job step names it\n\
-                  as `target: script:<name>`. Grants are host-local consent bound to\n\
-                  the manifest and entry digests: editing either file makes the grant\n\
-                  stale until an operator grants again. A granted script step runs on\n\
-                  Linux under a sandbox, with network and environment variables only\n\
-                  as its grant allows; other hosts refuse it."
+    after_help = "A script is a manifest at `.orbit/resources/scripts/<name>.yaml` that a job \
+                  step names as `target: script:<name>`. Editing the manifest or its entry \
+                  makes the grant stale until an operator grants again.\n\n\
+                  Examples:\n  \
+                  orbit script list\n  \
+                  orbit script grant <name>",
+    after_long_help = "A script is a manifest at `.orbit/resources/scripts/<name>.yaml` whose \
+                       `entry` names a program file in the workspace. A job step names it as \
+                       `target: script:<name>`. Grants are host-local consent bound to the \
+                       manifest and entry digests: editing either file makes the grant stale \
+                       until an operator grants again.\n\n\
+                       Where a granted step runs, and which network and environment variables \
+                       the grant allows: installed orbit-setup skill \
+                       `references/automation-scripts.md`.\n\n\
+                       Examples:\n  \
+                       orbit script list\n  \
+                       orbit script grant <name>"
 )]
 pub struct ScriptCommand {
     #[command(subcommand)]

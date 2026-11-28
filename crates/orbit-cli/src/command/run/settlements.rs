@@ -10,13 +10,25 @@ use super::format::summarize_error_message;
 
 #[derive(Args)]
 #[command(
-    after_help = "Lists, newest first, the failure and release settlements that claimed leaves on \
-follower hosts sent this owner; `orbit run history` here never lists them. EVIDENCE is the most \
-specific class the settlement carried.\n\
-Evidence classes, failure accounting, run evidence and the JSON fields: installed Orbit skill \
-`references/setup/distributed-drain-owner-surface.md`.\n\
-Examples:\n  orbit run settlements\n  orbit run settlements --since 7d\n  \
-orbit run settlements --since 2026-10-01T00:00:00Z --no-reconcile --json"
+    after_help = "Lists, newest first, the failure and release settlements that claimed leaves \
+                  sent this owner. `orbit run history` here never lists them. `--no-reconcile` \
+                  reports stored records as-is.\n\n\
+                  Examples:\n  \
+                  orbit run settlements\n  \
+                  orbit run settlements --since 7d\n  \
+                  orbit run settlements --since 2026-10-01T00:00:00Z --no-reconcile --json",
+    after_long_help = "Lists, newest first, the failure and release settlements that claimed \
+                       leaves on follower hosts sent this owner. `orbit run history` here never \
+                       lists them. EVIDENCE is the most specific class the settlement carried. \
+                       Without `--no-reconcile` the command recovers an interrupted commit \
+                       before it reports.\n\n\
+                       Evidence classes, failure accounting, run evidence and the JSON fields: \
+                       installed Orbit skill \
+                       `references/setup/distributed-drain-owner-surface.md`.\n\n\
+                       Examples:\n  \
+                       orbit run settlements\n  \
+                       orbit run settlements --since 7d\n  \
+                       orbit run settlements --since 2026-10-01T00:00:00Z --no-reconcile --json"
 )]
 pub struct RunSettlementsArgs {
     /// Only settlements recorded at or after this RFC 3339 time or relative
