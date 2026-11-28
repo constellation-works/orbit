@@ -50,7 +50,8 @@ gives the orchestrator one place to look.
   concerns, a `since` time, a one-line `reason` quoted from its source, a `next` action and a
   `fingerprint`. Schema: [attention-item](./specs/attention-item.md).
 - **Kind**: the closed enum of reasons (`pilot_warning`, `pilot_hold`, `blocked`,
-  `decision_open`, `run_failed`, `run_stuck`, `claim_stale`, `review_waiting`, `ci_red`,
+  `decision_open`, `review_waiting`, `run_failed`, `run_stuck`, `claim_stale`,
+  `delivery_stale_base`, `ci_red`,
   `friction_untriaged`, `host_unhealthy`, `notice_open`, `resident_stalled`, `routine_tripped`, `drain_paused`,
   `drain_breaker_open`). Each kind has exactly one source of truth that
   already exists.
