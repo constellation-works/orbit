@@ -644,7 +644,11 @@ pub(super) fn bundled_activity_notice_uses_selected_task_and_refuses_ambiguity()
         root.path(),
         &run,
         Some(&active),
-        json!({"task_ids": [first, active], "task_id": active, "workspace_path": root.path().join("repo")}),
+        json!({
+            "task_ids": [first, active],
+            "task_id": active,
+            "workspace_path": root.path().join("repo")
+        }),
     );
     let post = |env: &Env, title: &str| {
         call_with_env(

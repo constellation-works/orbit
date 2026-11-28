@@ -259,23 +259,3 @@ pub(in crate::activity_job) fn task_ids_from_input(input: &Value) -> Vec<String>
         .map(str::to_string)
         .collect()
 }
-
-#[cfg(test)]
-mod tests {
-    use super::task_id_from_input;
-    use serde_json::json;
-
-    #[test]
-    fn activity_task_requires_an_unambiguous_binding() {
-        assert_eq!(task_id_from_input(&json!({"task_ids": ["A", "B"]})), None);
-        assert_eq!(task_id_from_input(&json!({"task_ids": ["A"]})), Some("A"));
-        assert_eq!(
-            task_id_from_input(&json!({"task_ids": ["A", "B"], "task_id": "B"})),
-            Some("B")
-        );
-        assert_eq!(
-            task_id_from_input(&json!({"task_ids": ["A", "B"], "task": {"id": "B"}})),
-            Some("B")
-        );
-    }
-}
