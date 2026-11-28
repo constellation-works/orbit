@@ -31,6 +31,7 @@ struct AuditedDispatch {
 
 struct ShellHost {
     root: PathBuf,
+    sandbox: Option<orbit_engine::ResolvedSandbox>,
     observed: std::sync::Mutex<Vec<(String, Option<String>)>>,
 }
 
@@ -38,8 +39,15 @@ impl ShellHost {
     fn new(root: &Path) -> Self {
         Self {
             root: root.to_path_buf(),
+            sandbox: None,
             observed: std::sync::Mutex::new(Vec::new()),
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn with_sandbox(mut self, sandbox: orbit_engine::ResolvedSandbox) -> Self {
+        self.sandbox = Some(sandbox);
+        self
     }
 
     fn observed_executor(&self) -> Option<String> {
@@ -78,7 +86,7 @@ impl_test_host! {
                 .lock()
                 .expect("lock")
                 .push((provider.to_string(), fs_profile.map(ToOwned::to_owned)));
-            Ok(None)
+            Ok(self.sandbox.clone())
         }
     }
 }
@@ -287,6 +295,106 @@ fn a_shell_step_gets_only_the_policy_baseline_and_its_explicit_env() {
     );
 }
 
+#[cfg(target_os = "linux")]
+fn with_managed_linux_bwrap(body: impl FnOnce()) {
+    if orbit_exec::probe_bwrap().available {
+        body();
+    } else {
+        orbit_engine::test_support::with_post_run_guard_without_user_namespace(body);
+    }
+}
+
+/// A managed Linux worktree permits non-subtree `denyModify` patterns (such as
+/// `**/.env`) because Bubblewrap compilation takes a post-run guard. A
+/// `local_shell` step creating a newly matching path must fail even on a zero
+/// exit or with `allow_nonzero_exit: true`, while allowed writes succeed.
+#[cfg(target_os = "linux")]
+fn managed_linux_post_run_guard_rejects_new_deny_modify_match() {
+    with_managed_linux_bwrap(|| {
+        let repo = tempfile::tempdir().expect("tempdir");
+        let workspace = repo.path().canonicalize().expect("canonical workspace");
+        let sandbox = orbit_engine::ResolvedSandbox {
+            kind: orbit_types::workflow::ExecutorSandboxKind::LinuxBwrap,
+            fs_profile: orbit_types::policy::ResolvedFsProfile {
+                name: "implementer".to_string(),
+                read: vec!["/**".to_string()],
+                modify: vec![
+                    format!("{}/**", workspace.display()),
+                    format!("!{}/**/.env", workspace.display()),
+                ],
+            },
+            allow_fallback: false,
+            managed_worktree: true,
+            runtime_write_authority: Vec::new(),
+            mask: None,
+        };
+        let host = ShellHost::new(&workspace).with_sandbox(sandbox);
+
+        let allowed = dispatch(
+            &shell_activity(json!({ "shell": "/bin/sh", "script": "printf ok > allowed.txt" })),
+            json!({}),
+            &host,
+        )
+        .expect("allowed write in managed worktree succeeds");
+        assert_eq!(allowed.output["success"], json!(true));
+        assert!(workspace.join("allowed.txt").is_file());
+
+        let audited = dispatch_with_audit(
+            &shell_activity(json!({ "shell": "/bin/sh", "script": "printf secret > .env" })),
+            json!({}),
+            &host,
+        );
+        let error = audited
+            .result
+            .expect_err("new denyModify match must fail local_shell");
+        match &error {
+            DispatchError::DeterministicActionFailed { action, message } => {
+                assert_eq!(action, "local_shell");
+                assert!(
+                    message.contains("denyModify"),
+                    "guard failure must name denyModify: {message}"
+                );
+            }
+            other => panic!("unexpected dispatch error: {other:?}"),
+        }
+        let finished: Vec<&V2AuditEvent> = audited
+            .events
+            .iter()
+            .filter(|event| {
+                matches!(
+                    &event.kind,
+                    V2AuditEventKind::ActivityFinished { activity_name, .. }
+                        if activity_name == "local_shell_case"
+                )
+            })
+            .collect();
+        assert_eq!(finished.len(), 1);
+        assert!(
+            matches!(
+                &finished[0].kind,
+                V2AuditEventKind::ActivityFinished { outcome, .. } if outcome == "error"
+            ),
+            "guard rejection must be audited as error: {:?}",
+            finished[0]
+        );
+
+        let bypassed = dispatch(
+            &shell_activity(json!({
+                "shell": "/bin/sh",
+                "script": "mkdir -p nested && printf secret > nested/.env; exit 1",
+                "allow_nonzero_exit": true,
+            })),
+            json!({}),
+            &host,
+        )
+        .expect_err("allow_nonzero_exit must not mask a denyModify post-run guard failure");
+        assert!(
+            bypassed.to_string().contains("denyModify"),
+            "guard failure must name denyModify: {bypassed}"
+        );
+    });
+}
+
 fn dispatch(yaml: &str, input: Value, host: &ShellHost) -> Result<DispatchOutcome, DispatchError> {
     dispatch_with_audit(yaml, input, host).result
 }
@@ -377,6 +485,11 @@ fn shell_dispatch_contracts_2() {
             (
                 "a_shell_step_gets_only_the_policy_baseline_and_its_explicit_env",
                 a_shell_step_gets_only_the_policy_baseline_and_its_explicit_env,
+            ),
+            #[cfg(target_os = "linux")]
+            (
+                "managed_linux_post_run_guard_rejects_new_deny_modify_match",
+                managed_linux_post_run_guard_rejects_new_deny_modify_match,
             ),
         ]);
     });

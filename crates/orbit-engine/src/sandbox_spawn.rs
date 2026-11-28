@@ -33,7 +33,7 @@ thread_local! {
     static BWRAP_PROBE_FORCED_UNAVAILABLE: Cell<bool> = const { Cell::new(false) };
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 thread_local! {
     static POST_RUN_GUARD_WITHOUT_USER_NAMESPACE: Cell<bool> = const { Cell::new(false) };
 }
@@ -191,7 +191,7 @@ pub(crate) fn prepare_sandbox_for_dispatch(
 }
 
 fn linux_bwrap_probe_for_dispatch() -> BwrapProbeOutcome {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     if let Some(probe) = probe_overriding_user_namespace_refusal() {
         return probe;
     }
@@ -347,7 +347,7 @@ fn spawn_linux_bwrap(
     // Test builds can keep this compiled guard and exec the provider bare
     // when the host refuses the user namespace `bwrap` needs. Production
     // always reaches `spawn_under_linux_bwrap` below.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     if post_run_guard_without_user_namespace() {
         let mut spawned = spawn_bare(program, args, env, cwd)?;
         spawned._linux_mount_plan = Some(plan);
@@ -633,12 +633,12 @@ fn validate_ca_certificate_path(
     Ok(())
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 fn post_run_guard_without_user_namespace() -> bool {
     POST_RUN_GUARD_WITHOUT_USER_NAMESPACE.with(Cell::get)
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 fn probe_overriding_user_namespace_refusal() -> Option<BwrapProbeOutcome> {
     post_run_guard_without_user_namespace().then(|| BwrapProbeOutcome {
         available: true,
@@ -658,9 +658,9 @@ fn probe_overriding_user_namespace_refusal() -> Option<BwrapProbeOutcome> {
 /// never reaches provider exit and the guard cannot be observed. This seam
 /// exists only in test builds: dispatch still snapshots the real deny rules,
 /// then execs the provider bare. Production probes and spawns Bubblewrap.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[cfg(target_os = "linux")]
-pub(crate) fn with_post_run_guard_without_user_namespace<T>(body: impl FnOnce() -> T) -> T {
+pub fn with_post_run_guard_without_user_namespace<T>(body: impl FnOnce() -> T) -> T {
     struct Reset;
     impl Drop for Reset {
         fn drop(&mut self) {
