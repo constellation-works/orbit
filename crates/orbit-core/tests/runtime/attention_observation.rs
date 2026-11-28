@@ -1132,3 +1132,103 @@ crate::scenario_table!(
     run_failed_settled_claims_are_not_held_and_a_live_claim_is,
     follower_run_failed_settled_local_pull_is_not_a_held_claim,
 );
+
+#[test]
+fn stale_owner_base_attention_deduplicates_and_clears() {
+    use std::process::Command;
+    let (root, runtime) = attention_runtime();
+    let repo = root.path().join("repo");
+    let git = |args: &[&str]| {
+        let output = Command::new("git")
+            .current_dir(&repo)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout).unwrap().trim().to_owned()
+    };
+    git(&["init", "-b", "agent-main"]);
+    git(&["config", "user.email", "test@example.com"]);
+    git(&["config", "user.name", "Test"]);
+    std::fs::write(repo.join("tracked.txt"), "base").unwrap();
+    git(&["add", "tracked.txt"]);
+    git(&["commit", "-m", "base"]);
+    let base = git(&["rev-parse", "HEAD"]);
+    git(&["commit", "--allow-empty", "-m", "local delivery [ORB-123]"]);
+    let local = git(&["rev-parse", "HEAD"]);
+    git(&["checkout", "--detach", &base]);
+    git(&["commit", "--allow-empty", "-m", "remote change"]);
+    let remote = git(&["rev-parse", "HEAD"]);
+    git(&["update-ref", "refs/remotes/origin/agent-main", &remote]);
+    git(&["checkout", "agent-main"]);
+    let jobs = runtime.stores().jobs();
+    let now = Utc::now() - Duration::minutes(1);
+    let record = |at, state, error: Option<String>| {
+        let run = jobs
+            .insert_job_run(
+                "task_local_pipeline",
+                1,
+                at,
+                Some(json!({"base_branch": "agent-main"})),
+                None,
+            )
+            .unwrap();
+        jobs.mark_job_run_running(&run.run_id, at, std::process::id())
+            .unwrap();
+        jobs.complete_job_run_step(
+            &run.run_id,
+            &JobRunStepParams {
+                lock_wait_ms: None,
+                step_index: 0,
+                target_type: JobTargetType::Activity,
+                target_id: "worktree_setup".into(),
+                started_at: at,
+                finished_at: at,
+                duration_ms: Some(1),
+                exit_code: None,
+                agent_response_json: None,
+                state,
+                error_code: Some("delivery_stale_branch".into()),
+                error_message: error,
+            },
+        )
+        .unwrap();
+        jobs.finalize_job_run(&run.run_id, state, at, None).unwrap();
+    };
+    let message = format!(
+        "worktree setup refusing stale base: owner checkout '{}' holds 'agent-main' at {local}, and origin/agent-main is at {remote}; the checkout has diverged",
+        repo.display()
+    );
+    record(now, JobRunState::Held, Some(message.clone()));
+    record(now + Duration::seconds(1), JobRunState::Held, Some(message));
+    let operator = session(McpCapability::Operator);
+    let response = call(&runtime, json!({"kind": "delivery_stale_base"}), &operator);
+    let items = response["items"].as_array().unwrap();
+    assert_eq!(items.len(), 1, "{response}");
+    assert_eq!(items[0]["detail"]["ahead"], 1);
+    assert_eq!(items[0]["detail"]["behind"], 1);
+    assert_eq!(items[0]["detail"]["owner_only_commits"][0]["sha"], local);
+    assert_eq!(
+        items[0]["detail"]["owner_only_commits"][0]["task_id"],
+        "ORB-123"
+    );
+    let id = items[0]["id"].clone();
+    let again = call(&runtime, json!({"kind": "delivery_stale_base"}), &operator);
+    assert_eq!(again["items"][0]["id"], id);
+    git(&["reset", "--hard", &base]);
+    std::fs::write(repo.join("tracked.txt"), "dirty").unwrap();
+    let dirty = call(&runtime, json!({"kind": "delivery_stale_base"}), &operator);
+    assert_eq!(dirty["items"][0]["detail"]["ahead"], 0, "{dirty}");
+    assert_eq!(dirty["items"][0]["detail"]["tracked_changes"], true);
+    git(&["reset", "--hard", &base]);
+    let clean = call(&runtime, json!({"kind": "delivery_stale_base"}), &operator);
+    assert!(clean["items"].as_array().unwrap().is_empty(), "{clean}");
+    git(&["reset", "--hard", &local]);
+    record(now + Duration::seconds(2), JobRunState::Success, None);
+    let cleared = call(&runtime, json!({"kind": "delivery_stale_base"}), &operator);
+    assert!(cleared["items"].as_array().unwrap().is_empty(), "{cleared}");
+}
