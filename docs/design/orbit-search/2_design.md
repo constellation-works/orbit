@@ -30,8 +30,15 @@ mapped to their sources in [1_overview.md §3](./1_overview.md#3-at-a-glance).
 
 ## 3. Concerns & Honest Limitations
 
-- Search is lexical BM25 only; there is no inference backend, so wording that shares no
-  terms with a task does not find it.
+- Task search is lexical. SQLite FTS5 BM25 ranks indexed task chunks containing all query
+  terms; when a multi-word query has fewer than the requested full matches, an any-term
+  FTS5 pass can add partial matches after them.
+- A literal substring supplement follows the BM25-ranked hits. It can match inside a token
+  and in comments, external references, or artifact manifest paths. It uses case-insensitive
+  Unicode matching and preserves the query's raw whitespace; tasks without indexed sidecar
+  fields use the same substring semantics through the bundle matcher.
+- There is no semantic inference backend. Tasks are found through token, partial-term, or
+  literal substring matches; search does not infer synonyms.
 - The index is disposable: after an import or restore it covers only what a rebuild
   re-indexes.
 
