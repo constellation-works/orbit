@@ -61,7 +61,7 @@ fn apply(workspace: &Workspace, input: &Value) -> Result<Value, String> {
 
 fn malformed_apply_input_is_refused_before_any_task_is_written() {
     #[cfg(unix)]
-    explicit_status_is_refused_before_assessment();
+    non_assessable_explicit_status_is_skipped_before_assessment();
     let workspace = Workspace::new();
     let task = proposed(&workspace, "malformed");
     let other = proposed(&workspace, "sibling");
@@ -358,9 +358,10 @@ fn malformed_partition_result_fails_only_its_partition() {
 }
 
 // Run the shipped job, with only the provider's answer scripted. Counting the
-// launcher proves refusal happens before assessment, rather than at apply.
+// launcher proves non-assessable tasks are skipped before assessment rather
+// than rejected at apply, while eligible siblings still traverse the pilot.
 #[cfg(unix)]
-fn explicit_status_is_refused_before_assessment() {
+fn non_assessable_explicit_status_is_skipped_before_assessment() {
     use orbit_core::application::task::TaskUpdateParams;
     use orbit_types::resource::ExecutorResource;
     use orbit_types::workflow::{ExecutorDef, ExecutorSandboxKind};
@@ -398,122 +399,156 @@ fn explicit_status_is_refused_before_assessment() {
             None,
         ))
         .unwrap();
-    let allowed = proposed(&workspace, "allowed sibling");
     let target = proposed(&workspace, "unsupported target");
     let reservations = workspace
         .runtime
         .paths()
         .state_dir
         .join("task-pilot-reservations.json");
-    // The third row models a successful command preflight followed by a move
-    // before the authoritative prepare starts. No scheduling or timing race.
-    for (mixed, moved) in [(false, false), (true, false), (true, true)] {
-        if moved {
-            workspace
-                .runtime
-                .force_update_task_with_identity(
-                    &target.id,
-                    TaskUpdateParams {
-                        status: Some(TaskStatus::Backlog),
-                        ..Default::default()
-                    },
-                    None,
-                    None,
-                )
-                .unwrap();
-            assert_eq!(
-                workspace.runtime.get_task(&target.id).unwrap().status,
-                TaskStatus::Backlog
-            );
-        }
+
+    // All-non-assessable explicit selection succeeds without calling the provider.
+    workspace
+        .runtime
+        .force_update_task_with_identity(
+            &target.id,
+            TaskUpdateParams {
+                status: Some(TaskStatus::Blocked),
+                ..Default::default()
+            },
+            None,
+            None,
+        )
+        .unwrap();
+    let target_before = json!({
+        "task": workspace.runtime.get_task(&target.id).unwrap(),
+        "history": workspace.runtime.get_task_history(&target.id).unwrap(),
+    });
+    let reservation_before = std::fs::read(&reservations).ok();
+    let all_skipped = workspace
+        .runtime
+        .run_job_v2_from_yaml(
+            &assets.join("jobs/task_pilot_pipeline.yaml"),
+            json!({
+                "task_ids": [target.id],
+                "workspace_path": workspace.repo,
+                "base_branch": "main",
+            }),
+        )
+        .expect("all-non-assessable explicit selection should skip without failing");
+    assert!(all_skipped.success, "{all_skipped:?}");
+    assert_eq!(all_skipped.pipeline["prepare"]["task_count"], 0);
+    assert_eq!(all_skipped.pipeline["prepare"]["partitions"], json!([]));
+    assert_eq!(
+        all_skipped.pipeline["prepare"]["excluded"],
+        json!([{"task_id": target.id, "reason": "status_not_eligible", "status": "blocked"}])
+    );
+    assert_eq!(all_skipped.pipeline["apply"]["status"], "succeeded");
+    assert_eq!(all_skipped.pipeline["apply"]["applied_count"], 0);
+    assert_eq!(all_skipped.pipeline["apply"]["superseded_count"], 1);
+    assert_eq!(
+        std::fs::read_to_string(&calls).unwrap(),
+        "",
+        "skipped before provider"
+    );
+    assert_eq!(std::fs::read(&reservations).ok(), reservation_before);
+    assert_eq!(
+        json!({
+            "task": workspace.runtime.get_task(&target.id).unwrap(),
+            "history": workspace.runtime.get_task_history(&target.id).unwrap(),
+        }),
+        target_before
+    );
+
+    // Mixed selection (proposed + blocked after moving from backlog) assesses
+    // only the eligible sibling and records the skip for the non-assessable one.
+    let allowed = proposed(&workspace, "allowed sibling");
+    workspace
+        .runtime
+        .force_update_task_with_identity(
+            &target.id,
+            TaskUpdateParams {
+                status: Some(TaskStatus::Backlog),
+                ..Default::default()
+            },
+            None,
+            None,
+        )
+        .unwrap();
+    workspace
+        .runtime
+        .force_update_task_with_identity(
+            &target.id,
+            TaskUpdateParams {
+                status: Some(TaskStatus::Blocked),
+                ..Default::default()
+            },
+            None,
+            None,
+        )
+        .unwrap();
+    let target_before = json!({
+        "task": workspace.runtime.get_task(&target.id).unwrap(),
+        "history": workspace.runtime.get_task_history(&target.id).unwrap(),
+    });
+    let revision = workspace.git(&["rev-parse", "HEAD"]).trim().to_string();
+    let tree = workspace
+        .git(&["rev-parse", "HEAD^{tree}"])
+        .trim()
+        .to_string();
+    std::fs::write(
+        &response,
+        json!({
+            "schemaVersion": 1,
+            "status": "success",
+            "error": null,
+            "result": {
+                "partition_index": 0,
+                "observed_revision": revision,
+                "observed_tree": tree,
+                "task_ids": [allowed.id],
+                "tasks": [assessment(&allowed.id)],
+            }
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let mixed = workspace
+        .runtime
+        .run_job_v2_from_yaml(
+            &assets.join("jobs/task_pilot_pipeline.yaml"),
+            json!({
+                "task_ids": [allowed.id, target.id],
+                "workspace_path": workspace.repo,
+                "base_branch": "main",
+            }),
+        )
+        .expect("mixed selection should assess eligible tasks and skip blocked ones");
+    assert!(mixed.success, "{mixed:?}");
+    assert_eq!(mixed.pipeline["prepare"]["task_ids"], json!([allowed.id]));
+    assert_eq!(
+        mixed.pipeline["prepare"]["excluded"],
+        json!([{"task_id": target.id, "reason": "status_not_eligible", "status": "blocked"}])
+    );
+    assert_eq!(mixed.pipeline["apply"]["status"], "succeeded");
+    assert_eq!(mixed.pipeline["apply"]["applied_count"], 1);
+    assert_eq!(mixed.pipeline["apply"]["superseded_count"], 1);
+    assert_eq!(
         workspace
             .runtime
-            .force_update_task_with_identity(
-                &target.id,
-                TaskUpdateParams {
-                    status: Some(TaskStatus::Blocked),
-                    ..Default::default()
-                },
-                None,
-                None,
-            )
-            .unwrap();
-        let ids = if mixed {
-            vec![allowed.id.as_str(), target.id.as_str()]
-        } else {
-            vec![target.id.as_str()]
-        };
-        let before = [&allowed.id, &target.id].map(|id| {
-            json!({
-                "task": workspace.runtime.get_task(id).unwrap(),
-                "history": workspace.runtime.get_task_history(id).unwrap(),
-            })
-        });
-        let reservation_before = std::fs::read(&reservations).ok();
-        let outcome = workspace
-            .runtime
-            .run_job_v2_from_yaml(
-                &assets.join("jobs/task_pilot_pipeline.yaml"),
-                json!({"task_ids": ids, "workspace_path": workspace.repo, "base_branch": "main"}),
-            )
-            .expect_err("unsupported explicit selections must refuse preparation");
-        let evidence = outcome.to_string();
-        for expected in [target.id.as_str(), "blocked", "proposed", "backlog"] {
-            assert!(
-                evidence.contains(expected),
-                "refusal must name task/status and eligibility: {evidence}"
-            );
-        }
-        assert_eq!(
-            std::fs::read_to_string(&calls).unwrap(),
-            "",
-            "refused before provider"
-        );
-        assert_eq!(std::fs::read(&reservations).ok(), reservation_before);
-        for (id, before) in [&allowed.id, &target.id].into_iter().zip(before) {
-            assert_eq!(
-                json!({"task": workspace.runtime.get_task(id).unwrap(),
-                "history": workspace.runtime.get_task_history(id).unwrap()}),
-                before
-            );
-        }
-    }
-    let rows = workspace
-        .runtime
-        .stores()
-        .host_store()
-        .read()
-        .unwrap()
-        .v2_audit()
-        .list(&orbit_store::contract::V2AuditEventFilter {
-            workspace_id: workspace.runtime.workspace_id().unwrap(),
-            limit: Some(1000),
-            ..Default::default()
-        })
-        .unwrap();
-    let events = rows
-        .iter()
-        .map(|row| serde_json::from_str::<Value>(&row.payload_json).unwrap())
-        .collect::<Vec<_>>();
-    let finished = events
-        .iter()
-        .filter(|event| event["body_kind"] == "run_finished")
-        .collect::<Vec<_>>();
-    assert_eq!(
-        finished.len(),
-        3,
-        "each refusal keeps its terminal audit record"
+            .get_task(&allowed.id)
+            .unwrap()
+            .context_files,
+        ["file:README.md"]
     );
-    for event in finished {
-        assert_eq!(event["outcome"], "error", "{event}");
-        assert!(
-            event["error_message"]
-                .as_str()
-                .unwrap()
-                .contains("only proposed and backlog"),
-            "{event}"
-        );
-    }
+    assert_eq!(
+        json!({
+            "task": workspace.runtime.get_task(&target.id).unwrap(),
+            "history": workspace.runtime.get_task_history(&target.id).unwrap(),
+        }),
+        target_before
+    );
+    assert_eq!(std::fs::read_to_string(&calls).unwrap().lines().count(), 1);
+
     // Both eligible states still traverse the real agent and apply steps.
     for status in [TaskStatus::Proposed, TaskStatus::Backlog] {
         let task = proposed(&workspace, &format!("eligible {status}"));
@@ -552,7 +587,7 @@ fn explicit_status_is_refused_before_assessment() {
         assert_eq!(after.status, status);
         assert_eq!(after.context_files, ["file:README.md"]);
     }
-    assert_eq!(std::fs::read_to_string(calls).unwrap().lines().count(), 2);
+    assert_eq!(std::fs::read_to_string(calls).unwrap().lines().count(), 3);
 }
 
 // Related boundary scenarios share the isolated table fixture.
