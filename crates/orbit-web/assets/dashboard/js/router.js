@@ -457,7 +457,7 @@ function revealActiveRailSelection() {
 // Desktop: the open destination's views show whole, with no inner scrolling,
 // whenever the rail can make room. When the largest destination's views would
 // not all fit the room the rail leaves them, the rail tightens its own spacing
-// (`rail-compact`: shorter rows, no group headings, a one-line host block).
+// (`rail-compact`: shorter rows, no group headings, a two-column host block).
 // The decision follows the largest list, not the open one, so the rail keeps
 // one size as the operator moves between destinations. Only when even the
 // compact rail is too short does the open list shrink to a whole number of
