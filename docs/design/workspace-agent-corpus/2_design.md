@@ -160,8 +160,9 @@ rule has:
 - `auto_set_by`: `operator` only when the operator set `auto`
 
 A weekly workspace-local auto-task proposes rule edits [ORB-20747]. It is not a shipped
-default. The template is `decision-precedent.auto-task.yaml` beside this
-document. An operator copies it into `.orbit/auto_tasks/` and enables it
+default. The template is
+[`references/decision-precedent.auto-task.yaml`](references/decision-precedent.auto-task.yaml).
+An operator copies it into `.orbit/auto_tasks/` and enables it
 there. The run calls `orbit decision consolidate`, which prints proposed file
 text and writes nothing. A pull request is where a rule change is reviewed and
 lands as corpus guidance; an operator may stage a local curation edit with
