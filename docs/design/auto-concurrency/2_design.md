@@ -9,7 +9,7 @@ feature: auto-concurrency
 doc_role: design
 summary: Proposed mechanism for predictive admission — per-task CPU and memory sampling from Linux worker scopes and the macOS process tree, resource profiles per workspace, work class and complexity, a host-wide load forecast with admission reservations, gap-fit admission under the existing throttle, and a shadow-first rollout.
 tags: [auto-concurrency, drain, capacity, admission]
-paths: ["crates/orbit-core/src/application/job/pipeline/worker/scope.rs", "crates/orbit-core/src/application/job/pipeline/worker/usage/sampler.rs", "crates/orbit-core/src/application/job/pipeline/worker/delivery_class.rs", "crates/orbit-core/src/application/admission/auto_admission.rs", "crates/orbit-core/src/application/admission/gap_fit.rs", "crates/orbit-core/src/application/workspace_auto/classify/**", "crates/orbit-core/src/application/workspace_auto/limiters.rs", "crates/orbit-core/src/application/pull_drain/refill/**", "crates/orbit-runtime/src/host/resource/**", "crates/orbit-store/src/repository/admission_load.rs", "crates/orbit-config/src/registry/settings/machine.rs", "crates/orbit-core/src/application/distributed/work_fit.rs", "crates/orbit-store/src/contract/task/coordination/admission.rs"]
+paths: ["crates/orbit-core/src/application/job/pipeline/worker/scope.rs", "crates/orbit-core/src/application/job/pipeline/worker/usage/sampler.rs", "crates/orbit-core/src/application/job/pipeline/worker/delivery_class.rs", "crates/orbit-core/src/application/admission/auto_admission.rs", "crates/orbit-core/src/application/admission/gap_fit.rs", "crates/orbit-core/src/unit/workspace_auto/classify/**", "crates/orbit-core/src/unit/workspace_auto/limiter.rs", "crates/orbit-core/src/application/pull_drain/refill/**", "crates/orbit-runtime/src/host/resource/**", "crates/orbit-store/src/repository/admission_load.rs", "crates/orbit-config/src/registry/settings/machine.rs", "crates/orbit-core/src/application/distributed/work_fit.rs", "crates/orbit-store/src/contract/task/coordination/admission.rs"]
 related_features: [auto-concurrency, distributed-drain]
 related_artifacts: [ORB-15757, ORB-15774]
 ---
@@ -1462,7 +1462,7 @@ Implemented for local and pull drains, with local passes in `workspace_auto/clas
   requests. Pull request counts are separate from the distinct local-task
   `WOULD_HOLD`, `WOULD_ADD` and `GAP_HELD` sets.
 - **Limiters**, per drain, from its `drain_pass_counters` (§7), joined in
-  `workspace_auto/limiters.rs`: `PASSES`, then each outcome's share of
+  `unit/workspace_auto/limiter.rs`: `PASSES`, then each outcome's share of
   those passes with its count (`ADMITTED`, `FAILED`, `HELD`, `THROTTLE`,
   `NO_CANDIDATE`, `CEILING_FULL`, `GAP_FIT_HELD`, `DEFERRED`), which sum to
   100%, and `DETAIL`: held passes by reason, throttled passes by resource,

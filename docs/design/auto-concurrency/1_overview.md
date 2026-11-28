@@ -12,7 +12,7 @@ doc_role: overview
 type: design
 summary: Shipped predictive admission — Orbit records per-task CPU and memory samples, builds resource profiles, forecasts host load, and supports shadow or forecast-based admission for local and pull drains; operational accuracy evidence remains limited.
 tags: [auto-concurrency, drain, capacity, admission]
-paths: ["crates/orbit-core/src/application/workspace_auto/classify/**", "crates/orbit-core/src/application/pull_drain/refill/**", "crates/orbit-core/src/application/admission/**", "crates/orbit-runtime/src/host/resource/**", "crates/orbit-core/src/application/job/pipeline/worker/**", "crates/orbit-config/src/registry/settings/machine.rs", "crates/orbit-types/src/workflow/run/state/drain/mod.rs"]
+paths: ["crates/orbit-core/src/unit/workspace_auto/classify/**", "crates/orbit-core/src/application/pull_drain/refill/**", "crates/orbit-core/src/application/admission/**", "crates/orbit-runtime/src/host/resource/**", "crates/orbit-core/src/application/job/pipeline/worker/**", "crates/orbit-config/src/registry/settings/machine.rs", "crates/orbit-types/src/workflow/run/state/drain/mod.rs"]
 related_features: [auto-concurrency, distributed-drain]
 related_artifacts: [ORB-15757]
 ---
