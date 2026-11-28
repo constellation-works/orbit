@@ -55,10 +55,15 @@ registered, then removes blobs that no remaining audit row, run step or
 pipeline state names. Another registered workspace keeps its own window.
 
 A blob
-written in the last 24 hours, or one a write in progress has marked as pending,
-is always kept. `gc runs` never touches a held run or one still in flight, so
-`orbit run show`, run history and the Cost page keep working, and it reaches
-the same unregistered workspace ids.
+written in the last 24 hours, one a pending-publication marker newer than the
+cutoff names, or one a write in progress has marked as pending, is always kept.
+`gc runs` selects only success, failed, timeout, cancelled and interrupted runs
+of this workspace and of workspace ids that are no longer registered. It never
+touches a held run, which review evidence can still resume, or any non-terminal
+run. The run row, its steps and its summary stay, so `orbit run show`, run
+history and the Cost page keep working, and `archived_at` records when the
+pipeline state was dropped. The pass reaches the same unregistered workspace
+ids.
 
 The same pass prunes the host's
 per-minute run and host resource history (`run_resource_minutes`,

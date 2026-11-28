@@ -4,16 +4,22 @@ use orbit_core::app::gc::DEFAULT_DEPLOYMENT_KEEP;
 
 #[derive(Args)]
 #[command(
-    after_help = "Without --confirm this only reports. Three classes are counted separately: \
-                  top-level entries of ~/.orbit/deployments, copies of replaced executables in \
-                  ~/.orbit/bin (names with a .bak, .before-, .pre-, .stale or -stale- marker), \
-                  and store copies named ~/.orbit/orbit.db.bak*. Each class keeps its newest \
-                  entries by the newest modification time inside them. The installed \
-                  executable and every <executable>.previous rollback copy are never removed, \
-                  nor is a deployment whose orbit-local-candidate manifest names the bytes of \
-                  the installed or rollback executable; those do not count toward --keep. \
-                  Links are removed, never followed.\n\nExamples:\n  orbit gc deployments\n  \
-                  orbit gc deployments --keep 1 --confirm --json"
+    after_help = "Without --confirm this only reports. The installed executable and every \
+                  <executable>.previous rollback copy are never removed. Links are removed, \
+                  never followed.\n\n\
+                  Examples:\n  \
+                  orbit gc deployments\n  \
+                  orbit gc deployments --keep 1 --confirm --json",
+    after_long_help = "Without --confirm this only reports. Three classes are counted \
+                       separately, and each keeps its newest entries. The installed executable \
+                       and every <executable>.previous rollback copy are never removed, nor is \
+                       a deployment whose manifest names those bytes; those do not count toward \
+                       --keep. Links are removed, never followed.\n\n\
+                       The three classes, the name markers and how newest is chosen: installed \
+                       orbit-setup skill `references/maintenance-local-deploys.md`.\n\n\
+                       Examples:\n  \
+                       orbit gc deployments\n  \
+                       orbit gc deployments --keep 1 --confirm --json"
 )]
 pub struct DeploymentGcArgs {
     /// Remove what the report lists; without this flag the command only reports

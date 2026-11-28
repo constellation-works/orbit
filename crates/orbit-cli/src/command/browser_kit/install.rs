@@ -8,11 +8,22 @@ use crate::command::{CommandOut, Payload};
 
 #[derive(Args)]
 #[command(
-    after_help = "On Linux, missing Chromium libraries are unpacked into the kit without root \
-        on Debian and Ubuntu. --with-deps installs them system-wide with sudo instead. On other \
-        distributions the unresolved libraries and the fix are reported.\n\n\
-        An existing kit is adopted: steps it already satisfies are skipped, and an env.sh you \
-        wrote yourself is kept."
+    after_help = "An existing kit is adopted: steps it already satisfies are skipped, and an \
+                  env.sh you wrote yourself is kept. On Linux, --with-deps installs Chromium's \
+                  libraries system-wide with sudo.\n\n\
+                  Examples:\n  \
+                  orbit config browser-kit install\n  \
+                  orbit config browser-kit install --with-deps",
+    after_long_help = "An existing kit is adopted: steps it already satisfies are skipped, and \
+                       an env.sh you wrote yourself is kept. On Linux, --with-deps installs \
+                       Chromium's libraries system-wide with sudo. Without it, supported \
+                       distributions unpack the missing libraries into the kit without root; \
+                       other distributions report the unresolved libraries and the fix.\n\n\
+                       Library install by distribution: installed orbit-setup skill \
+                       `references/browser-checks.md`.\n\n\
+                       Examples:\n  \
+                       orbit config browser-kit install\n  \
+                       orbit config browser-kit install --with-deps"
 )]
 pub struct BrowserKitInstallArgs {
     /// Linux: install Chromium's system libraries with sudo (`playwright install-deps chromium`)

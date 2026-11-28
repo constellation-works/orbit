@@ -10,7 +10,29 @@ use crate::command::{CommandOut, ExecuteCore, Payload};
 /// request was merged outside Orbit.
 #[derive(Args)]
 #[command(
-    after_help = "A blocked, in-progress or review task settles when its Orbit delivery pull request is merged into its target branch and no run or claim of its own is live. The task records a landing note naming the pull request and merge commit. No work starts, so another task's claim on the same files does not refuse it.\nA handed-off claim whose completion authority an operator revoked settles with its task when exactly the handoff's pull request merged into the handoff's landing branch.\nAfter owner recovery, use --recovered-claim, --pull-request and --published-head together for a refused follower handoff whose pull request was rescued by hand. The original admission and delivery identity must match. History records the operator-reported published head, the merged head and the merge commit.\nEach `orbit run auto` pass does the ordinary settlement from the recently merged pull requests.\n\nExamples:\n  orbit task settle-merged             # settle every task whose delivery merged recently\n  orbit task settle-merged <task-id>   # settle one task, reading each of its pull requests\n  orbit task settle-merged <task-id> --recovered-claim <claim-id> --pull-request <number> --published-head <commit>"
+    after_help = "Settles a blocked, in-progress or review task whose delivery pull request \
+                  merged, when no run or claim of its own is live. No work starts. The rescued \
+                  form needs --recovered-claim, --pull-request and --published-head together.\n\n\
+                  Examples:\n  \
+                  orbit task settle-merged             # settle every task whose delivery merged recently\n  \
+                  orbit task settle-merged <task-id>   # settle one task, reading each of its pull requests\n  \
+                  orbit task settle-merged <task-id> --recovered-claim <claim-id> --pull-request <number> --published-head <commit>",
+    after_long_help = "A blocked, in-progress or review task settles when its Orbit delivery \
+                       pull request is merged into its target branch and no run or claim of its \
+                       own is live. The task records a landing note naming the pull request and \
+                       merge commit. No work starts, so another task's claim on the same files \
+                       does not refuse it. Each `orbit run auto` pass does the ordinary \
+                       settlement from the recently merged pull requests.\n\n\
+                       A revoked handoff, and a follower pull request rescued by hand, settle \
+                       only when the admission and delivery identity match. Use \
+                       --recovered-claim, --pull-request and --published-head together for that \
+                       rescued form.\n\n\
+                       The rules and the history the command records: installed \
+                       orbit-orchestrate skill `references/recovery-settle-rescued-task.md`.\n\n\
+                       Examples:\n  \
+                       orbit task settle-merged             # settle every task whose delivery merged recently\n  \
+                       orbit task settle-merged <task-id>   # settle one task, reading each of its pull requests\n  \
+                       orbit task settle-merged <task-id> --recovered-claim <claim-id> --pull-request <number> --published-head <commit>"
 )]
 pub struct TaskSettleMergedArgs {
     /// Settle only this task, reading each pull request Orbit recorded for it.

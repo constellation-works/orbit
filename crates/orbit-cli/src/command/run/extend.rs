@@ -14,14 +14,23 @@ use crate::parse::parse_duration_seconds;
 #[derive(Args)]
 #[command(
     about = "Lengthen a running drain's window, and optionally retune it",
-    after_help = "Moves a live drain's deadline to the later of its current one and now plus \
-`--for`, keeping its run ID, completion authorization and in-flight tasks. Extend a drain \
-instead of starting another `orbit run auto`, which would queue behind it. An extension never \
-shortens or reopens a drain.\n\
-Refusals and how `--concurrency` counts pull-drain review: installed orbit-orchestrate skill \
-`references/orchestration-drain-control.md`.\n\nExamples:\n  \
-orbit run extend jrun-20260905-0546 --for 4h\n  orbit run extend jrun-20260905-0546 --for 2h \
---concurrency 5 --reason 'overnight backlog'"
+    after_help = "Lengthens a live drain in place. An extension never shortens or reopens a \
+                  drain.\n\n\
+                  Examples:\n  \
+                  orbit run extend jrun-20260905-0546 --for 4h\n  \
+                  orbit run extend jrun-20260905-0546 --for 2h --concurrency 5 \
+                  --reason 'overnight backlog'",
+    after_long_help = "Moves a live drain's deadline to the later of its current one and now \
+                       plus `--for`, keeping its run ID, completion authorization and in-flight \
+                       tasks. Extend a drain instead of starting another `orbit run auto`, \
+                       which would queue behind it. An extension never shortens or reopens a \
+                       drain.\n\n\
+                       Refusals and how `--concurrency` counts pull-drain review: installed \
+                       orbit-orchestrate skill `references/orchestration-drain-control.md`.\n\n\
+                       Examples:\n  \
+                       orbit run extend jrun-20260905-0546 --for 4h\n  \
+                       orbit run extend jrun-20260905-0546 --for 2h --concurrency 5 \
+                       --reason 'overnight backlog'"
 )]
 pub struct RunExtendArgs {
     /// Job run ID of the drain to extend

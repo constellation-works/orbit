@@ -17,14 +17,25 @@ use crate::parse::parse_since;
 
 #[derive(Args)]
 #[command(
-    after_help = "Operator-only; run it on the owner. Reads each selected settled claim's leaf \
-run record from its follower and keeps it as the claim's immutable `hydrated` evidence; \
-`orbit run settlements --no-reconcile` then reports it as run_evidence.\n\
-Outcomes, claim matching, paging and the JSON shape: installed Orbit skill \
-`references/setup/distributed-drain-owner-surface.md`.\n\
-Examples:\n  orbit run settlements-hydrate --follower-workspace orbit --limit 10\n  \
-orbit run settlements-hydrate --follower-workspace orbit --limit 10 --after <claim-id>\n  \
-orbit run settlements-hydrate --follower-workspace orbit --task <task-id> --recheck --json"
+    after_help = "Operator-only; run it on the owner. Keeps each selected settled claim's \
+                  leaf run as that claim's immutable `hydrated` evidence.\n\n\
+                  Examples:\n  \
+                  orbit run settlements-hydrate --follower-workspace orbit --limit 10\n  \
+                  orbit run settlements-hydrate --follower-workspace orbit --task <task-id> \
+                  --recheck --json",
+    after_long_help = "Operator-only; run it on the owner. Reads each selected settled claim's \
+                       leaf run record from its follower and keeps it as the claim's immutable \
+                       `hydrated` evidence. `orbit run settlements --no-reconcile` then reports \
+                       it as run_evidence. The result is immutable evidence; no claim, task \
+                       or run changes.\n\n\
+                       Outcomes, claim matching, paging and the JSON shape: installed Orbit \
+                       skill `references/setup/distributed-drain-owner-surface.md`.\n\n\
+                       Examples:\n  \
+                       orbit run settlements-hydrate --follower-workspace orbit --limit 10\n  \
+                       orbit run settlements-hydrate --follower-workspace orbit --limit 10 \
+                       --after <claim-id>\n  \
+                       orbit run settlements-hydrate --follower-workspace orbit --task <task-id> \
+                       --recheck --json"
 )]
 pub struct RunHydrateSettlementsArgs {
     /// The workspace on each follower where its leaves ran, by name or `ws_*`

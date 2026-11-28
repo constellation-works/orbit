@@ -21,7 +21,9 @@ Global options (see 'orbit --help' for descriptions):
   --json
   --header
 
-Without --confirm this only reports. Only applied rows of this workspace, and of workspace ids that are no longer registered, are selected; another registered workspace keeps its own window. An applied row is a commit decision already published to its task, so recovery never reads it again. Prepared and committed rows, which recovery replays, aborted rows, and each task's newest applied row are never deleted. The rows are selected by one read that holds no write lock, then deleted by key in batches of 1,000 rows, each its own write transaction. Freed pages stay in the store file; VACUUM it while Orbit is idle to return them to the filesystem.
+Without --confirm this only reports. Only applied rows of this workspace, and of workspace ids that are no longer registered, are selected; another registered workspace keeps its own window. An applied row is a commit decision already published to its task, so recovery never reads it again. Prepared and committed rows, which recovery replays, aborted rows, and each task's newest applied row are never deleted.
+
+How rows are selected and deleted, and how freed pages return to the filesystem: installed orbit-setup skill `references/maintenance-storage.md`.
 
 Examples:
   orbit gc journal
