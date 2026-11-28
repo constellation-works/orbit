@@ -8,14 +8,17 @@ still fails with a targeted error. A Git query that fails must stop
 generation and --check with a Git diagnostic and leave the generated
 files untouched. A different tracked path that contains a newline must
 not make that ignored notes directory, or an ignored overview, look
-visible. Exercises the public generator script rather than its shell
-internals.
+visible. Every Git child runs without the host's Git configuration, so an
+inherited global hook or ignore setting cannot change the result. Exercises
+the public generator script rather than its shell internals.
 """
+import os
 import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parent.parent
 GENERATOR = ROOT / "scripts/generate-doc-indexes.sh"
@@ -40,6 +43,23 @@ summary: Fixture index.
 """
 
 
+def git_env():
+    """Child environment that hides the host's Git configuration.
+
+    GIT_CONFIG_GLOBAL names the null file, so a global core.hooksPath, alias
+    or ignore setting is never read. GIT_CONFIG_NOSYSTEM drops the system
+    file, and config injected through GIT_CONFIG_* variables is removed.
+    Needs Git 2.32 or later.
+    """
+    env = {
+        name: value for name, value in os.environ.items()
+        if not name.startswith("GIT_CONFIG")
+    }
+    env["GIT_CONFIG_GLOBAL"] = os.devnull
+    env["GIT_CONFIG_NOSYSTEM"] = "1"
+    return env
+
+
 def make_repo(directory):
     """Create a minimal git repo shaped like the docs tree."""
     repo = Path(directory)
@@ -52,7 +72,7 @@ def make_repo(directory):
     (repo / "docs/INDEX.md").write_text(MINIMAL_INDEX, encoding="utf-8")
     subprocess.run(
         ["git", "init", "-q"], cwd=repo, check=True,
-        capture_output=True, text=True,
+        capture_output=True, text=True, env=git_env(),
     )
     return repo
 
@@ -60,7 +80,7 @@ def make_repo(directory):
 def run_generator(repo, *args):
     return subprocess.run(
         ["bash", str(GENERATOR), *args, str(repo)],
-        capture_output=True, text=True, check=False,
+        capture_output=True, text=True, check=False, env=git_env(),
     )
 
 
@@ -78,11 +98,11 @@ def stage_newline_decoy(repo, suffix):
     (path / relative.split("/")[-1]).write_text("decoy\n", encoding="utf-8")
     subprocess.run(
         ["git", "add", "--", relative],
-        cwd=repo, check=True, capture_output=True, text=True,
+        cwd=repo, check=True, capture_output=True, text=True, env=git_env(),
     )
     listed = subprocess.run(
         ["git", "ls-files", "-z"],
-        cwd=repo, check=True, capture_output=True,
+        cwd=repo, check=True, capture_output=True, env=git_env(),
     )
     records = [record for record in listed.stdout.split(b"\0") if record]
     encoded = relative.encode("utf-8")
@@ -97,13 +117,13 @@ def stage_newline_decoy(repo, suffix):
 def commit_all(repo):
     """Commit the fixture, so its files are tracked as in a real checkout."""
     subprocess.run(["git", "add", "-A"], cwd=repo, check=True,
-                   capture_output=True, text=True)
+                   capture_output=True, text=True, env=git_env())
     subprocess.run(
         ["git", "-c", "user.name=fixture",
          "-c", "user.email=fixture@example.invalid",
          "-c", "commit.gpgsign=false",
          "commit", "-q", "-m", "fixture"],
-        cwd=repo, check=True, capture_output=True, text=True,
+        cwd=repo, check=True, capture_output=True, text=True, env=git_env(),
     )
 
 
@@ -126,7 +146,7 @@ class GenerateDocIndexesFixture(unittest.TestCase):
             ignored = subprocess.run(
                 ["git", "check-ignore", "-q",
                  "docs/design/local-notes/notes.md"],
-                cwd=repo, check=False,
+                cwd=repo, check=False, env=git_env(),
             )
             self.assertEqual(
                 ignored.returncode, 0,
@@ -173,7 +193,7 @@ class GenerateDocIndexesFixture(unittest.TestCase):
             ignored = subprocess.run(
                 ["git", "check-ignore", "-q",
                  "docs/design/local-notes/notes.md"],
-                cwd=repo, check=False,
+                cwd=repo, check=False, env=git_env(),
             )
             self.assertEqual(
                 ignored.returncode, 0,
@@ -197,7 +217,7 @@ class GenerateDocIndexesFixture(unittest.TestCase):
             still_ignored = subprocess.run(
                 ["git", "check-ignore", "-q",
                  "docs/design/local-notes/notes.md"],
-                cwd=repo, check=False,
+                cwd=repo, check=False, env=git_env(),
             )
             self.assertEqual(still_ignored.returncode, 0)
 
@@ -236,11 +256,12 @@ class GenerateDocIndexesFixture(unittest.TestCase):
             subprocess.run(
                 ["git", "add", "--", "docs/design/visible/2_design.md"],
                 cwd=repo, check=True, capture_output=True, text=True,
+                env=git_env(),
             )
             ignored = subprocess.run(
                 ["git", "check-ignore", "-q",
                  "docs/design/visible/1_overview.md"],
-                cwd=repo, check=False,
+                cwd=repo, check=False, env=git_env(),
             )
             self.assertEqual(
                 ignored.returncode, 0,
@@ -261,7 +282,7 @@ class GenerateDocIndexesFixture(unittest.TestCase):
             still_ignored = subprocess.run(
                 ["git", "check-ignore", "-q",
                  "docs/design/visible/1_overview.md"],
-                cwd=repo, check=False,
+                cwd=repo, check=False, env=git_env(),
             )
             self.assertEqual(still_ignored.returncode, 0)
 
@@ -400,6 +421,45 @@ class GenerateDocIndexesFixture(unittest.TestCase):
             )
             board = (repo / "docs/design/FEATURES.md").read_text(encoding="utf-8")
             self.assertIn("Café Feature", board)
+
+    def test_inherited_hook_config_is_not_invoked(self):
+        scratch = ROOT / ".orbit/tmp"
+        scratch.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(
+            prefix="doc-indexes-hook-", dir=scratch
+        ) as directory:
+            host = Path(directory)
+            hooks = host / "hooks"
+            hooks.mkdir()
+            calls = host / "hook-calls.log"
+            hook = hooks / "pre-commit"
+            hook.write_text(
+                f"#!/bin/sh\necho invoked >> '{calls}'\nexit 1\n",
+                encoding="utf-8",
+            )
+            hook.chmod(0o755)
+            global_config = host / "gitconfig"
+            global_config.write_text(
+                f"[core]\n\thooksPath = {hooks}\n", encoding="utf-8"
+            )
+            repo = make_repo(host / "repo")
+            with mock.patch.dict(
+                os.environ, {"GIT_CONFIG_GLOBAL": str(global_config)}
+            ):
+                visible = subprocess.run(
+                    ["git", "config", "--get", "core.hooksPath"],
+                    cwd=repo, check=False, capture_output=True, text=True,
+                )
+                self.assertEqual(
+                    visible.stdout.strip(), str(hooks),
+                    "fixture must make the rejecting hook visible to Git",
+                )
+                commit_all(repo)
+                result = run_generator(repo)
+            self.assertEqual(
+                result.returncode, 0, result.stdout + result.stderr
+            )
+            self.assertFalse(calls.exists(), "inherited hook must not run")
 
 
 if __name__ == "__main__":
