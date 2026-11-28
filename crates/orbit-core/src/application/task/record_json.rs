@@ -18,7 +18,16 @@ impl OrbitRuntime {
     fn with_task_show_extras(
         &self,
         row: &TaskRow,
+        object: Map<String, Value>,
+    ) -> Result<Map<String, Value>, OrbitError> {
+        self.with_task_show_extras_with_pilot(row, object, false)
+    }
+
+    fn with_task_show_extras_with_pilot(
+        &self,
+        row: &TaskRow,
         mut object: Map<String, Value>,
+        observational: bool,
     ) -> Result<Map<String, Value>, OrbitError> {
         object.insert(
             "experiments".into(),
@@ -56,7 +65,11 @@ impl OrbitRuntime {
             .iter()
             .any(|entry| entry.event == orbit_types::task::DECISION_REQUESTED_EVENT)
         {
-            let open = self.open_decisions_json_in(&row.task, &row.history, &row.comments)?;
+            let open = if observational {
+                self.observe_open_decisions_json_in(&row.task, &row.history, &row.comments)?
+            } else {
+                self.open_decisions_json_in(&row.task, &row.history, &row.comments)?
+            };
             if open.as_array().is_some_and(|items| !items.is_empty()) {
                 object.insert("open_decisions".to_string(), open);
             }
@@ -89,7 +102,7 @@ impl OrbitRuntime {
         status_by_id: &BTreeMap<String, TaskStatus>,
     ) -> Result<Map<String, Value>, OrbitError> {
         let object = self.task_record_json_with_pilot(row, status_by_id, true)?;
-        self.with_task_show_extras(row, object)
+        self.with_task_show_extras_with_pilot(row, object, true)
     }
 
     /// The full task record with its pilot evidence read either coordinated

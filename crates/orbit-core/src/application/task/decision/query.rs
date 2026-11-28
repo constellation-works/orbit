@@ -103,6 +103,21 @@ impl OrbitRuntime {
         })
     }
 
+    /// Observational [`Self::task_decision_requests_in`]: resolves any
+    /// artifact-backed pilot receipt from the settled bundle without entering
+    /// the task-commit boundary.
+    pub(crate) fn observe_task_decision_requests_in(
+        &self,
+        task: &Task,
+        history: &[TaskHistoryEntry],
+        comments: &[TaskComment],
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Result<Vec<DecisionRequest>, OrbitError> {
+        self.task_decision_requests_with_audit(task, history, comments, now, None, &|receipt| {
+            self.observe_task_pilot_audit(&task.id, receipt)
+        })
+    }
+
     fn task_decision_requests_with_audit(
         &self,
         task: &Task,

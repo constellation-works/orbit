@@ -806,6 +806,138 @@ fn pilot_warnings_are_observational_in_task_displays() {
 }
 
 #[test]
+fn backlog_open_decisions_are_observational_in_task_detail() {
+    isolated(
+        "task_contracts::backlog_open_decisions_are_observational_in_task_detail",
+        || {
+            use orbit_core::test_support::fixture_engine::{RunLifecycle, TaskAutomationUpdate};
+            use orbit_types::task::{
+                DecisionBinding, DecisionGate, DecisionRequest, PilotAdmissionVerdict,
+            };
+
+            let fixture = Fixture::new();
+            let runtime = &fixture.runtime;
+            let duplicate = seed_backlog_task(runtime, "Existing duplicate target");
+            let backlog = seed_backlog_task(runtime, "Backlog task with pilot decision");
+            let operation_id = "b".repeat(64);
+            let audit = json!({"assessment": {"duplicate_of": duplicate.id}});
+            let content = serde_json::to_vec(&audit).unwrap();
+            let digest = orbit_common::security::release::sha256_hex(&content);
+            let path = "pilot/assessment.json";
+            runtime
+                .update_task_as_human(
+                    &backlog.id,
+                    TaskUpdateParams {
+                        comment: Some(format!(
+                            "operation_id={operation_id}\n{}",
+                            json!({"assessment_artifact": path, "assessment_sha256": digest}),
+                        )),
+                        upsert_artifacts: vec![TaskArtifact {
+                            path: path.into(),
+                            media_type: "application/json".into(),
+                            content,
+                            created_by: None,
+                        }],
+                        ..Default::default()
+                    },
+                    "task-pilot".into(),
+                )
+                .unwrap();
+            let decision = DecisionRequest::new(
+                backlog.id.clone(),
+                DecisionGate::PilotAdmission,
+                PilotAdmissionVerdict::decision_answers(),
+                DecisionBinding::PilotOperation { operation_id },
+                "task_pilot".into(),
+                chrono::Utc::now(),
+            );
+            let request_id = decision.id.clone();
+            orbit_core::test_support::EngineHost::new(runtime)
+                .apply_task_automation_update(
+                    &backlog.id,
+                    TaskAutomationUpdate {
+                        append_history: vec![decision.history_entry("task-pilot")],
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+
+            let server = fixture.server(true);
+            // Warm the riskiness model before holding the partition's commit lock.
+            assert_eq!(
+                request(&server, "/tasks?status=backlog").status(),
+                StatusCode::OK
+            );
+            let registry = fixture_store::maintenance::task_registry::TaskRegistryStore::open(
+                &fixture_store::maintenance::task_registry::task_registry_path(&fixture.global),
+            )
+            .unwrap();
+            let binding = registry.find_task_binding(&backlog.id).unwrap().unwrap();
+            let partition = binding.canonical_path.parent().unwrap();
+            let connection = rusqlite::Connection::open(fixture.global.join("orbit.db")).unwrap();
+            connection
+                .execute(
+                    "INSERT INTO task_commit_journal \
+                 (journal_id, workspace_id, task_id, state, intent_json, created_at) \
+                 VALUES ('backlog-open-decisions', ?1, ?2, 'prepared', '{}', ?3)",
+                    rusqlite::params![
+                        runtime.workspace_id().unwrap(),
+                        backlog.id,
+                        chrono::Utc::now().to_rfc3339()
+                    ],
+                )
+                .unwrap();
+            let client = reqwest::blocking::Client::builder()
+                .no_proxy()
+                .timeout(std::time::Duration::from_secs(2))
+                .build()
+                .unwrap();
+            orbit_common::fs::io::with_exclusive_file_lock::<_, orbit_common::OrbitError, _>(
+                &partition.join("task-commit"),
+                "HTTP backlog open_decisions observation",
+                || {
+                    let response = client
+                        .get(format!(
+                            "{}/api/tasks/{}?workspace=ws_http_fixture",
+                            server.origin, backlog.id
+                        ))
+                        .send()
+                        .unwrap_or_else(|error| {
+                            panic!(
+                                "GET /api/tasks/{} waited on the task writer: {error}",
+                                backlog.id
+                            )
+                        });
+                    assert_eq!(response.status(), StatusCode::OK);
+                    let detail = body_json(response);
+                    assert_eq!(detail["id"], backlog.id);
+                    assert_eq!(detail["resolvable_pilot_admission_hold"], true);
+                    assert_eq!(detail["open_decisions"][0]["id"], request_id, "{detail}");
+                    assert_eq!(
+                        detail["open_decisions"][0]["gate"], "pilot_admission",
+                        "{detail}"
+                    );
+                    Ok(())
+                },
+            )
+            .unwrap();
+            let state = || {
+                connection
+                    .query_row(
+                        "SELECT state FROM task_commit_journal WHERE journal_id = 'backlog-open-decisions'",
+                        [],
+                        |row| row.get::<_, String>(0),
+                    )
+                    .unwrap()
+            };
+            assert_eq!(state(), "prepared");
+            runtime.get_task(&backlog.id).unwrap();
+            assert_eq!(state(), "aborted");
+        },
+    );
+}
+
+#[test]
 fn delivery_attention_survives_unrelated_run_history() {
     isolated(
         "task_contracts::delivery_attention_survives_unrelated_run_history",
