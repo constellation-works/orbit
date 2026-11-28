@@ -1,7 +1,7 @@
 //! Owner, routed-owner and launcher adapters for the pull drain
 //! [ORB-12616, ORB-13625].
 //!
-//! [`PullDrain`](crate::application::pull_drain::drain::PullDrain) was proven
+//! `PullDrain` was proven
 //! against injected doubles when the foundation landed; these are the
 //! production implementations of its seams, which the drain obtains through
 //! [`PullTransportPort`] [ORB-22004].
@@ -36,7 +36,7 @@ use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
 use crate::application::job::pipeline::WorkerLaunchError;
-use crate::application::pull_drain::drain::{
+use crate::unit::pull_drain::{
     PullLauncher, PullPeer, PullTransportPort, leaf_attribution, recorded_base_no_longer_red,
 };
 

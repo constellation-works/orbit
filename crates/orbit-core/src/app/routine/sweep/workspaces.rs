@@ -101,7 +101,7 @@ pub(super) fn each_workspace_in_tick<'a, T>(
 /// Deliver one checkout's recorded pull settlements, logging what is still
 /// pending; the next tick retries it.
 pub(super) fn deliver_recorded_pull_settlements(workspace: &Workspace, runtime: &OrbitRuntime) {
-    for entry in runtime.deliver_recorded_pull_settlements() {
+    for entry in crate::unit::pull_drain::deliver_recorded_pull_settlements(runtime) {
         match entry.outcome {
             PullSettlementOutcome::Settled | PullSettlementOutcome::ClosedObsolete => {
                 tracing::info!(

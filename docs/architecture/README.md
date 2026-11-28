@@ -27,7 +27,7 @@ unit coverage, path existence, first-line `//!` doc comments, and one destinatio
    promote an eligible task from `proposed` to `backlog`.
 3. **Dispatch.** `crates/orbit-core/src/unit/admission/` decides which backlog tasks automatic
    dispatch may admit; `crates/orbit-core/src/unit/workspace_auto/` runs the auto-drain
-   (classify, approval, window, readiness); `crates/orbit-core/src/application/pull_drain/` runs a
+   (classify, approval, window, readiness); `crates/orbit-core/src/unit/pull_drain/` runs a
    follower's pull drain. Jobs are validated and reserved by
    `crates/orbit-core/src/application/job/pipeline_actions/`.
 4. **Activity-job runs.** `orbit-engine` (`crates/orbit-engine/src/activity_job/dispatcher.rs`)
@@ -64,7 +64,7 @@ pass in `orbit-core`'s `crates/orbit-core/src/app/routine/`.
   (`LexicalIndex`); `orbit-registry` persists machine identity and the
   workspace catalog as files (`hosts.toml`) with no shared database.
 - **Federation.** One owner host holds the authoritative store. Follower hosts
-  pull work: `crates/orbit-core/src/application/pull_drain/` refills and settles claims over the
+  pull work: `crates/orbit-core/src/unit/pull_drain/` refills and settles claims over the
   routed owner peer (`PullTransportPort`), with owner-only landing — followers
   never merge (see `docs/design/distributed-drain/` and
   `docs/runbooks/distributed-drain.md`). The MCP federated mux

@@ -6,8 +6,9 @@
 //! the pull admissions a run carries. `distributed` and `pull_drain` own
 //! those rules, and both also drive job runs, so a direct call from here
 //! would close a cycle. These ports are the way in: `distributed` and
-//! `pull_drain` implement them on [`OrbitRuntime`](crate::OrbitRuntime), so
-//! composing the runtime binds them.
+//! `pull_drain` provide their implementations. The former implements
+//! `JobDrainPort` on [`OrbitRuntime`](crate::OrbitRuntime), and
+//! `app::port` binds the latter's runtime-backed adapter.
 //!
 //! [ORB-17939] `review`'s handoff console and `automation`'s pilot
 //! reservations read the owner's commit boundary, and the console the
@@ -100,7 +101,7 @@ pub(in crate::application) trait JobDrainPort {
 }
 
 /// Pull settlement job run surfaces carry, implemented by `pull_drain`.
-pub(in crate::application) trait JobPullSettlementPort {
+pub(crate) trait JobPullSettlementPort {
     /// After an operator's reconciling run read, settle with the owner every
     /// admission an interrupted drain or leaf left that nothing else will
     /// carry.

@@ -11,6 +11,7 @@ use super::gate::PassLedger;
 use super::input::RefillInput;
 use super::request::RequestTrail;
 use crate::OrbitRuntime;
+use crate::unit::pull_drain::settle::reconcile_orphaned_claimed_leaves;
 
 /// What one pass works against, fixed when it starts: the runtime, the
 /// drain's inputs, the owner it talks to and the one clock reading its
@@ -34,8 +35,7 @@ impl Pass<'_, '_> {
         // records and delivers its failure rather than waiting on it. Cancellation
         // is read again afterwards: an operator can record it while reconciliation
         // runs, and the value from before that work must not admit new work.
-        self.runtime
-            .reconcile_orphaned_claimed_leaves(&self.refill.destination);
+        reconcile_orphaned_claimed_leaves(self.runtime, &self.refill.destination);
         let pass_state = self.read_state()?;
         if let Some(cancel) = pass_state
             .as_ref()

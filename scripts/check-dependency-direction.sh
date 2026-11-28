@@ -341,7 +341,7 @@ done < "$dependency_listing"
 # `ReviewAdmissionHook`. Grouped `use crate::application::{…}` trees count too.
 app_src="$repo_root/crates/orbit-core/src/application"
 app_modules='task|task_bundle|automation|job|review|distributed|admission|workspace_auto|backlog_forecast|pull_drain|sweep_filing'
-contracts_higher="${app_modules}"
+contracts_higher="${app_modules/|pull_drain/}"
 
 # Print every `super::` path or use-tree in production code under application module
 # `$2` that climbs out of it to `application`, or past it to the crate root and back
@@ -1706,12 +1706,12 @@ fi
 # owns (`TaskJobPort`, `TaskReviewPort`, `TaskDistributedPort`,
 # `TaskSweepFilingPort`, `TaskWorkspaceAutoPort`), which those modules
 # implement on `OrbitRuntime` or, for `unit::sweep_filing` and
-# `unit::workspace_auto`, on their `TaskPort` bound in `app::port`. A path, a
-# grouped tree, a `super::` chain that
-# climbs out of `task` into one of them, or a call to an inherent method they
-# define is a reintroduced edge [ORB-17972], [ORB-22003]. The names are
-# derived from their `impl OrbitRuntime` blocks, so port methods use distinct
-# names. `tag_instructions` sits outside the module order but above `task`
+# `unit::workspace_auto`, on their `TaskPort` bound in `app::port`. Pull drain
+# now sits in `unit`; the higher-unit path guard below checks that edge. A
+# path, a grouped tree, a `super::` chain that climbs out of `task` into one of
+# them, or a call to an inherent method they define is a reintroduced edge
+# [ORB-17972], [ORB-22003]. The names are derived from their
+# `impl OrbitRuntime` blocks, so port methods use distinct names. `tag_instructions` sits outside the module order but above `task`
 # [ORB-22289]: task reads commit-pinned files through its own
 # `task::base_revision`, never through it. `unit::backlog_forecast` is
 # above `unit::workspace_auto` and task has no port to it [ORB-22287]; it is
@@ -1732,7 +1732,7 @@ fi
 # decision rules, task history, tasks and blobs through `task::base_revision`.
 # Task reaches it only through
 # `TaskCorpusPort`, implemented on `app::agent::TaskPort` and bound in `app::port`.
-task_upper_modules='job|review|distributed|pull_drain|tag_instructions'
+task_upper_modules='job|review|distributed|tag_instructions'
 # Same-named methods on other types are not upper inherent methods; only
 # these exact lines are allowed: store reads through `stores().jobs()` and
 # `stores().tasks()`.
@@ -1783,12 +1783,12 @@ fi
 
 # [ORB-17937] `job` reaches the distributed drain and pull settlement only
 # through the ports it owns (`JobDrainPort`, `JobPullSettlementPort`), which
-# `distributed` and `pull_drain` implement on `OrbitRuntime`; the shapes they
-# share (`DrainClaimedLeaf`, `HostProviderHold`) are contracts. A path, a
-# grouped tree, a `super::` chain out of `job` into either, or a call to an
-# inherent method either defines (derived from their `impl OrbitRuntime`
-# blocks [ORB-22003]) is a reintroduced edge.
-job_drain_modules='distributed|pull_drain'
+# `distributed` implements on `OrbitRuntime` and `unit::pull_drain` implements
+# on an adapter bound in `app::port`. The higher-unit path guard below checks
+# the pull settlement edge. A path into `distributed` or a call to one of its
+# inherent methods (derived from its `impl OrbitRuntime` blocks [ORB-22003])
+# is a reintroduced edge.
+job_drain_modules='distributed'
 if dependency_matches -n "crate::application::(${job_drain_modules})\\b" \
   "$app_src/job" -g '*.rs' -g '!**/tests/**' ||
   dependency_matches -n -U "crate::application::\\{[^}]*\\b(${job_drain_modules})\\b" \
@@ -1827,10 +1827,11 @@ if dependency_matches -n "crate::application::(${job_upper_modules})\\b" \
 fi
 
 # [ORB-17939] Above `job`, each module names only the modules below it in
-# `automation < review < distributed < pull_drain < unit::admission <
-# unit::workspace_auto < unit::backlog_forecast < unit::sweep_filing`. The cut edges go through ports the lower
-# module owns: `automation::AutomationReviewPort` (before-PR coverage and the
-# reviewer pools, implemented by `review`), `review::ReviewDistributedPort`
+# `automation < review < distributed < unit::pull_drain < unit::admission <
+# unit::workspace_auto < unit::backlog_forecast < unit::sweep_filing`. The cut
+# edges go through ports the lower module owns: `automation::AutomationReviewPort`
+# (before-PR coverage and the reviewer pools, implemented by `review`),
+# `review::ReviewDistributedPort`
 # (the owner's ship contract and machine) and `distributed::
 # DistributedAdmissionPort` (the executor census); automation's pilot
 # reservations and review's handoff console take the owner's commit boundary
@@ -1857,21 +1858,32 @@ guard_upper_layer() {
     fail=1
   fi
 }
-guard_upper_layer automation 'review|distributed|pull_drain' \
+guard_upper_layer automation 'review|distributed' \
   'configured_pool_members|review_pool_by_os|select_review_crew|review_crew_candidates|admission_boundary'
-guard_upper_layer review 'distributed|pull_drain' \
+guard_upper_layer review 'distributed' \
   'admission_boundary|owner_completion_authority|owner_ship_contract|distributed_owner_machine_id'
-guard_upper_layer distributed 'pull_drain' ''
+
+# The moved pull drain still reaches the adapter through PullTransportPort and
+# takes its runtime from its caller.
+if ! super_chains_into "$core_src" unit/pull_drain 'crate::adapter|crate::bootstrap|crate::composition' named-path ||
+  ! inherent_calls_into "$core_src" unit/pull_drain 'adapter|bootstrap|composition' '' ''; then
+  echo "orbit-core unit::pull_drain must not name adapter, bootstrap or composition or call their inherent OrbitRuntime methods"
+  fail=1
+fi
 
 # Only the lower-owned ports reach the moved units from application code.
-# In particular, the admission adapters for JobAdmissionPort and
-# DistributedAdmissionPort are bound in app::port.
-for lower_module in contracts task job automation review distributed pull_drain; do
-  if ! super_chains_into "$app_src" "$lower_module" 'crate::unit::admission|crate::unit::workspace_auto|crate::unit::backlog_forecast|crate::unit::sweep_filing' named-path; then
+# The pull settlement and admission adapters are bound in app::port.
+for lower_module in contracts task job automation review distributed; do
+  if ! super_chains_into "$app_src" "$lower_module" 'crate::unit::pull_drain|crate::unit::admission|crate::unit::workspace_auto|crate::unit::backlog_forecast|crate::unit::sweep_filing' named-path; then
     echo "orbit-core ${lower_module} must reach higher units through ports the lower module owns"
     fail=1
   fi
 done
+
+if ! super_chains_into "$core_src" unit/pull_drain 'crate::unit::admission|crate::unit::workspace_auto|crate::unit::backlog_forecast' named-path; then
+  echo "orbit-core unit::pull_drain must reach higher units through ports the lower module owns"
+  fail=1
+fi
 
 if ! super_chains_into "$core_src" unit/admission 'crate::unit::workspace_auto|crate::unit::backlog_forecast' named-path; then
   echo "orbit-core unit::admission must not name unit::workspace_auto or unit::backlog_forecast"
@@ -1884,8 +1896,8 @@ if ! super_chains_into "$core_src" unit/workspace_auto 'crate::unit::backlog_for
   fail=1
 fi
 
-# The three lower units must not reach sweep_filing.
-for moved_lower in unit/admission unit/workspace_auto unit/backlog_forecast; do
+# Lower units must not reach sweep_filing.
+for moved_lower in unit/pull_drain unit/admission unit/workspace_auto unit/backlog_forecast; do
   if ! super_chains_into "$core_src" "$moved_lower" 'crate::unit::sweep_filing' named-path; then
     echo "orbit-core ${moved_lower/\//::} must not name unit::sweep_filing"
     fail=1

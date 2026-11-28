@@ -2,6 +2,7 @@
 //! the owner receives it. Late supervisor observations amend only the run.
 
 use super::*;
+use orbit_core::test_support::deliver_recorded_pull_settlements;
 use orbit_core::test_support::{
     WorkerReapPhase, install_substitute_pipeline_worker, install_worker_reap_hook,
     pipeline_worker_observer_completed,
@@ -149,7 +150,7 @@ fn reconciliation_carries_observed_exit_and_freezes_unavailable_late_exit() {
         let owner_before = pair.owner_task(&pair.claimed_task(&leaf));
         for _ in 0..2 {
             pair.pass_over(&drain, json!({"window_expired": true}));
-            pair.follower.deliver_recorded_pull_settlements();
+            deliver_recorded_pull_settlements(&pair.follower);
         }
         assert_eq!(pair.admission(&leaf).settlement, Some(recorded));
         assert_eq!(owner_reason(&pair, &leaf), reason);

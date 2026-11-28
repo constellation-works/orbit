@@ -12,7 +12,6 @@ use orbit_store::contract::{
 };
 use orbit_types::workflow::PipelineState;
 
-use super::super::drain::{RefillPass, admits_request};
 use super::crews::crew_window;
 use super::gate::{AdmissionGate, PassLedger};
 use super::owner::{ProbeVerdict, captured_before_pr, probe};
@@ -20,7 +19,7 @@ use super::pass::Pass;
 use super::record::protocol_skew_failure;
 use crate::application::contracts::PULL_DRAIN_JOB;
 use crate::application::distributed::{PullCrewWindow, PullWorkFit, owner_binary_version};
-use crate::application::pull_drain::drain::BreakerGate;
+use crate::unit::pull_drain::drain::{BreakerGate, RefillPass, admits_request};
 
 /// Each request's forecast, the receipt the owner answered it with, and
 /// whether it was sent.

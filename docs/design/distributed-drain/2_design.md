@@ -573,7 +573,7 @@ still needs authority). Only `landing_branch` (owner-resolved ship configuration
 the submission. Acceptance and landing resolve revisions through one shared rule.
 
 **Follower execution** ([ORB-13625]). `RoutedPullPeer`
-(`adapter/engine_host/actions/pull/adapters.rs`, under the drain in `application/pull_drain/`) speaks the protocol to the owner's registered
+(`adapter/engine_host/actions/pull/adapters.rs`, under the drain in `unit/pull_drain/`) speaks the protocol to the owner's registered
 tools over a composition-supplied `orbit_tools::DrainOwnerTransport` — in production the
 federated mux over the host's registered hosts (`~/.orbit/hosts.toml`), opened as `agent` (`orbit-cmd`
 `worker_coordination.rs`). The owner serves the same code the owner-local adapter calls:
@@ -739,7 +739,7 @@ owns delivery:
   finalized, retries with backoff (15s, 60s, 240s) while the owner is unreachable and no live
   drain carries that owner. The worker is an
   unsandboxed Orbit process with the host's federated route; only the agent subprocess is
-  sandboxed. Everything else is a settle-only pass (`OrbitRuntime::settle_pending_pulls`,
+  sandboxed. Everything else is a settle-only pass (`unit::pull_drain::settle::settle_pending_pulls`,
   `PullDrain::carry_settlement`) run by `orbit run cancel` / the dashboard's cancel (for a pull
   drain or a claimed leaf, including one already terminal) and by `orbit run auto --stop` / the
   dashboard's stop. A pass covers every owner and never requests work or launches a leaf. A live
@@ -748,7 +748,7 @@ owns delivery:
   worker and every drain are gone, the OS clock sweep retries: each tick also opens the host's
   replica checkouts (they fire only host-local worktree-GC and store-GC routines; owner-work
   schedules stay inert) and runs a delivery-only pass
-  (`OrbitRuntime::deliver_recorded_pull_settlements`). That pass delivers what is recorded and
+  (`unit::pull_drain::deliver_recorded_pull_settlements`). That pass delivers what is recorded and
   records a terminal leaf's settlement, but never ends unlaunched work.
   Whether it is the settle-only pass or the live drain's reconciliation, a pass costs at most one
   failed delivery per unreachable owner: after the first transport error to an owner it stops

@@ -32,7 +32,7 @@ SCAN_DIRECTORIES = (
     "crates/orbit-core/src/app/auto_task",
     f"{CORE_APPLICATION}/review",
     f"{CORE_APPLICATION}/distributed",
-    f"{CORE_APPLICATION}/pull_drain",
+    "crates/orbit-core/src/unit/pull_drain",
     "crates/orbit-core/src/unit/admission",
     "crates/orbit-core/src/unit/workspace_auto",
     "crates/orbit-core/src/unit/backlog_forecast",

@@ -7,6 +7,7 @@ mod task_artifacts;
 
 use super::claimed_review::ToOwner;
 use super::*;
+use orbit_core::test_support::{deliver_recorded_pull_settlements, pending_pull_settlements};
 use orbit_engine::{HostEnvironment, ReviewGate, RunLifecycle};
 
 pub(crate) use support::*;
@@ -1704,7 +1705,7 @@ fn a_known_red_handoff_the_owners_base_run_contradicts_ends_the_claim() {
         let leaf_runs = red.runs();
         red.runs_as(base);
 
-        pair.follower.deliver_recorded_pull_settlements();
+        deliver_recorded_pull_settlements(&pair.follower);
         assert_eq!(
             pair.wire.calls("orbit.drain.claim.settle").len(),
             1,
@@ -1738,12 +1739,12 @@ fn a_known_red_handoff_the_owners_base_run_contradicts_ends_the_claim() {
                     && refused.reason.contains("lacked a tool"),
                 "{case}: {refused:?}"
             );
-            assert_eq!(pair.follower.pending_pull_settlements().unwrap().count, 1);
+            assert_eq!(pending_pull_settlements(&pair.follower).unwrap().count, 1);
 
             // The follower delivers the same settlement again once its
             // backoff elapses, and the owner answers the same.
             pair.elapse_settlement_backoff(&fixture.leaf);
-            pair.follower.deliver_recorded_pull_settlements();
+            deliver_recorded_pull_settlements(&pair.follower);
             assert_eq!(
                 pair.wire.calls("orbit.drain.claim.settle").len(),
                 2,
@@ -1785,7 +1786,7 @@ fn a_known_red_handoff_the_owners_base_run_contradicts_ends_the_claim() {
             "{case}: {refusal}"
         );
         assert_eq!(
-            pair.follower.pending_pull_settlements().unwrap().count,
+            pending_pull_settlements(&pair.follower).unwrap().count,
             0,
             "{case}: the slot is free"
         );

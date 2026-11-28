@@ -256,7 +256,7 @@ impl OrbitRuntime {
         )?;
         // A claimed leaf's settlement that did not reach its owner is retried
         // here, after the run is final, rather than in terminalization.
-        self.retry_leaf_settlement(&run.run_id);
+        crate::app::port::JobPullSettlement(self).retry_leaf_settlement(&run.run_id);
         outcome.map(|_| ())
     }
 

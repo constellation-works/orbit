@@ -187,7 +187,7 @@ impl OrbitRuntime {
         // worker delivers it — no longer only the drain that admitted it.
         // Not gated on `Finalized`: recording and delivery are idempotent,
         // and a replay retries a delivery an earlier attempt lost.
-        JobPullSettlementPort::settle_terminalized_leaf(self, run_id, diagnostic);
+        crate::app::port::JobPullSettlement(self).settle_terminalized_leaf(run_id, diagnostic);
         // [ORB-13890] A run never ends holding a review attempt open.
         // Idempotent, so not gated on `Finalized` either.
         ReviewAdmissionHook::release_run_review_attempts(self, run_id, finished_at);

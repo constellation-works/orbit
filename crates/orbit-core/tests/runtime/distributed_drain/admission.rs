@@ -6,6 +6,7 @@ use orbit_core::application::distributed::{PullCrewWindow, RESOURCE_THROTTLED};
 use orbit_core::application::task::TaskUpdateParams;
 use orbit_core::bootstrap::init::{InitOptions, init_workspace_at_root};
 use orbit_core::runtime::JobRuns;
+use orbit_core::test_support::pending_pull_settlements;
 use orbit_engine::HostEnvironment;
 use orbit_engine::{Dispatch, Recovery, RunLifecycle};
 use orbit_store::contract::DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA;
@@ -1897,7 +1898,7 @@ fn a_throttled_pull_drain_keeps_settling_and_pulls_again_below_resume() {
     pair.wire.lose_next_reply("orbit.drain.claim.settle");
     let owed = pair.pass(&drain);
     assert!(error_of(&owed).contains("dropped"), "{owed}");
-    assert_eq!(pair.follower.pending_pull_settlements().unwrap().count, 1);
+    assert_eq!(pending_pull_settlements(&pair.follower).unwrap().count, 1);
 
     probe.sustain_memory(&pair.follower, 96.0);
     let held = pair.pass(&drain);
@@ -1905,7 +1906,7 @@ fn a_throttled_pull_drain_keeps_settling_and_pulls_again_below_resume() {
     assert_eq!(held["sleep_seconds"], 30, "a throttled drain polls: {held}");
     assert_eq!(pulls(&pair), 1, "no new claim");
     assert_eq!(
-        pair.follower.pending_pull_settlements().unwrap().count,
+        pending_pull_settlements(&pair.follower).unwrap().count,
         0,
         "the owed settlement is delivered while throttled"
     );

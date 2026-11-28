@@ -170,6 +170,9 @@ pub mod test_support {
     };
     pub use crate::unit::landing::with_landing_retry_reservation_hook;
     pub use crate::unit::managed_asset::with_auto_task_manifest_read_hook;
+    pub use crate::unit::pull_drain::{
+        deliver_recorded_pull_settlements, pending_pull_settlements, settle_orphaned_pulls,
+    };
     /// Fail the next drain pass's release of its unadmitted gap-fit reservations.
     pub use crate::unit::workspace_auto::with_reservation_release_failure;
     /// The engine crate, for a fixture that drives an engine mechanism directly.

@@ -210,7 +210,7 @@
     "reason": "Isolated --exact fixture waited with .output(). Baselined until it moves to run_child_test."
   },
   {
-    "path": "crates/orbit-core/src/application/pull_drain/tests/drain.rs",
+    "path": "crates/orbit-core/src/unit/pull_drain/tests/drain.rs",
     "function": "isolated_pull_test",
     "call": ".output()",
     "ordinal": 0,

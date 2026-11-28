@@ -6,6 +6,7 @@
 
 use super::*;
 use orbit_core::application::job::JobRunListParams;
+use orbit_core::test_support::settle_orphaned_pulls;
 
 /// Old enough that reconciliation's startup grace no longer shields it.
 fn long_ago() -> chrono::DateTime<Utc> {
@@ -41,7 +42,7 @@ impl Pair {
         self.follower
             .list_job_runs(JobRunListParams::default())
             .expect("reconciling history");
-        self.follower.settle_orphaned_pulls()
+        settle_orphaned_pulls(&self.follower)
     }
 }
 

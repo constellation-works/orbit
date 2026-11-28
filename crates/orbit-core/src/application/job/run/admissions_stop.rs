@@ -194,7 +194,8 @@ impl OrbitRuntime {
             return Ok(DrainAdmissionsStopResult {
                 outcome: DrainAdmissionsStopOutcome::Idle,
                 coordinators: Vec::new(),
-                pull_settlements: self.settle_workspace_pulls(),
+                pull_settlements: crate::app::port::JobPullSettlement(self)
+                    .settle_workspace_pulls(),
                 replica_owner_machine_id: self.role().replica_owner().map(str::to_owned),
             });
         }
@@ -261,7 +262,7 @@ impl OrbitRuntime {
         Ok(DrainAdmissionsStopResult {
             outcome,
             coordinators: changes,
-            pull_settlements: self.settle_workspace_pulls(),
+            pull_settlements: crate::app::port::JobPullSettlement(self).settle_workspace_pulls(),
             replica_owner_machine_id: self.role().replica_owner().map(str::to_owned),
         })
     }
