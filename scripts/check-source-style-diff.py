@@ -16,8 +16,19 @@ untouched file reports the same findings on both sides and cancels out.
 The findings are compared by identity: the file (followed across a rename), the
 rule, the message and the text of the line it names. The first findings the merge
 base holds for an identity are recorded debt, and each further finding in this
-checkout is new. A file whose leading comment says @generated is exempt on both
-sides, which the checker enforces.
+checkout is new. Two moves lose that identity, so a finding the first pass calls
+new gets a second look against the base findings no head finding matched:
+
+- a source directory the change moved to a new parent keeps its R1 finding when its
+  own name is unchanged; the move is read from the file renames beneath it;
+- an R1 finding on a `mod` declaration matches a base finding on the same declaration
+  text in any other file, which covers declarations moved into a `mod.rs` that the
+  base already held.
+
+Each base finding is spent once, so a finding with no base counterpart, an edited
+declaration, a duplicate of a moved finding or a new name that breaks R1 stays new.
+A file whose leading comment says @generated is exempt on both sides, which the
+checker enforces.
 
 The base is CI_TEST_BASE when set, else origin/agent-main, then agent-main. As in
 check-rust-source-order.py, the compared commit is `git merge-base HEAD <base>`.
@@ -125,6 +136,30 @@ def renamed_from(fork):
     return mapping
 
 
+def moved_directories(mapping):
+    """Maps each directory a rename carried to a new parent to its merge-base path.
+
+    A renamed file `old` -> `new` moves the directory `new[:k]` from `old[:-rest]` when
+    the rest of the path is the same on both sides and the directory keeps its own
+    name. A directory that renames report two different origins is left out.
+    """
+    found = {}
+    ambiguous = set()
+    for new, old in mapping.items():
+        new_parts, old_parts = new.split(os.sep), old.split(os.sep)
+        for kept in range(1, len(new_parts)):
+            rest = new_parts[kept:]
+            if len(rest) >= len(old_parts) or old_parts[len(old_parts) - len(rest) :] != rest:
+                continue
+            origin = old_parts[: len(old_parts) - len(rest)]
+            if origin[-1] != new_parts[kept - 1]:
+                continue
+            target = os.sep.join(new_parts[:kept])
+            if found.setdefault(target, os.sep.join(origin)) != os.sep.join(origin):
+                ambiguous.add(target)
+    return {target: origin for target, origin in found.items() if target not in ambiguous}
+
+
 def generated_at(fork):
     """The merge base's Rust paths whose text contains @generated.
 
@@ -210,9 +245,17 @@ def findings_in(tree):
     return found
 
 
-def identify(tree, findings, mapping=None):
-    """(identity, path, row) for each finding, the identity using the merge-base path."""
+def is_module_finding(rule, message):
+    return rule == "R1" and message.startswith("module `")
+
+
+def identify(tree, findings, mapping=None, moved=None):
+    """(identity, path, row, other) for each finding, the identity using the merge-base path.
+
+    `other` is the identity a moved finding would have held at the merge base, or None.
+    """
     mapping = mapping or {}
+    moved = moved or {}
     cache = {}
     identified = []
     for path, row, rule, message in findings:
@@ -229,19 +272,38 @@ def identify(tree, findings, mapping=None):
         # The names mode reports `./src/x.rs` for a root crate; git reports `src/x.rs`.
         identity_path = os.path.normpath(path)
         base_path = mapping.get(identity_path, identity_path)
-        identified.append(((base_path, rule, message, text), path, row))
+        other = None
+        if rule == "R1" and not row and path.endswith("/") and identity_path in moved:
+            other = (moved[identity_path], rule, message, text)
+        identified.append(((base_path, rule, message, text), path, row, other))
     return identified
 
 
 def new_findings(base, head):
     """The head findings beyond the base's count for their identity."""
-    recorded = Counter(identity for identity, _, _ in base)
+    recorded = Counter(identity for identity, *_ in base)
     seen = Counter()
-    fresh = []
-    for identity, path, row in sorted(head, key=lambda item: (item[1], item[2])):
+    unmatched = []
+    for identity, path, row, other in sorted(head, key=lambda item: (item[1], item[2])):
         seen[identity] += 1
         if seen[identity] > recorded[identity]:
-            fresh.append((path, row, identity[1], identity[2]))
+            unmatched.append((identity, path, row, other))
+    # The base findings no head finding claimed: a moved finding may claim one of them.
+    spare = Counter({identity: recorded[identity] - seen[identity] for identity in recorded})
+    fresh = []
+    for identity, path, row, other in unmatched:
+        _, rule, message, text = identity
+        if other is not None and spare[other] > 0:
+            spare[other] -= 1
+            continue
+        if is_module_finding(rule, message):
+            twin = next(
+                (key for key, left in spare.items() if left > 0 and key[1:] == identity[1:]), None
+            )
+            if twin is not None:
+                spare[twin] -= 1
+                continue
+        fresh.append((path, row, rule, message))
     return fresh
 
 
@@ -265,7 +327,7 @@ def main():
             head_manifests,
             {**generated, **{path: (ROOT / path).read_bytes() for path in changed_head}},
         ) as tree:
-            head = identify(tree, findings_in(tree), mapping)
+            head = identify(tree, findings_in(tree), mapping, moved_directories(mapping))
         changed_base_text = {
             path: git("cat-file", "blob", base_blobs[path], text=False) for path in changed_base
         }
