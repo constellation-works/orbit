@@ -2,6 +2,8 @@
 
 mod exclusion;
 mod repilot;
+
+mod required_existing;
 mod run;
 
 #[cfg(test)]

@@ -864,7 +864,9 @@ fn newer_creation_grant_reaches_partition_and_ungranted_missing_path_stays_gap()
 
 /// A bounded migration: verified existing sources the change deletes or edits
 /// plus exact granted destinations. Retaining the grants is additive to the
-/// pilot's own selection of the existing lock footprint, not a substitute.
+/// pilot's own selection of the existing lock footprint, and when preparation
+/// explicitly establishes required existing changes, omitting one refuses the
+/// assessment with an actionable error while read-only omissions still pass.
 fn migration_footprint_keeps_existing_targets_beside_granted_creations() {
     let workspace = Workspace::new();
     let old_scope = "file:docs/old/1_scope.md";
@@ -873,26 +875,116 @@ fn migration_footprint_keeps_existing_targets_beside_granted_creations() {
     workspace.commit("docs/old/1_scope.md", "# scope\n");
     workspace.commit("docs/old/2_design.md", "# design\n");
     workspace.commit("docs/reference.md", "# reference\n");
-    let task = workspace.scoped_task(
-        "migration",
-        &[
-            old_scope, old_design, read_only, NEW_MODULE, NEW_TEST, NEW_DIR,
-        ],
-        true,
-    );
+    let task = workspace
+        .runtime
+        .add_task_screened(
+            TaskAddParams {
+                title: "migration".into(),
+                description: format!(
+                    "Migrate the old scope: delete {old_scope} and edit {old_design}. \
+                     Consult {read_only} as read-only reference."
+                ),
+                acceptance_criteria: vec!["Selectors identify both sets.".into()],
+                plan: "Inspect docs/old and docs/reference.md.".into(),
+                status: Some(TaskStatus::Proposed),
+                context_files: owned(&[
+                    old_scope, old_design, read_only, NEW_MODULE, NEW_TEST, NEW_DIR,
+                ]),
+                ..Default::default()
+            },
+            &TaskWriteScreen::unbound(true),
+            None,
+            None,
+        )
+        .unwrap()
+        .task;
     let creations = owned(&[NEW_MODULE, NEW_TEST, NEW_DIR]);
+    let required_existing = sorted(owned(&[old_scope, old_design]));
     let prepared = workspace.prepare(&[&task.id]);
     assert_eq!(
         prepared["partitions"][0]["context_creation_selectors"][&task.id],
         json!(sorted(creations.clone())),
         "{prepared}"
     );
+    assert_eq!(
+        prepared["tasks"][0]["required_existing_selectors"],
+        json!(required_existing),
+        "{prepared}"
+    );
+    assert_eq!(
+        prepared["partitions"][0]["required_existing_selectors"][&task.id],
+        json!(required_existing),
+        "{prepared}"
+    );
 
-    // The pilot selects both the existing changes and the granted targets,
-    // omitting only the read-only reference: the stored footprint holds both
-    // sets and the deliberate omission stands.
-    let applied = workspace.apply_one(
+    // Omitting all required existing targets (creations-only) is refused with
+    // an actionable reason, leaves the stored task untouched, and preserves
+    // both sets on the repair partition.
+    let creations_only = workspace.apply_one(&prepared, &task.context_files, &[NEW_MODULE]);
+    assert_eq!(
+        outcome(&creations_only)["outcome"],
+        "invalid",
+        "{creations_only}"
+    );
+    assert_eq!(creations_only["repair_count"], 1, "{creations_only}");
+    let error = outcome(&creations_only)["error"].as_str().unwrap();
+    assert!(
+        error.contains(old_scope) && error.contains(old_design),
+        "refusal must name every omitted required existing target: {error}"
+    );
+    assert_eq!(
+        creations_only["repair_partitions"][0]["required_existing_selectors"][&task.id],
+        json!(required_existing),
+        "{creations_only}"
+    );
+    assert_eq!(
+        creations_only["repair_partitions"][0]["context_creation_selectors"][&task.id],
+        json!(sorted(creations.clone())),
+        "{creations_only}"
+    );
+    assert_eq!(workspace.runtime.get_task(&task.id).unwrap(), task);
+
+    // Omitting even one required existing target is refused, naming only the
+    // missing required target.
+    let missing_one = workspace.apply_one(
         &prepared,
+        &task.context_files,
+        &[old_scope, NEW_MODULE, NEW_TEST, NEW_DIR],
+    );
+    assert_eq!(outcome(&missing_one)["outcome"], "invalid", "{missing_one}");
+    let partial_error = outcome(&missing_one)["error"].as_str().unwrap();
+    assert!(partial_error.contains(old_design), "{partial_error}");
+    assert!(!partial_error.contains(old_scope), "{partial_error}");
+    assert_eq!(workspace.runtime.get_task(&task.id).unwrap(), task);
+
+    // A non-selectors disposition cannot drop required existing changes either.
+    let dropped_disposition =
+        workspace.apply_disposition(&prepared, &task.context_files, &[], "verified_no_diff");
+    assert_eq!(
+        outcome(&dropped_disposition)["outcome"],
+        "invalid",
+        "{dropped_disposition}"
+    );
+    assert_eq!(workspace.runtime.get_task(&task.id).unwrap(), task);
+
+    // An ungranted missing path alongside the required existing targets still refuses.
+    let ungranted = workspace.apply_one(
+        &prepared,
+        &task.context_files,
+        &[
+            old_scope,
+            old_design,
+            NEW_MODULE,
+            "file:src/invented_target.rs",
+        ],
+    );
+    assert_eq!(outcome(&ungranted)["outcome"], "invalid", "{ungranted}");
+    assert_eq!(workspace.runtime.get_task(&task.id).unwrap(), task);
+
+    // Repair succeeds when the pilot returns both required existing targets
+    // and creation grants while deliberately omitting the read-only reference.
+    let applied = workspace.apply_one(
+        &creations_only["repair_prepared"],
         &task.context_files,
         &[old_scope, old_design, NEW_MODULE, NEW_TEST, NEW_DIR],
     );
@@ -909,20 +1001,124 @@ fn migration_footprint_keeps_existing_targets_beside_granted_creations() {
             old_scope, old_design, NEW_MODULE, NEW_TEST, NEW_DIR
         ]))
     );
+}
 
-    // A pilot that returns only the creation targets is not rejected: apply
-    // keeps the grants and the existing selectors it omitted stay omitted, so
-    // the instructions must have the pilot select the existing changes.
-    let prepared = workspace.prepare(&[&task.id]);
-    let creations_only = workspace.apply_one(&prepared, &stored.context_files, &[NEW_MODULE]);
+/// Covers ORB-29753-shaped migration specs, valid `file:` -> `symbol:` and
+/// non-required narrowing, and creation-only work.
+fn migration_contract_preserves_narrowing_read_only_omissions_and_creation_only_work() {
+    let workspace = Workspace::new();
+    let scope_doc = "file:docs/design/alpha/1_scope.md";
+    let preset = "file:crates/orbit-core/src/app/workspace/preset.rs";
+    let features = "file:docs/design/FEATURES.md";
+    let reference = "file:docs/standards/exemplars.md";
+    let new_overview = "file:docs/design/alpha/1_overview.md";
+    workspace.commit("docs/design/alpha/1_scope.md", "# alpha scope\n");
+    workspace.commit(
+        "crates/orbit-core/src/app/workspace/preset.rs",
+        "pub fn preset_fn() {}\n",
+    );
+    workspace.commit("docs/design/FEATURES.md", "# features\n");
+    workspace.commit("docs/standards/exemplars.md", "# exemplars\n");
+
+    // 1. ORB-29753 shape: listed feature scope deletion + explicitly named
+    //    existing paths requiring deletion/updates/regeneration, beside a
+    //    preserved/read-only path and an exact creation grant.
+    let migration = workspace
+        .runtime
+        .add_task_screened(
+            TaskAddParams {
+                title: "Migrate alpha feature scope".into(),
+                description: "\
+This slice creates 1 exact file, relative to docs/design/<feature>/:
+- alpha: 1_overview.md.
+
+For each listed feature, migrate 1_scope.md into its overview and design. Delete the scope file and update live inbound links. Preserve vendored standards in docs/standards/exemplars.md. Paths that already exist on the integration tree and need deletion, inbound-reference updates or regeneration include crates/orbit-core/src/app/workspace/preset.rs, docs/design/FEATURES.md."
+                    .into(),
+                acceptance_criteria: vec!["Both sets remain locked.".into()],
+                plan: "Migrate alpha.".into(),
+                status: Some(TaskStatus::Proposed),
+                context_files: owned(&[scope_doc, preset, features, reference, new_overview]),
+                ..Default::default()
+            },
+            &TaskWriteScreen::unbound(true),
+            None,
+            None,
+        )
+        .unwrap()
+        .task;
+    let prepared = workspace.prepare(&[&migration.id]);
+    assert_eq!(
+        prepared["tasks"][0]["required_existing_selectors"],
+        json!(sorted(owned(&[scope_doc, preset, features]))),
+        "must require existing targets from both the feature-scope migration and named paths, \
+         while leaving preserved/read-only docs/standards/exemplars.md out: {prepared}"
+    );
+    // Omitting existing targets fails; narrowing `preset` to `symbol:` passes
+    // while omitting `reference`.
+    let creations_only = workspace.apply_one(&prepared, &migration.context_files, &[new_overview]);
     assert_eq!(
         outcome(&creations_only)["outcome"],
-        "applied",
+        "invalid",
         "{creations_only}"
     );
+    let narrowed_preset = "symbol:crates/orbit-core/src/app/workspace/preset.rs#preset_fn:function";
+    let narrowed = workspace.apply_one(
+        &prepared,
+        &migration.context_files,
+        &[scope_doc, narrowed_preset, features, new_overview],
+    );
+    assert_eq!(outcome(&narrowed)["outcome"], "applied", "{narrowed}");
     assert_eq!(
-        sorted(workspace.runtime.get_task(&task.id).unwrap().context_files),
-        sorted(creations)
+        sorted(
+            workspace
+                .runtime
+                .get_task(&migration.id)
+                .unwrap()
+                .context_files
+        ),
+        sorted(owned(&[scope_doc, narrowed_preset, features, new_overview]))
+    );
+
+    // 2. Non-required existing selectors still allow valid narrowing.
+    let narrowable = workspace.scoped_task("narrowable", &[features, reference, NEW_MODULE], true);
+    let prepared = workspace.prepare(&[&narrowable.id]);
+    assert!(
+        prepared["tasks"][0]
+            .get("required_existing_selectors")
+            .is_none(),
+        "{prepared}"
+    );
+    let applied = workspace.apply_one(&prepared, &narrowable.context_files, &[NEW_MODULE]);
+    assert_eq!(outcome(&applied)["outcome"], "applied", "{applied}");
+    assert_eq!(
+        workspace
+            .runtime
+            .get_task(&narrowable.id)
+            .unwrap()
+            .context_files,
+        [NEW_MODULE]
+    );
+
+    // 3. Creation-only work remains supported without existing targets.
+    let creation_only = workspace.scoped_task("creation-only", &[NEW_MODULE, NEW_TEST], true);
+    let prepared = workspace.prepare(&[&creation_only.id]);
+    assert!(
+        prepared["tasks"][0]
+            .get("required_existing_selectors")
+            .is_none(),
+        "{prepared}"
+    );
+    let applied = workspace.apply_one(&prepared, &creation_only.context_files, &[NEW_MODULE]);
+    assert_eq!(outcome(&applied)["outcome"], "applied", "{applied}");
+    assert_eq!(
+        sorted(
+            workspace
+                .runtime
+                .get_task(&creation_only.id)
+                .unwrap()
+                .context_files
+        ),
+        sorted(owned(&[NEW_MODULE, NEW_TEST]))
     );
 }
 
@@ -938,5 +1134,6 @@ crate::scenario_table!(
     revoke_and_same_scope_reauthorization_supersedes_an_older_preparation,
     benign_comment_and_artifact_writes_preserve_preparation,
     newer_creation_grant_reaches_partition_and_ungranted_missing_path_stays_gap,
-    migration_footprint_keeps_existing_targets_beside_granted_creations
+    migration_footprint_keeps_existing_targets_beside_granted_creations,
+    migration_contract_preserves_narrowing_read_only_omissions_and_creation_only_work
 );

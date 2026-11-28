@@ -12,7 +12,7 @@ use super::super::recheck::{RECHECK, RECHECKS};
 use super::super::source::SourceSnapshot;
 use super::super::{
     COMMENT_HYGIENE_BATCH, COMMENT_HYGIENE_BATCHES, CONTEXT_CREATION_SELECTORS,
-    OPERATOR_TOOL_CANDIDATES, member_ready,
+    OPERATOR_TOOL_CANDIDATES, REQUIRED_EXISTING_SELECTORS, member_ready,
 };
 use super::input::{PreparedEcho, PreparedTask, Record};
 use super::{Applied, detail, settled};
@@ -233,6 +233,13 @@ impl Report<'_> {
                     .filter(|selectors| selectors.as_array().is_some_and(|items| !items.is_empty()))
                 {
                     partition[CONTEXT_CREATION_SELECTORS] = json!({ task_id.as_str(): selectors });
+                }
+                // The repair pilot keeps the required existing targets preparation established.
+                if let Some(selectors) = prepared_task
+                    .and_then(|task| task.raw.get(REQUIRED_EXISTING_SELECTORS))
+                    .filter(|selectors| selectors.as_array().is_some_and(|items| !items.is_empty()))
+                {
+                    partition[REQUIRED_EXISTING_SELECTORS] = json!({ task_id.as_str(): selectors });
                 }
                 partition
             })

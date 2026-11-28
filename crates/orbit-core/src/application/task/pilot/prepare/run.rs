@@ -14,8 +14,8 @@ use super::super::source::{SourceSnapshot, resolve_source_snapshot};
 use super::super::validation_tools::ImplementationLane;
 use super::super::{
     COMMENT_HYGIENE_BATCH, COMMENT_HYGIENE_BATCHES, CONTEXT_CREATION_IDENTITY,
-    CONTEXT_CREATION_SELECTORS, OPERATOR_TOOL_CANDIDATES, VALIDATION_TOOL_WARNINGS,
-    comment_hygiene, requested_base_branch,
+    CONTEXT_CREATION_SELECTORS, OPERATOR_TOOL_CANDIDATES, REQUIRED_EXISTING_SELECTORS,
+    VALIDATION_TOOL_WARNINGS, comment_hygiene, requested_base_branch,
 };
 use super::exclusion::ExcludedEvidence;
 use super::{exclusion, repilot};
@@ -439,6 +439,16 @@ pub(crate) fn prepare(
             .map_err(|error| DispatchError::action_failed(action, error.to_string()))?;
         snapshot[CONTEXT_CREATION_SELECTORS] = json!(creation.selectors());
         snapshot[CONTEXT_CREATION_IDENTITY] = json!(creation.identity());
+        let required_existing = super::required_existing::required_existing_selectors(
+            action,
+            &task,
+            creation.selectors(),
+            &workspace_root,
+            source.as_ref(),
+        )?;
+        if !required_existing.is_empty() {
+            snapshot[REQUIRED_EXISTING_SELECTORS] = json!(required_existing);
+        }
         // Only an explicit request re-pilots an assessed task, so only it
         // may re-check a held assessment instead of piloting in full.
         if explicit_mode {
@@ -601,6 +611,11 @@ pub(crate) fn prepare(
                 partition_task_entries(ids, &task_snapshots, CONTEXT_CREATION_SELECTORS, true)
             {
                 partition[CONTEXT_CREATION_SELECTORS] = Value::Object(creation_selectors);
+            }
+            if let Some(required_existing) =
+                partition_task_entries(ids, &task_snapshots, REQUIRED_EXISTING_SELECTORS, true)
+            {
+                partition[REQUIRED_EXISTING_SELECTORS] = Value::Object(required_existing);
             }
             if let Some(rechecks) =
                 super::super::recheck::partition_rechecks(ids.iter(), &task_snapshots)
