@@ -129,9 +129,15 @@ A distribution installer can follow this sequence:
    without asking.
 2. Add its plugin components and create the workspace.
 3. Ask for consent and run `orbit plugin enable` for components whose definitions the
-   preset will enable. Once [plugin-raised decision requests](../human-decision-channel/2_design.md#12-plugin-raised-decision-requests-with-an-apply-callback)
-   ship, also ask for explicit operator consent via `orbit decision apply-tool allow <ns>.<verb>`
-   for any component apply tool; presets never grant apply-tool consent.
+   preset will enable. Presets never grant apply-tool consent. Once the live-raise
+   slice of [plugin-raised decision requests](../human-decision-channel/2_design.md#12-plugin-raised-decision-requests-with-an-apply-callback)
+   has shipped (§12.11), also ask for explicit operator consent via
+   `orbit decision apply-tool allow <ns>.<verb>` for any component apply tool. That
+   slice is the first that accepts `orbit.decision.plugin_raise` against persisted
+   consent, and it ships only with a working human answer already in place. Do not
+   add this install step for an earlier slice. An earlier release may already
+   provide the allowlist command; consent alone does not make a plugin question
+   safe to raise.
 4. Run `orbit workspace init --force --preset <file>` to apply its seeding policy, config
    and selected enables. The preset's `[enable]` entries must already have been seeded.
 5. Store secrets with `orbit plugin secret set`; never write them to a file.
