@@ -118,12 +118,19 @@ style-src 'unsafe-inline'; img-src data: blob:; font-src data:; connect-src 'non
 frame-src 'none'; object-src 'none'; form-action 'none'; base-uri 'none'; frame-ancestors 'self'
 ```
 
-`GET /api/plugins/<ns>/pages/<page>/` also requires Fetch Metadata proving a same-origin
-dashboard iframe navigation (`Sec-Fetch-Site: same-origin`, `Sec-Fetch-Dest: iframe`,
-`Sec-Fetch-Mode: navigate`). Direct top-level browser loads, opaque-origin self-navigations
-(`Sec-Fetch-Site: cross-site`), non-navigation fetches, and unsupported browsers or proxies
-that omit Fetch Metadata fail closed with `403` (`frame_required`), `no-store`, and
-`Content-Security-Policy: sandbox; default-src 'none'`.
+`GET /api/plugins/<ns>/pages/<page>/` can be refused at two points, in order. The API origin guard
+(`require_localhost_origin`) runs before the page handler. It refuses a `Sec-Fetch-Site`
+other than `same-origin` or `none`, so `cross-site` (the value opaque-origin
+self-navigations send) is refused there, and it refuses an `Origin` that does not match the
+admitted host, including `null`. That refusal is a plain `403` with the body
+`{"error": "cross-origin requests not allowed"}`. It carries no `code`, no `no-store` and no
+sandbox `Content-Security-Policy`; the only header it adds is the `nosniff` that every `/api`
+response carries. Requests the guard admits reach the page handler, which requires Fetch
+Metadata proving a same-origin dashboard iframe navigation (`Sec-Fetch-Site: same-origin`,
+`Sec-Fetch-Dest: iframe`, `Sec-Fetch-Mode: navigate`). Direct top-level browser loads
+(`Sec-Fetch-Site: none`), same-origin non-navigation fetches, and unsupported browsers or
+proxies that omit Fetch Metadata fail closed there with `403` and `code: "frame_required"`,
+plus `no-store` and `Content-Security-Policy: sandbox; default-src 'none'`.
 
 `script-src` lists one SHA-256 hash per script Orbit writes, computed from its
 HTML-preprocessed UTF-8 text: the bytes are decoded lossily as UTF-8, with CRLF and lone
