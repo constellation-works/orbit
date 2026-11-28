@@ -26,6 +26,8 @@ mod malformed_input;
 #[cfg(unix)]
 mod mixed_crews;
 mod native_os;
+
+mod pilot_note;
 mod pilot_output;
 mod post_deploy;
 mod provider_hold;

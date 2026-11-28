@@ -6,7 +6,7 @@ updated_date: 2026-11-28
 last_validated: 2026-11-28
 status: Accepted
 stage: building
-next: "Add notes to the pilot assessment schema, apply checks and readouts [ORB-29588]"
+next: "Show pilot notes on the dashboard task detail [ORB-29589] and give claimed pilots the owner's captured instructions [ORB-29590]"
 feature: pilot-notes
 doc_role: overview
 type: design
@@ -24,8 +24,7 @@ instruction with its own, and returns a note under that label for each task it a
 keeps the note with the assessment and shows it on the task. Orbit never reads a note's
 meaning and never acts on it: a note is for whoever asked the question, usually a plugin. The
 operator approved the design on 2026-11-27 ([ORB-29567]). Slice 1 ([ORB-29586]) adds the config
-table, prompt section, audit event and `doctor` check. Assessment output and readouts
-follow in [ORB-29588].
+table, prompt section, audit event and `doctor` check. Slice 2 ([ORB-29588]) adds the assessment output, the apply checks and the readouts.
 
 ## 1. Motivation
 

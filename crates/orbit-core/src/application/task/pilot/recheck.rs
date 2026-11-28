@@ -36,6 +36,7 @@ use orbit_types::task::{DECISION_ANSWERED_EVENT, Task, TaskHistoryEntry};
 use serde_json::{Map, Value, json};
 
 use super::admission::OPERATOR_TOOL_CLASSIFICATIONS;
+use super::note::{NOTES, NOTES_DROPPED};
 use super::promotion::{WARNING_FIELDS, finding_holds_promotion, warning_text};
 use super::{
     CONTEXT_CREATION_RETAINED, CONTEXT_EVIDENCE_DROPPED, CONTEXT_EVIDENCE_RETAINED,
@@ -90,7 +91,10 @@ const VERDICTS: [&str; 3] = ["resolved", "still_holds", "changed"];
 /// receipt keeps the verified record; a re-check proposes only fresh
 /// drops, which apply validates against the currently prepared
 /// footprint.
-const HOST_FIELDS: [&str; 16] = [
+/// `notes` and `notes_dropped` are here too: a re-check returns its own notes
+/// and is never handed the earlier ones, so the latest applied assessment
+/// alone says what a task's notes are.
+const HOST_FIELDS: [&str; 18] = [
     "task_id",
     "context_files_before",
     VALIDATION_TOOL_WARNINGS,
@@ -107,7 +111,12 @@ const HOST_FIELDS: [&str; 16] = [
     MODE_REASON,
     PRIOR_ASSESSMENT_ID,
     RECHECK_KEPT_FIELDS,
+    NOTES,
+    NOTES_DROPPED,
 ];
+
+/// The prior assessment's note fields, withheld from a re-check's input.
+const NOTE_FIELDS: [&str; 2] = [NOTES, NOTES_DROPPED];
 
 /// The single-valued finding that the work is already on the base.
 const ALREADY_LANDED: &str = "already_landed";
@@ -204,7 +213,14 @@ pub(super) fn plan(
     if let Some(reason) = unbounded_scope(&diff) {
         return Ok(RecheckPlan::full(reason, prior_id));
     }
-    let prior_assessment = prior.clone();
+    // Note text is model output about the task: the re-check pilot is never
+    // handed the earlier notes, and apply never carries them forward.
+    let mut prior_assessment = prior.clone();
+    if let Some(fields) = prior_assessment.as_object_mut() {
+        for field in NOTE_FIELDS {
+            fields.remove(field);
+        }
+    }
     Ok(RecheckPlan {
         mode: MODE_RECHECK,
         reason: None,

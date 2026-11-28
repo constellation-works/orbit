@@ -8,9 +8,10 @@
 
 use std::path::Path;
 
+use orbit_config::PilotNoteSettings;
 use orbit_types::workflow::PilotNoteInstruction;
 
-use crate::application::task::base_revision::read_blob_at;
+use crate::application::task::base_revision::{commit_at, read_blob_at};
 
 /// Read and admit one mapped pilot-note instruction file from commit `revision`.
 pub(crate) fn resolve_pilot_note_at(
@@ -21,4 +22,23 @@ pub(crate) fn resolve_pilot_note_at(
 ) -> Result<PilotNoteInstruction, String> {
     let bytes = read_blob_at(repo_root, revision, path)?;
     PilotNoteInstruction::admit(label, path, revision, &bytes)
+}
+
+/// The notes `settings` map, admitted at `revision`, in label order.
+///
+/// A revision that does not resolve, or a file that is unusable, leaves its
+/// label out; the caller sees only the instructions a pilot could have been
+/// given. Audit of the refusals belongs to the dispatch that rendered them.
+pub(crate) fn admitted_pilot_notes_at(
+    repo_root: &Path,
+    settings: &PilotNoteSettings,
+    revision: &str,
+) -> Vec<PilotNoteInstruction> {
+    let Ok(commit) = commit_at(repo_root, revision) else {
+        return Vec::new();
+    };
+    settings
+        .entries()
+        .filter_map(|(label, path)| resolve_pilot_note_at(repo_root, &commit, label, path).ok())
+        .collect()
 }

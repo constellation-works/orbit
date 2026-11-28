@@ -55,6 +55,8 @@ mod gate_source;
 mod guide_gate;
 pub(crate) mod input;
 mod no_diff;
+
+mod note;
 mod persist;
 mod post_deploy;
 mod prepare;

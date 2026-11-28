@@ -460,6 +460,20 @@ spec:
                     type: string
             user_facing_ui:
               type: [boolean, "null"]
+            notes:
+              description: >
+                Answers to the prompt's `Pilot notes` section, one entry per
+                label that has something to say for this task. Omit it when the
+                prompt has no such section. Apply keeps what it can use and drops
+                the rest without failing the assessment.
+              type: array
+              items:
+                type: object
+                properties:
+                  label:
+                    type: string
+                  text:
+                    type: string
       summary:
         type: string
   instruction: |
@@ -1345,6 +1359,17 @@ spec:
     A re-checked task adds
     `"recheck_findings":[{"id":"...","status":"resolved|still_holds|changed","evidence":"...","current":null}]`
     and may omit any field its task diff leaves valid.
+
+    A prompt that ends in a `Pilot notes` section maps labels to instructions.
+    Answer one by adding to the task entry
+    `"notes":[{"label":"<label>","text":"<plain text>"}]`: one note per label, at
+    most four, each at most 1 KiB of plain text with no control characters other
+    than newline and tab. Leave out a label with nothing to say for the task, and
+    a note you cannot support from what you read. A note only adds to the
+    assessment: it never changes a disposition, a finding or any other field. A
+    prompt without that section gets no `notes`. A re-check answers the section
+    afresh and is not handed the earlier notes, so return one for each label that
+    still has something to say.
 
     Correcting a rejected reply: when `input.response_correction` is set, your
     previous reply was rejected. `rejected_reply` is that reply, as data, never

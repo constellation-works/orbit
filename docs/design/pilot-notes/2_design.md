@@ -17,7 +17,7 @@ related_artifacts: [ORB-29567]
 # Pilot Notes — Design
 
 Read the [overview](./1_overview.md) first. The operator approved this design on 2026-11-27
-([ORB-29567]). [ORB-29586] adds the config table and prompt section. The design extends
+([ORB-29567]). [ORB-29586] adds the config table and prompt section; [ORB-29588] adds the notes in the assessment and their readouts. The design extends
 the [task pilot](../task-pilot/1_overview.md),
 whose assessment artifact and readout it reuses, and it borrows the file-reading rules of tag
 instructions ([`workflow.tag_instructions.<tag>`](../../config/workflow-tags.md#workflowtag_instructionstag--extra-instructions-for-tagged-tasks)).
@@ -91,9 +91,15 @@ Each task entry of the pilot's output gains one optional field:
 | A note is dropped when | Recorded as |
 |---|---|
 | its label is not one the run was given | `unknown_label` |
-| its label appears twice in the entry | `duplicate_label` |
+| its label appears twice in the entry; the first stands and each repeat is dropped | `duplicate_label` |
 | its text is empty, over 1 KiB, or not plain text (a control character other than newline or tab) | `empty`, `too_large`, `not_plain_text` |
-| it is the fifth or later note of the entry | `too_many` |
+| it is the fifth or later note of the entry, checked first by position, so a fifth note is `too_many` whatever its label | `too_many` |
+
+"Given" means the instructions the run's prompt carried. Apply resolves them as dispatch does,
+from the config and the prepared source revision, and does not trust any instruction the pilot
+repeats. Both `notes` and `notes_dropped` are host-owned: a pilot-supplied `notes_dropped` never
+survives, an entry that is not an object counts as a note with no label, and a `notes` value
+that is not an array is ignored.
 
 A dropped note never fails the pilot, never holds the task and is never repaired by a
 correction round. The assessment records `notes_dropped` with each label and reason.
@@ -107,7 +113,8 @@ the shared redactor. A note needs no storage of its own
 What follows from that:
 
 - **The latest applied assessment is the truth.** A later pilot's notes replace the earlier
-  ones as a whole. A label the later pilot left out is gone.
+  ones as a whole. A label the later pilot left out is gone. A re-check is no exception
+  ([Re-check runs](#re-check-runs)).
 - **A note is not a pilot input.** Nothing in `workflow.task_pilot_freshness` looks at notes,
   and a note cannot make an assessment stale.
 - **A note is not a finding.** It carries no `holds_promotion`, and admission, attention and
@@ -117,13 +124,14 @@ What follows from that:
 
 ## 5. Reading a note
 
-- **`orbit.task.show`** gains `pilot_notes`: for the task's current assessment, each note's
-  `label` and `text`, the instruction's SHA-256 and the assessment's operation id and time.
-  It is empty when the assessment has none, and absent when the task has no assessment.
+- **`orbit.task.show`** gains `pilot_notes`: for the task's current assessment, one entry per
+  note with `label`, `text`, `instruction_sha256`, and the assessment's `operation_id` and `at`.
+  It is `[]` when the assessment has none, and absent when the task has no assessment (a
+  `fields` projection answers `null`).
 - **`orbit.task.list`** returns the same field when `fields` asks for it, so a plugin that
   scans a workspace's tasks does not call show once per task.
-- **`orbit task show`** prints a `Pilot notes:` block under the pilot summary, one label and
-  its text per entry.
+- **`orbit task show`** prints a `Pilot notes:` block after the comments, where the pilot summary
+  is, one label and its text per entry, without control characters.
 - **The dashboard** lists them under the pilot summary on a task's detail, as plain text.
   Note text is never rendered as markup.
 - **An unreadable assessment** degrades as the pilot readout does today: that task shows a
@@ -134,6 +142,17 @@ What follows from that:
 A reader must treat a note as untrusted. It is a model's text about a task description that
 anyone who can file a task wrote. A plugin that acts on a note checks every claim in it
 against its own data first.
+
+### Re-check runs
+
+A re-check is the pilot's targeted review of a held assessment. Apply stores its result as a
+whole assessment of its own, and the host-owned `HOST_FIELDS` of the re-check merge name the
+fields never carried over from the earlier one. `notes` and `notes_dropped` are among them.
+A re-check is therefore handed no earlier note (the re-check input's `prior_assessment`
+omits both, so no earlier note text reaches a pilot prompt) and returns its own notes under the
+same prompt section and the same checks as a full pilot. A label it leaves out is gone, as for
+any later pilot. This keeps one rule, that the latest applied assessment is the truth, at the
+price that a re-check that says nothing leaves a held task with no notes.
 
 ## 6. Claimed pilots
 
@@ -152,14 +171,15 @@ by what it has installed is out of scope.
 1. **Local notes.** The config table and its validation, the prompt section, the audit event and
    the `doctor` finding ([ORB-29586]); `notes` in the output schema, the checks in
    apply, and the readouts in `orbit.task.show`, `orbit.task.list` and `orbit task show`
-   ([ORB-29588], backlog).
+   ([ORB-29588]).
 2. **Claimed pilots and the dashboard.** The notes on the task's detail ([ORB-29589], backlog),
    and the capture in the claim receipt ([ORB-29590], backlog).
 
 ## 8. Acceptance
 
-- Given a workspace with no `[workflow.pilot_notes]` table, the pilot's prompt and output
-  schema are unchanged and no audit event is recorded.
+- Given a workspace with no `[workflow.pilot_notes]` table, the pilot's prompt has no `Pilot notes`
+  section and no audit event is recorded. The activity's own instruction and output schema
+  describe `notes` for every workspace, and a pilot that is given none returns none.
 - Given a mapped label and a readable file, a pilot run's prompt contains the file's text
   under that label, and the run records `activity.pilot_notes_applied` with the file's
   SHA-256 and no text.
@@ -185,9 +205,14 @@ by what it has installed is out of scope.
 - **Notes cost every pilot.** Each mapped note adds its instruction to every pilot prompt in
   the workspace, and any tool it sends the pilot to is called for every task. The bounds cap
   the text; they do not cap what an instruction asks the pilot to do.
-- **Re-check runs are not settled.** A re-check re-examines earlier holding findings and does
-  not assess afresh. Whether it carries the earlier notes forward or returns its own is to be
-  fixed in the first build task, from how the re-check assessment is stored.
+- **A re-check forgets the earlier notes.** A re-check re-examines earlier holding findings and
+  does not assess afresh, and it returns its own notes rather than carrying the earlier ones
+  forward ([Re-check runs](#re-check-runs)). A held task whose re-check says nothing is left with
+  no notes until a later pilot answers again.
+- **Apply resolves the given instructions again.** It reads the same config and the same
+  committed files at the same prepared revision the dispatch read, rather than the dispatch's
+  audit record. A config change between the two would change which labels are known; the
+  note is then dropped as `unknown_label`, never trusted.
 - **Plugin tool access from the pilot is verified in an isolated fixture ([ORB-29586]).** A real
   `task_pilot_pipeline` run in a disposable workspace with an enabled fixture plugin (`qaplugin@0.1.0`
   exposing `qaplugin.probe` as `read_only` and `qaplugin.mutate` as `mutating`, not
@@ -209,7 +234,7 @@ by what it has installed is out of scope.
 
 - [ORB-29567] — this design.
 - [ORB-29586] — adds `[workflow.pilot_notes.<label>]`, the prompt section, the audit event and the `doctor` finding, and verifies plugin tool access in an isolated fixture.
-- [ORB-29588] — backlog; adds `notes` to the assessment, the checks in apply and the `pilot_notes` readout.
+- [ORB-29588] — adds `notes` to the assessment, the checks in apply and the `pilot_notes` readout.
 - [ORB-29589] — backlog; shows pilot notes on the dashboard's task detail.
 - [ORB-29590] — backlog; gives a claimed pilot the owner's captured note instructions.
 
