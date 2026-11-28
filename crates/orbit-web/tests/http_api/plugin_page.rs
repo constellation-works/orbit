@@ -28,6 +28,18 @@ const MOD_MJS: &str = "export const moduleRan = 'm & n';";
 
 const PLAIN_JS: &str = "window.plainRan = 1;";
 
+const CRLF_JS: &[u8] = b"window.crlfRan = true;\r\nwindow.crlfDone = true;\r\n";
+
+const CRLF_JS_NORMALIZED: &[u8] = b"window.crlfRan = true;\nwindow.crlfDone = true;\n";
+
+const LONE_CR_JS: &[u8] = b"window.loneCrRan = true;\rwindow.loneCrDone = true;\r";
+
+const LONE_CR_JS_NORMALIZED: &[u8] = b"window.loneCrRan = true;\nwindow.loneCrDone = true;\n";
+
+const INVALID_UTF8_JS: &[u8] = b"window.invalidUtf8 = '\xff';\r\n";
+
+const INVALID_UTF8_JS_NORMALIZED: &[u8] = b"window.invalidUtf8 = '\xef\xbf\xbd';\n";
+
 const KIT_STYLE_MARK: &str = "Orbit plugin-page kit stylesheet";
 
 const KIT_SCRIPT_MARK: &str = "Orbit plugin-page kit, bridge version 1";
@@ -45,6 +57,17 @@ const PAGES: &str = concat!(
     "      - id: plain\n",
     "        root: web/plain\n",
     "        scripts: [plain.js]\n",
+    "        tools: [status]\n",
+);
+
+const PREPROCESSING_PAGE: &str = concat!(
+    "  web:\n",
+    "    pages:\n",
+    "      - id: preprocessing\n",
+    "        title: Preprocessing\n",
+    "        root: web/preprocessing\n",
+    "        scripts: [crlf.js, lone-cr.js, invalid.js]\n",
+    "        kit: 1\n",
     "        tools: [status]\n",
 );
 
@@ -69,6 +92,15 @@ fn backend(control: &Path) -> String {
 }
 
 fn install(fixture: &Fixture, namespace: &str, spec: &str) -> PathBuf {
+    install_with_files(fixture, namespace, spec, &[])
+}
+
+fn install_with_files(
+    fixture: &Fixture,
+    namespace: &str,
+    spec: &str,
+    files: &[(&str, &[u8])],
+) -> PathBuf {
     let control = fixture.path(&format!("control-{namespace}"));
     fs::create_dir_all(&control).unwrap();
     let source = fixture.path(&format!("source-{namespace}/.orbit-plugin"));
@@ -84,6 +116,11 @@ fn install(fixture: &Fixture, namespace: &str, spec: &str) -> PathBuf {
     ] {
         fs::create_dir_all(source.join(dir)).unwrap();
         fs::write(source.join(dir).join(file), body).unwrap();
+    }
+    for (relative_path, body) in files {
+        let path = source.join(relative_path);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, body).unwrap();
     }
     fs::write(
         source.join("plugin.yaml"),
@@ -144,15 +181,17 @@ fn script_contents(body: &str) -> Vec<&str> {
     contents
 }
 
+fn expected_hash(script: &[u8]) -> String {
+    format!(
+        "'sha256-{}'",
+        base64::engine::general_purpose::STANDARD.encode(Sha256::digest(script))
+    )
+}
+
 fn expected_policy(scripts: &[&str]) -> String {
     let hashes: Vec<String> = scripts
         .iter()
-        .map(|script| {
-            format!(
-                "'sha256-{}'",
-                base64::engine::general_purpose::STANDARD.encode(Sha256::digest(script))
-            )
-        })
+        .map(|script| expected_hash(script.as_bytes()))
         .collect();
     format!(
         "sandbox allow-scripts; default-src 'none'; script-src {}; style-src 'unsafe-inline'; \
@@ -177,6 +216,62 @@ fn not_found_naming(server: &Server, path: &str, reason: &str) {
     let body = response.text().unwrap();
     assert_eq!(status, 404, "{path}: {body}");
     assert!(body.contains(reason), "{path} names `{reason}`: {body}");
+}
+
+#[test]
+fn script_hash_matches_html_preprocessing_while_response_preserves_script_bytes() {
+    isolated(
+        "plugin_page::script_hash_matches_html_preprocessing_while_response_preserves_script_bytes",
+        || {
+            let fixture = Fixture::new();
+            install_with_files(
+                &fixture,
+                "preprocessing",
+                PREPROCESSING_PAGE,
+                &[
+                    ("web/preprocessing/index.html", MARKUP.as_bytes()),
+                    ("web/preprocessing/crlf.js", CRLF_JS),
+                    ("web/preprocessing/lone-cr.js", LONE_CR_JS),
+                    ("web/preprocessing/invalid.js", INVALID_UTF8_JS),
+                ],
+            );
+            let server = fixture.server(false);
+
+            let response = server.get(&page_path("preprocessing", "preprocessing"));
+            assert_eq!(response.status().as_u16(), 200);
+            let policy = header(&response, "content-security-policy").to_string();
+            let body = response.bytes().unwrap();
+
+            for script in [CRLF_JS, LONE_CR_JS, INVALID_UTF8_JS] {
+                let mut element = b"<script>".to_vec();
+                element.extend_from_slice(script);
+                element.extend_from_slice(b"</script>");
+                assert!(
+                    body.windows(element.len())
+                        .any(|window| window == element.as_slice()),
+                    "script bytes changed in response: {script:?}"
+                );
+            }
+
+            let script_sources = policy
+                .split("script-src ")
+                .nth(1)
+                .expect("script-src directive")
+                .split(';')
+                .next()
+                .unwrap();
+            for script in [
+                CRLF_JS_NORMALIZED,
+                LONE_CR_JS_NORMALIZED,
+                INVALID_UTF8_JS_NORMALIZED,
+            ] {
+                assert!(
+                    script_sources.contains(expected_hash(script).as_str()),
+                    "normalized CSP hash missing for {script:?}: {policy}"
+                );
+            }
+        },
+    );
 }
 
 #[test]
