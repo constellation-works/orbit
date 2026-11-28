@@ -6,7 +6,7 @@ updated_date: 2026-11-27
 last_validated: 2026-11-27
 status: Accepted
 stage: building
-next: "Serve a page as one document and run its tool calls [ORB-29536]"
+next: "Add the Plugins sub-tabs, the page frame and the bridge relay [ORB-29537]"
 feature: plugin-pages
 doc_role: overview
 type: design
@@ -25,7 +25,8 @@ It exists so that a plugin such as Scribe or Formation can show the operator mor
 without plugin code ever running
 with the dashboard's authority. The operator approved the design on 2026-11-27
 ([ORB-29504]). The manifest key, its validation, the bundle digest and the listings are
-built ([ORB-29534]); nothing serves or draws a page yet.
+built ([ORB-29534]). The server writes an active page as one document under its frame policy
+and runs the read-only tool calls it declares ([ORB-29536]); the dashboard draws no page yet.
 
 ## 1. Motivation
 

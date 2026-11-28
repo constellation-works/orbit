@@ -29,6 +29,8 @@ mod lifecycle;
 
 mod mcp_surface;
 
+mod page;
+
 mod panel;
 
 mod runtime;
@@ -110,6 +112,7 @@ pub(crate) use secret::{list_plugin_secrets, remove_plugin_secret, set_plugin_se
 pub use secret::{list_plugin_secrets, remove_plugin_secret, set_plugin_secret};
 
 pub use dashboard::{DashboardScope, DashboardToggle, PanelRead};
+pub use page::{PageCall, PageSource};
 
 // Surface re-exports: what the CLI, dashboard and composition name from this subject.
 pub use crate::adapter::command::{
@@ -207,6 +210,18 @@ pub enum Command<'a> {
         namespace: String,
         panel: String,
     },
+    /// An active page's files, for the dashboard to write into one document.
+    ReadPage {
+        namespace: String,
+        page: String,
+    },
+    /// Check one call a page makes; the dashboard runs the checked call.
+    CallPage {
+        namespace: String,
+        page: String,
+        tool: String,
+        input: Value,
+    },
     /// A manifest-defined tool reached through the existing tool entry.
     InvokeTool(Box<ToolCall<'a>>),
     /// Check whether a plugin namespace is enabled in the bound workspace.
@@ -257,6 +272,8 @@ pub enum Outcome {
     /// The toggled plugin, or `None` when no plugin has that name.
     DashboardToggled(Option<PluginSummary>),
     Panel(Box<PanelRead>),
+    Page(Box<PageSource>),
+    PageCall(Box<PageCall>),
     ToolOutput(Value),
     WorkspaceEnabled(bool),
 }
@@ -302,6 +319,10 @@ impl<'a> App for PluginApp<'a> {
             Command::Sync { .. } => ("sync", None),
             Command::Migrate(request) => ("migrate", Some(request.backend_command.clone())),
             Command::ReadPanel { namespace, .. } => ("panel", Some(namespace.clone())),
+            Command::ReadPage { .. } => {
+                return Operation::dashboard_read("plugin", "page");
+            }
+            Command::CallPage { namespace, .. } => ("page-call", Some(namespace.clone())),
             Command::InvokeTool(call) => ("tool", Some(call.name.to_string())),
             Command::WorkspaceEnabled(_) => {
                 return Operation::dashboard_read("plugin", "workspace-enabled");
@@ -441,6 +462,17 @@ impl<'a> App for PluginApp<'a> {
             Command::ReadPanel { namespace, panel } => {
                 Outcome::Panel(Box::new(PanelRead::new(core, namespace, panel)?))
             }
+            Command::ReadPage { namespace, page } => {
+                Outcome::Page(Box::new(page::resolve_page(core, &namespace, &page)?))
+            }
+            Command::CallPage {
+                namespace,
+                page,
+                tool,
+                input,
+            } => Outcome::PageCall(Box::new(page::check_page_call(
+                core, &namespace, &page, &tool, input,
+            )?)),
             Command::InvokeTool(call) => {
                 if core.caller() != Caller::Tool {
                     return Err(OrbitError::PolicyDenied(

@@ -34,6 +34,8 @@ mod parse;
 
 mod permalink;
 
+mod plugin_page;
+
 mod projections;
 mod runtime_memo;
 mod serve;

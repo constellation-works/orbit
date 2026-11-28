@@ -1279,6 +1279,11 @@ Typed definition hashes retain their existing struct field order.
   with no caller input, for any dashboard session. This is safe because a panel source must be
   a `read_only` tool: `validate_structure` refuses a manifest whose panel names a mutating tool,
   and the read re-checks the loaded manifest.
+- `GET /api/plugins/<ns>/pages/<page>/` returns an active page as one HTML document under
+  its frame policy, and `POST /api/plugins/<ns>/pages/<page>/call` runs one `read_only`
+  tool the page declares, with schema-checked input, through the same audited dispatch.
+  Both sit behind the unchanged origin guard; the [plugin-pages design](../plugin-pages/2_design.md)
+  §2–§3 holds the contract.
 - `POST /api/plugins/<ns>/enable` and `/disable` accept `{scope: "workspace"|"host"}`
   only from operator sessions; every attempt, including a denied one, is audited.
   Workspace writes change `[plugin_enablement]` in the served workspace;

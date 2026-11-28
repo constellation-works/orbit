@@ -7,18 +7,24 @@
 //! * `GET /api/plugins/<ns>/panels/<id>` — the JSON one declared panel's
 //!   source tool returns.
 //! * `POST /api/plugins/<ns>/{enable,disable}` — toggle host or workspace.
+//! * `GET /api/plugins/<ns>/pages/<page>/` — an active page as one document
+//!   under its frame policy (plugin-pages design §2).
+//! * `POST /api/plugins/<ns>/pages/<page>/call` — one call the page makes
+//!   to a `read_only` tool it declares (plugin-pages design §3).
 //!
 //! A panel source is always a `read_only` tool: the manifest cannot declare
 //! a panel over a mutating one (`orbit plugin validate` refuses it, naming
 //! the panel), and the read re-checks the loaded manifest before executing.
 //! That is what makes a panel safe to serve to any dashboard session while
-//! the dashboard's mutations still require an operator session.
+//! the dashboard's mutations still require an operator session. A page
+//! call is held to the same rule, plus the page's own `tools` list and the
+//! tool's input schema, all checked before anything runs.
 
 use std::ffi::OsStr;
 use std::path::Path as FsPath;
 
 use axum::extract::{Path, State};
-use axum::http::StatusCode;
+use axum::http::{HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Json, Response};
 use orbit_common::OrbitError;
 use orbit_common::governance::authorization::{DASHBOARD_PLUGIN_DISABLE, DASHBOARD_PLUGIN_ENABLE};
@@ -29,6 +35,7 @@ use serde_json::{Value, json};
 
 use super::routines::{action_capability, authorization_denied};
 use super::{blocking, not_found, validate_id};
+use crate::plugin_page::CallRefused;
 use crate::state::{DashboardState, PluginPanelWs, WsCore};
 
 /// Maximum serialized tool output retained or returned for one panel.
@@ -186,6 +193,146 @@ pub(super) async fn read_panel(
         Ok(served) => Json((*served.body).clone()).into_response(),
         Err(orbit_common::OrbitError::NotFound { id, .. }) => not_found(id),
         Err(error) => super::map_runtime_error(error),
+    }
+}
+
+pub(super) async fn read_page(
+    State(state): State<DashboardState>,
+    workspace: PluginPanelWs,
+    Path((namespace, page)): Path<(String, String)>,
+) -> Response {
+    for (label, value) in [("plugin", &namespace), ("page", &page)] {
+        if let Err(message) = validate_id(value) {
+            return super::bad_request(format!("{label} {message}"));
+        }
+    }
+    let core = workspace.core.clone();
+    let source = match tokio::task::spawn_blocking(move || {
+        exec(&core, Command::ReadPage { namespace, page })
+    })
+    .await
+    {
+        Ok(Ok(Outcome::Page(source))) => source,
+        Ok(Ok(_)) => unreachable!("read plugin page returned an unrelated outcome"),
+        Ok(Err(error)) => return page_error(&error),
+        Err(error) => return page_panicked(error),
+    };
+    let document = state.plugin_pages().document(&source);
+    let mut response = document.body.clone().into_response();
+    let headers = response.headers_mut();
+    headers.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("text/html; charset=utf-8"),
+    );
+    headers.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    match HeaderValue::from_str(&document.policy) {
+        Ok(policy) => {
+            headers.insert(header::CONTENT_SECURITY_POLICY, policy);
+        }
+        // The policy is ASCII Orbit wrote; without it the page is not served.
+        Err(error) => {
+            return super::server_error(OrbitError::Execution(format!(
+                "plugin page policy is not a header value: {error}"
+            )));
+        }
+    }
+    response
+}
+
+pub(super) async fn call_page(
+    State(state): State<DashboardState>,
+    workspace: PluginPanelWs,
+    Path((namespace, page)): Path<(String, String)>,
+    Json(body): Json<Value>,
+) -> Response {
+    for (label, value) in [("plugin", &namespace), ("page", &page)] {
+        if let Err(message) = validate_id(value) {
+            return super::bad_request(format!("{label} {message}"));
+        }
+    }
+    let Some(tool) = body.get("tool").and_then(Value::as_str).map(str::to_string) else {
+        return page_refusal(
+            StatusCode::BAD_REQUEST,
+            "input_invalid",
+            "a page call names its `tool`".to_string(),
+        );
+    };
+    let input = match body.get("input") {
+        None | Some(Value::Null) => Value::Object(Default::default()),
+        Some(input) => input.clone(),
+    };
+    let core = workspace.core.clone();
+    let checked = {
+        let (namespace, page) = (namespace.clone(), page.clone());
+        tokio::task::spawn_blocking(move || {
+            exec(
+                &core,
+                Command::CallPage {
+                    namespace,
+                    page,
+                    tool,
+                    input,
+                },
+            )
+        })
+        .await
+    };
+    let call = match checked {
+        Ok(Ok(Outcome::PageCall(call))) => *call,
+        Ok(Ok(_)) => unreachable!("plugin page call returned an unrelated outcome"),
+        Ok(Err(error)) => return page_error(&error),
+        Err(error) => return page_panicked(error),
+    };
+    match state
+        .plugin_pages()
+        .call(workspace.runtime_identity(), &namespace, &page, call)
+        .await
+    {
+        Ok(Ok(output)) => Json(bounded_panel_response((*output).clone())).into_response(),
+        Ok(Err(error)) => page_error(&error),
+        Err(CallRefused::Busy) => page_refusal(
+            StatusCode::TOO_MANY_REQUESTS,
+            "busy",
+            format!(
+                "page '{page}' of plugin '{namespace}' already has {} calls running; try again \
+                 when one finishes",
+                crate::plugin_page::PAGE_CALL_CONCURRENCY
+            ),
+        ),
+    }
+}
+
+fn page_panicked(error: tokio::task::JoinError) -> Response {
+    super::server_error(OrbitError::Execution(format!(
+        "plugin page request panicked: {error}"
+    )))
+}
+
+fn page_refusal(status: StatusCode, code: &str, message: String) -> Response {
+    (status, Json(json!({"code": code, "error": message}))).into_response()
+}
+
+/// A page read or call failure. A page that is not served is a 404 with its
+/// reason; a refused tool is a 403 and input that does not fit a 400, and
+/// in both cases nothing ran.
+fn page_error(error: &OrbitError) -> Response {
+    match error {
+        OrbitError::NotFound { id, .. } => not_found(id.clone()),
+        OrbitError::PolicyDenied(message) => {
+            page_refusal(StatusCode::FORBIDDEN, "tool_refused", message.clone())
+        }
+        OrbitError::InvalidInput(message) => {
+            page_refusal(StatusCode::BAD_REQUEST, "input_invalid", message.clone())
+        }
+        other => page_refusal(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "call_failed",
+            other.to_string(),
+        ),
     }
 }
 
