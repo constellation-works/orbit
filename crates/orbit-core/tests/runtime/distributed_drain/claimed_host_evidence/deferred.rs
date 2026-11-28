@@ -870,6 +870,172 @@ fn a_scenario_row_shared_with_a_path_module_has_no_unique_home() {
     );
 }
 
+/// [ORB-29577] Even when the reviewer's `external_evidence` names a zero-test
+/// Cargo filter on the deferred scenario row (under `Accept` via
+/// `synthesized_bubblewrap_requirements`, or `Incomplete` via `covers_deferral`),
+/// settlement rejects matching the row to that filter, keeps the deferral
+/// blocking, runs no host replay, and emits `unreconciled_scenario_deferral`.
+fn a_reviewer_named_zero_test_scenario_filter_is_rejected() {
+    let broad_runtime = "cargo test -p orbit-core --test runtime";
+    let zero_test_filter = format!("{broad_runtime} {SCENARIO_ROW}");
+    let notice =
+        orbit_exec::bwrap_deferral_notice(SCENARIO_ROW, "the host cannot apply the sandbox");
+    for (case, verdict, os, with_narrow_record) in [
+        (
+            "accept",
+            ReviewVerdict::Accept,
+            EvidenceHostOs::Linux,
+            false,
+        ),
+        (
+            "accept_with_narrow",
+            ReviewVerdict::Accept,
+            EvidenceHostOs::Linux,
+            true,
+        ),
+        ("incomplete", ReviewVerdict::Incomplete, host_os(), true),
+    ] {
+        let (leaf, attempt_id) =
+            leaf_with_candidate_files(&probe(&[]), false, "runtime", &SCENARIO_WORKSPACE);
+        let mut validation = vec![
+            scenario_record("V1", "make ci-fast", ValidationOutcome::Passed, Vec::new()),
+            scenario_record(
+                "V2",
+                broad_runtime,
+                ValidationOutcome::Passed,
+                vec![notice.clone()],
+            ),
+        ];
+        if with_narrow_record {
+            validation.push(scenario_record(
+                "V3",
+                &zero_test_filter,
+                ValidationOutcome::NotRun,
+                Vec::new(),
+            ));
+        }
+        leaf.put_report(&ReviewReport {
+            external_evidence: vec![ReviewEvidenceRequirement {
+                kind: ReviewEvidenceKind::HostSandboxTest,
+                name: "Deferred scenario row".into(),
+                command: zero_test_filter.clone(),
+                artifact: artifact(0),
+                os: Some(os),
+                hosted_check: None,
+            }],
+            schema_version: REVIEW_CONTRACT_VERSION,
+            attempt_id,
+            verdict,
+            summary: "Checked the change; the scenario row deferred.".into(),
+            findings: Vec::new(),
+            validation,
+            retired_validation: Vec::new(),
+            escalation: (verdict == ReviewVerdict::Incomplete)
+                .then(|| "the deferred scenario row needs the host".into()),
+        });
+
+        let refused = leaf
+            .settle()
+            .expect_err(&format!("{case}: zero-test filter keeps deferral blocking"));
+        assert!(refused.contains("review_gate_blocked"), "{case}: {refused}");
+        assert!(
+            leaf.owner_artifact(REVIEW_EVIDENCE_HOLD_ARTIFACT).is_none(),
+            "{case}: no evidence hold may be created"
+        );
+        assert_no_replay(&leaf, case, 1);
+
+        let certificate = certificate(&leaf);
+        assert!(
+            certificate.owed_evidence.is_empty(),
+            "{case}: zero-test filter must not be owed: {:?}",
+            certificate.owed_evidence
+        );
+        let broad = broad_record(&certificate, broad_runtime);
+        assert_eq!(
+            broad.deferred,
+            std::slice::from_ref(&notice),
+            "{case}: {broad:?}"
+        );
+
+        let escalation = certificate.escalation.as_deref().unwrap_or_default();
+        assert!(
+            escalation.contains("unreconciled_scenario_deferral")
+                && escalation.contains(SCENARIO_NATIVE)
+                && escalation.contains(&format!("qa-scenario-pass: {SCENARIO_ROW}")),
+            "{case}: escalation names enclosing libtest and marker: {escalation}"
+        );
+        assert!(
+            !escalation.contains(&format!("--test runtime {SCENARIO_ROW}")),
+            "{case}: zero-test filter is never offered: {escalation}"
+        );
+    }
+
+    // Ambiguous scenario row (two homes) also keeps the deferral blocking and
+    // names only the uncovered command when the reviewer names the zero-test filter.
+    let mut ambiguous_workspace = SCENARIO_WORKSPACE.to_vec();
+    ambiguous_workspace[2] = (
+        "crates/orbit-core/tests/runtime/main.rs",
+        "mod decision_raise;\nmod other_raise;\n",
+    );
+    ambiguous_workspace.push((
+        "crates/orbit-core/tests/runtime/other_raise.rs",
+        "crate::scenario_table!(other_scenarios, managed_raise_keeps_shared_root_read_only);\n",
+    ));
+    let (leaf, attempt_id) =
+        leaf_with_candidate_files(&probe(&[]), false, "runtime", &ambiguous_workspace);
+    leaf.put_report(&ReviewReport {
+        external_evidence: vec![ReviewEvidenceRequirement {
+            kind: ReviewEvidenceKind::HostSandboxTest,
+            name: "Deferred scenario row".into(),
+            command: zero_test_filter.clone(),
+            artifact: artifact(0),
+            os: Some(host_os()),
+            hosted_check: None,
+        }],
+        schema_version: REVIEW_CONTRACT_VERSION,
+        attempt_id,
+        verdict: ReviewVerdict::Incomplete,
+        summary: "Checked the change; the ambiguous scenario row deferred.".into(),
+        findings: Vec::new(),
+        validation: vec![
+            scenario_record("V1", "make ci-fast", ValidationOutcome::Passed, Vec::new()),
+            scenario_record(
+                "V2",
+                broad_runtime,
+                ValidationOutcome::Passed,
+                vec![notice.clone()],
+            ),
+            scenario_record(
+                "V3",
+                &zero_test_filter,
+                ValidationOutcome::NotRun,
+                Vec::new(),
+            ),
+        ],
+        retired_validation: Vec::new(),
+        escalation: Some("the deferred scenario row needs the host".into()),
+    });
+    let refused = leaf
+        .settle()
+        .expect_err("ambiguous row with reviewer-named zero-test filter blocks");
+    assert!(refused.contains("review_gate_blocked"), "{refused}");
+    assert!(leaf.owner_artifact(REVIEW_EVIDENCE_HOLD_ARTIFACT).is_none());
+    assert_no_replay(&leaf, "ambiguous_zero_test_filter", 1);
+    let certificate = certificate(&leaf);
+    let escalation = certificate.escalation.as_deref().unwrap_or_default();
+    assert!(
+        escalation.contains("unreconciled_scenario_deferral")
+            && escalation.contains(broad_runtime)
+            && escalation.contains("admit a fresh review"),
+        "ambiguous row names uncovered command: {escalation}"
+    );
+    assert!(
+        !escalation.contains(SCENARIO_NATIVE)
+            && !escalation.contains(&format!("--test runtime {SCENARIO_ROW}")),
+        "ambiguous row names neither enclosing libtest nor zero-test filter: {escalation}"
+    );
+}
+
 crate::scenario_table!(
     a_broader_run_deferring_only_host_tests_scenarios,
     a_broader_run_deferring_only_host_tests_settles_on_their_replays,
@@ -881,5 +1047,6 @@ crate::scenario_table!(
     a_consolidated_scenario_deferral_names_its_libtest_and_marker,
     a_scenario_row_with_two_homes_names_only_the_uncovered_command,
     a_target_with_path_support_and_fixture_strings_resolves_its_plain_home,
-    a_scenario_row_shared_with_a_path_module_has_no_unique_home
+    a_scenario_row_shared_with_a_path_module_has_no_unique_home,
+    a_reviewer_named_zero_test_scenario_filter_is_rejected
 );

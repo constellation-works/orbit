@@ -192,11 +192,12 @@ pub(super) fn with_external_checks_passed(
 /// - a required `cargo test -p <package>` with no target selector, covered by
 ///   `cargo test -p <package> --lib <test>` [ORB-24325].
 ///
-/// Anything else covers nothing: a requirement without a filter, a filter
-/// naming only the test's module, an unadmitted command, a failed record, a
-/// `--test` requirement against a library or package-wide record, a `--lib`
-/// requirement against a `--test` record, a different package, an unknown
-/// wrapper, build-changing flags, or a record carrying other target selectors.
+/// Anything else covers nothing: a consolidated scenario row (`ScenarioRows`),
+/// a requirement without a filter, a filter naming only the test's module, an
+/// unadmitted command, a failed record, a `--test` requirement against a
+/// library or package-wide record, a `--lib` requirement against a `--test`
+/// record, a different package, an unknown wrapper, build-changing flags, or a
+/// record carrying other target selectors.
 pub(super) fn covers_deferral(
     required: &ReviewEvidenceRequirement,
     record: &ReviewValidation,
@@ -212,6 +213,9 @@ pub(super) fn covers_deferral(
     let Some(test) = deferred_test(notice) else {
         return false;
     };
+    if owners.scenarios().is_row(test) {
+        return false;
+    }
     match (
         recorded_cargo_scope(&record.command),
         HostSandboxCommand::admit(&required.command, &[]),

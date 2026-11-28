@@ -236,6 +236,13 @@ impl Judgement {
                 let Some(test) = deferred_test(notice) else {
                     continue;
                 };
+                // [ORB-29076] A scenario row runs inside its libtest, so a
+                // Cargo filter on the row runs no test — even when the
+                // reviewer named it in `external_evidence`. The scenario
+                // diagnostic names the runnable check instead.
+                if owners.scenarios().is_row(test) {
+                    continue;
+                }
                 let filter_matches =
                     |filter: &str| filter == test || filter.ends_with(&format!("::{test}"));
                 // As `covers_deferral` requires, a named run covers the notice
@@ -295,12 +302,6 @@ impl Judgement {
                 });
                 let reviewer_named = requirement.is_some();
                 if requirement.is_none() {
-                    // [ORB-29076] A scenario row runs inside its libtest, so a
-                    // Cargo filter on the row runs no test. The scenario
-                    // diagnostic names the runnable check instead.
-                    if owners.scenarios().is_row(test) {
-                        continue;
-                    }
                     let command = match recorded_cargo_scope(&record.command) {
                         Some(RecordedCargoScope::Integration { package, target }) => {
                             format!("cargo test -p {package} --test {target} {test}")
