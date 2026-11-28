@@ -369,6 +369,11 @@ fn rank_pools_models_bands_by_bootstrap_orders_by_cost_and_drops_unmeasured_weig
             );
             assert!(row["measures"][key]["contribution"].is_null());
         }
+        assert_eq!(
+            row["measures"]["ci_failures"]["reason"],
+            "cause-classified required-check failure records exist, but the CI measure is not yet integrated into Rank",
+            "{model} CI coverage reason"
+        );
         assert_eq!(row["measures"]["crew_rework"]["status"], "no_scale");
         assert_eq!(
             f(&row["weights_measured"]),
@@ -399,14 +404,28 @@ fn rank_pools_models_bands_by_bootstrap_orders_by_cost_and_drops_unmeasured_weig
         assert!((residual - f(&review["residual"])).abs() < 0.01, "{model}");
     }
     assert!(f(&row(&payload, "strong")["score"]) > f(&row(&payload, "weak")["score"]));
+    let ci_measure = payload["measures"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|measure| measure["key"] == "ci_failures")
+        .unwrap();
+    assert_eq!(ci_measure["status"], "unmeasured");
+    assert_eq!(ci_measure["weight"], 10.0);
+    assert_eq!(
+        ci_measure["reason"],
+        "cause-classified required-check failure records exist, but the CI measure is not yet integrated into Rank"
+    );
     assert!(
         payload["measures"]
             .as_array()
             .unwrap()
             .iter()
-            .any(|measure| {
-                measure["key"] == "ci_failures" && measure["status"] == "unmeasured"
-            })
+            .find(|measure| measure["key"] == "crew_rework")
+            .unwrap()["definition"]
+            .as_str()
+            .unwrap()
+            .contains("Required-check failure causes are recorded")
     );
 
     // The settle lag keeps the newest work out; live includes it.
