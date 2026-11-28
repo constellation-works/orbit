@@ -3,3 +3,5 @@
 //! orbit-core in [ORB-10016].
 
 pub(crate) mod lib;
+
+mod worker_coordination;
