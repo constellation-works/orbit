@@ -10,14 +10,19 @@ next: "Review updated distribution/plugin-request spec (2_design.md §12), then 
 feature: human-decision-channel
 doc_role: overview
 type: design
-summary: "A core decision-request record and delegated-human channel, with email as a plugin transport and a generic plugin_request gate for distributions and Orbit-plane plugins"
+summary: "The shipped core decision-request record and delegated-human channel; the generic plugin_request gate for distributions and Orbit-plane plugins remains a proposal"
 tags: [human-decision-channel, plugins, distributions, routines, blocked-recovery, task-pilot]
 ---
 
 # Human Decision Channel — Overview
 
-Status: the committed slices have landed and stay off until an operator enables the
-channel. [ORB-17979] authored this design. The folder pairs this overview with [2_design.md](./2_design.md), which carries the mechanisms, and with [4_decisions.md](./4_decisions.md).
+Status: the committed slices of the human decision channel have landed and stay off
+until an operator enables the channel. [ORB-17979] authored this design. The generic
+`plugin_request` gate in §12, its plugin-declared answers, apply callback and automatic
+routing through `orbit attention`, the dashboard, CLI and `decision-mail` remain a
+proposal; §12 says none of that section is implemented. The folder pairs this overview
+with [2_design.md](./2_design.md), which carries the mechanisms, and with
+[4_decisions.md](./4_decisions.md).
 
 ## 1. Motivation
 
@@ -120,8 +125,8 @@ The mechanisms are in [2_design.md](./2_design.md); standing rules are kept in [
 - **Decision request.** The core record raised when work parks on a human decision: it names the task, the gate and the closed set of allowed answers.
 - **Delegated-human authority.** The channel path that records an authenticated reply as the human, with the channel's provenance attached, without reclassifying a plugin as human.
 - **Transport plugin.** The plugin that owns SMTP, IMAP and message formatting; core owns the request record, the authority and the apply step.
-- **Plugin-raised request (`plugin_request`).** The generic gate ([2_design.md §12](./2_design.md#12-plugin-raised-decision-requests-with-an-apply-callback)) that lets a [distribution](../distributions/1_overview.md) or Orbit-plane plugin raise a closed human question and run an operator-allowlisted apply tool once answered, surfacing automatically through `orbit attention`, the dashboard and `decision-mail` without putting domain logic in core.
-- **Closed answer set.** The only answers a reply may carry: blocked propose/report choices, pilot-hold verdicts, proposed approve/reject by digest, review approve, and plugin-declared answers on a `plugin_request`.
+- **Proposed plugin-raised request (`plugin_request`).** The proposal in [2_design.md §12](./2_design.md#12-plugin-raised-decision-requests-with-an-apply-callback) would let a [distribution](../distributions/1_overview.md) or Orbit-plane plugin raise a closed human question and run an operator-allowlisted apply tool once answered. Automatic routing through `orbit attention`, the dashboard, CLI and `decision-mail` is part of that proposal.
+- **Closed answer set.** The feature-level gates in this overview use their named choices: blocked propose/report choices, pilot-hold verdicts, proposed approve/reject by digest and review approve. Section 12 proposes adding plugin-declared answers on a `plugin_request`.
 - **Stale guard.** The check that a reply is still about the same hold, so a reply for a superseded episode changes nothing.
 
 ## 3. At a Glance
@@ -135,11 +140,12 @@ The mechanisms are in [2_design.md](./2_design.md); standing rules are kept in [
 | Stale guard and refusals | [2_design.md §5](./2_design.md#5-stale-guard-and-refusals) | [ORB-17979] |
 | Triggers, digest routine and noise control | [2_design.md §7–8](./2_design.md#7-triggers-and-the-digest-routine) | [ORB-17979] |
 | Precedent-answered decisions | [2_design.md §11](./2_design.md#11-precedent-answered-decisions) | [ORB-17979] |
-| Plugin-raised requests with an apply callback | [2_design.md §12](./2_design.md#12-plugin-raised-decision-requests-with-an-apply-callback) | [ORB-17979] |
+| Proposed plugin-raised requests with an apply callback | [2_design.md §12](./2_design.md#12-plugin-raised-decision-requests-with-an-apply-callback) | [ORB-22824] |
 | Standing rules | [4_decisions.md](./4_decisions.md) | — |
 
 ## Task References
 
+- [ORB-22824] — initially designed plugin-raised decision requests with an apply callback.
 - [ORB-17979] — designed the email channel for human decisions on held Orbit work (this folder).
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
