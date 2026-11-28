@@ -241,7 +241,9 @@ config:
 
 Step input can choose the checkout with `workspace_path`, but it never reaches the argument list.
 
-The step's output is `{ success, exit_code, stdout, stderr, log_tail, log_tail_truncated, duration_ms, timed_out, timeout_ms, argv, cwd, sandbox }`. The shipped `local-shell` executor declares no OS sandbox. To wrap shell steps in the host's OS backend, set `sandbox` on the executor definition; it applies to every activity that uses that executor. An activity's `fsProfile` is optional. It names the policy profile the sandbox enforces, and when it is omitted the `unrestricted` profile applies with the policy's deny rules still in effect.
+The step's output is `{ success, exit_code, stdout, stderr, log_tail, log_tail_truncated, duration_ms, timed_out, timeout_ms, argv, cwd, sandbox }`. The shipped `local-shell` executor declares no OS sandbox. To wrap shell steps in the host's OS backend, set `sandbox` on the executor definition; it applies to every activity that uses that executor. An activity's `fsProfile` is optional; when omitted, the `unrestricted` profile applies. macOS Seatbelt applies its read and modify rules, including policy denies. Linux Bubblewrap enforces modify rules but does not enforce profile read rules, including `denyRead`. It masks fixed credential and runtime directories and any explicit caller-provided masks; other host reads remain available, so do not rely on `denyRead` to protect secrets on Linux.
+
+If the selected backend is unavailable, the step fails unless the executor sets `allow_fallback: true`. That permits bare execution without the backend's filesystem policy or masks, subject to inherited restrictions. Other sandbox setup or spawn errors do not trigger fallback. The output reports `bare-fallback` when this happens.
 
 ## Job envelope
 
