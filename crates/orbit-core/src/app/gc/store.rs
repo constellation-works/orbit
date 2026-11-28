@@ -208,7 +208,7 @@ struct RetentionPass {
     legacy_ids: Option<Vec<String>>,
 }
 
-fn configured_retention_days(rt: &OrbitRuntime) -> Result<RetentionDays, OrbitError> {
+fn retention_days(rt: &OrbitRuntime) -> Result<RetentionDays, OrbitError> {
     let config = orbit_config::ResolvedConfig::load(
         &orbit_common::Env::capture(),
         &orbit_config::ConfigRoots::new(rt.global_root(), rt.shared_root()),
@@ -262,7 +262,7 @@ pub fn gc_audit(
     apply: bool,
     retention_days: Option<u32>,
 ) -> Result<AuditGcReport, OrbitError> {
-    let days = resolve_override(retention_days, configured_retention_days(rt)?.audit)?;
+    let days = resolve_override(retention_days, self::retention_days(rt)?.audit)?;
     let cutoff = cutoff_for(days)?;
     let store = rt.sqlite_store()?;
     let pass = retention_pass(rt, RetentionIdSource::RunAudit)?;
@@ -333,7 +333,7 @@ pub fn gc_runs(
 ) -> Result<RunGcReport, OrbitError> {
     let days = match retention_days {
         Some(days) => days,
-        None => configured_retention_days(rt)?.runs,
+        None => self::retention_days(rt)?.runs,
     };
     if days < 30 {
         return Err(OrbitError::InvalidInput(
@@ -442,7 +442,7 @@ pub fn gc_journal(
     apply: bool,
     retention_days: Option<u32>,
 ) -> Result<JournalGcReport, OrbitError> {
-    let days = resolve_override(retention_days, configured_retention_days(rt)?.journal)?;
+    let days = resolve_override(retention_days, self::retention_days(rt)?.journal)?;
     let cutoff = cutoff_for(days)?;
     let store = rt.sqlite_store()?;
     let pass = retention_pass(rt, RetentionIdSource::CommitJournal)?;
@@ -484,7 +484,7 @@ pub fn gc_journal(
 /// Reclaimable audit, run-state and blob bytes under the configured
 /// windows, without scanning blob references.
 pub fn store_retention_overview(rt: &OrbitRuntime) -> Result<StoreRetentionOverview, OrbitError> {
-    let days = configured_retention_days(rt)?;
+    let days = retention_days(rt)?;
     let audit_cutoff = cutoff_for(days.audit)?;
     let store = rt.sqlite_store()?;
     let audit_pass = retention_pass(rt, RetentionIdSource::RunAudit)?;
