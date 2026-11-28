@@ -80,10 +80,13 @@ bullet was rechecked at `d10fae79b`).
   opt-in, through a `sandbox:` on the executor definition, which wraps every activity that uses
   it. An activity's optional `fsProfile` selects the named policy profile; without one, the
   built-in `unrestricted` profile applies (`crates/orbit-core/assets/executors/local-shell.yaml`).
-  On macOS, Seatbelt applies the profile's read and modify rules, including policy denies. On
-  Linux, Bubblewrap enforces modify rules only: profile read rules, including `denyRead`, are not
-  enforced, so host reads stay available except for fixed credential and runtime-directory masks
-  and explicit caller-provided masks. A nonzero exit fails the step
+  On macOS, Seatbelt allows reads by default and enforces only negated read rules (`denyRead`
+  and profile `!` exclusions) plus default credential and mask denies; positive `read`
+  allowlists are not enforced. On Linux, Bubblewrap enforces modify rules only: profile read
+  rules, including `denyRead`, are not enforced. Host reads stay broadly available, except that
+  `/tmp` is a private tmpfs and `/proc` and `/dev` are fresh namespace views (host files under
+  `/tmp` are visible only through a policy mount), and fixed credential and runtime-directory
+  masks and explicit caller-provided masks apply. A nonzero exit fails the step
   (`LocalShellFailed`) unless `allow_nonzero_exit` is set.
 - **The non-success outcome survives.** `StepOutcome { success, output, message }`
   (`crates/orbit-engine/src/activity_job/job_executor/exec_ctx.rs`) still carries
