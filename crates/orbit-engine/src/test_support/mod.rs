@@ -14,6 +14,8 @@ pub use crate::executor::automation::vcs::{
     with_worktree_setup_fetch_limits,
 };
 pub use crate::impl_test_host;
+#[cfg(target_os = "linux")]
+pub use crate::sandbox_spawn::with_post_run_guard_without_user_namespace;
 
 pub use crate::executor::automation::{
     collect_ci_evidence, git_commit, handoff_land, local_shell, push_batch_changes, task_complete,
