@@ -300,15 +300,16 @@ whose manifest has pages lists them in the consent prompt.
   request passes the origin guard unchanged.
 - Given a page that calls a declared read-only tool with input, the result reaches the page
   and the call appears in the audit trail as a call to that tool.
-- Given a page that calls a tool its manifest does not list, a mutating tool, or another
-  plugin's tool, the call is refused and nothing runs.
+- Given a page that calls a tool its manifest does not list under `tools`, a mutating tool
+  through `call`, or another plugin's tool, the call is refused and nothing runs.
 - Given a page script that fetches `/api/tasks`, reads the parent document, opens a window or
   adds a script element, each attempt fails in the browser.
 - Given a bundle file changed on disk after install, the page is inactive with a diagnostic
   naming both digests, and the rest of the plugin still works.
-- Given a manifest whose page names a mutating tool, has no `index.html`, holds a `script`
-  element in its markup, lists a script containing `</script`, or exceeds the size bound,
-  `orbit plugin validate` refuses it by name.
+- Given a manifest whose page names a mutating tool under `tools`, has no `index.html`, holds a
+  `script` element in its markup, lists a script containing `</script`, or exceeds the size
+  bound, `orbit plugin validate` refuses it by name. A same-plugin mutating tool under
+  `actions` is accepted; under `tools` it is refused.
 - Given another host selected, that host's page is written by this dashboard from the parts
   the tunnel returns, under the same frame policy.
 - Given a plugin with panels and no pages, the Plugins tab behaves as it does today.
