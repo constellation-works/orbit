@@ -1927,10 +1927,13 @@ See [CONFIG.md](../CONFIG.md#owner-sign-off-holds-the-run-owner_signoff_required
 An implementer that cannot proceed declares a blocker, and its run ends `held`
 under `task_blocked_by_agent` with the blocker kind. Nothing was committed or
 pushed, and no PR was opened. The task is `blocked`, and its one-line system
-comment names only the run, pointing to `orbit run show <run-id> --json`. The
-failed step, worktree, branch, base head, and salvage steps live in that run's
-`pr_failure_handoff` step output (and the status note). The candidate is
-uncommitted in that worktree, and no other copy exists.
+comment names only the run; inspect it with `orbit run show <run-id> --json`.
+The status note records the blocker kind, run ID, failed step, candidate head,
+and branch, and says no PR was opened. It does not include the worktree or
+salvage instructions. Find those in the run's `pr_failure_handoff` step output,
+under `worktree` and `recovery`. The output also records the failed step,
+candidate head, and branch. The candidate is uncommitted in that worktree, and
+no other copy exists.
 
 `orbit job resume <held_run_id>` refuses this run by design, and no later run
 reuses its uncommitted files. Once the blocker is resolved, keep the candidate
