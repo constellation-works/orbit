@@ -76,7 +76,8 @@ the diagnostics friction view lose raw history past the audit cutoff with no
 rollups.
 
 Task-store Codebase rankings, `orbit task flow` and friction stats keep
-working. See the retention runbook for each setting's history boundary.
+working. See the [state and backup runbook](https://github.com/constellation-works/orbit/blob/main/docs/runbooks/state-and-backup.md)
+for each setting's history boundary.
 
 `gc journal` deletes applied task commit journal rows of this workspace, and of
 unregistered workspace ids, older than 14 days.
