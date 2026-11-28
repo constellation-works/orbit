@@ -63,8 +63,10 @@ let latestPluginsRevision = null;
 let latestPluginsError = null;
 let latestAggregate = false;
 
-// Inline enable state for a disabled plugin's diagnostic card.
-let pendingEnable = false;
+// Inline enable state for a disabled plugin's diagnostic card. `pendingEnable`
+// is the in-flight request `{ revision, namespace, page }` (or null); it only
+// disables controls and takes late errors on the diagnostic that started it.
+let pendingEnable = null;
 let enableError = null;
 let lastStripSignature = null;
 
@@ -87,6 +89,16 @@ function currentTheme() {
   const explicit = document.documentElement?.dataset?.theme;
   if (explicit === "light" || explicit === "dark") return explicit;
   return "dark";
+}
+
+function enableOriginates(request) {
+  return Boolean(
+    request
+    && activeRoute
+    && request.revision === getWorkspaceRevision()
+    && request.namespace === activeRoute.namespace
+    && request.page === activeRoute.page,
+  );
 }
 
 function sessionOperator(plugin) {
@@ -244,7 +256,7 @@ function renderDiagnosticCard({ title, status, diagnostic, fixStep, plugin = nul
     plugin?.disabled_by || null,
     enableScope || null,
     Boolean(enableScope && plugin?.capabilities?.enable?.authorized === true && !hostWriteRefusal()),
-    pendingEnable,
+    enableOriginates(pendingEnable),
     enableError || null,
     siblingPages.map((entry) => [entry.id, entry.title]),
   ]);
@@ -273,7 +285,7 @@ function renderDiagnosticCard({ title, status, diagnostic, fixStep, plugin = nul
       class: "plugin-toggle",
       text: enableScope === "host" ? "Enable host" : "Enable workspace",
     });
-    btn.disabled = pendingEnable;
+    btn.disabled = enableOriginates(pendingEnable);
     btn.addEventListener("click", () => enableFromDiagnostic(plugin, enableScope, btn));
     actions.push(btn);
   }
@@ -317,23 +329,31 @@ function appendFormattedFix(container, text) {
 }
 
 async function enableFromDiagnostic(plugin, scope, button) {
-  if (pendingEnable) return;
-  const revision = getWorkspaceRevision();
-  pendingEnable = true;
+  if (enableOriginates(pendingEnable) || !activeRoute) return;
+  const request = {
+    revision: getWorkspaceRevision(),
+    namespace: activeRoute.namespace,
+    page: activeRoute.page,
+  };
+  pendingEnable = request;
   enableError = null;
   button.disabled = true;
+  let failure = null;
   try {
     await postJson(`/api/plugins/${encodeURIComponent(plugin.name)}/enable`, { scope });
     onRefreshRequested();
   } catch (error) {
-    if (revision === getWorkspaceRevision()) {
-      enableError = error?.message || String(error);
-      syncPluginPageView({ forceReload: false });
-    }
-  } finally {
-    pendingEnable = false;
-    button.disabled = false;
+    failure = error?.message || String(error);
   }
+  if (pendingEnable === request) pendingEnable = null;
+  // Only the diagnostic that started the request takes its outcome; a page or
+  // workspace change in between leaves the current page untouched.
+  if (!enableOriginates(request)) return;
+  if (failure) enableError = failure;
+  // The card may have been replaced while pending, so re-render rather than
+  // re-enabling the original button.
+  button.disabled = false;
+  if (viewVisible) syncPluginPageView({ forceReload: false });
 }
 
 function disabledFixStep(plugin) {
@@ -807,6 +827,7 @@ onWorkspaceChange(() => {
   latestPluginsError = null;
   latestAggregate = false;
   enableError = null;
+  pendingEnable = null;
   blockedNavigation = null;
   unmountFrame();
   if (!viewVisible) {
