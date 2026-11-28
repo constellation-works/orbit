@@ -1101,7 +1101,17 @@ and landing branch, execution summary and validation artifact references.
   evidence (disposition `before_landing`) for the head it settled when the contract captured
   before-landing review, or `{ policy: none, disposition: not_required }` otherwise. The owner
   refuses evidence of the other timing or for another head (`review_evidence_missing`,
-  `reviewed_head_mismatch`). Task
+  `reviewed_head_mismatch`), and refuses a required timing lacking a review contract with
+  `review_contract_mismatch`. Every claimed leaf — initial and landing-repair alike — records
+  the owner's captured review timing in `input.review` (`timing_source: "claim"`), including an
+  explicit `none` when the owner disabled review, and `ClaimRepair.owner_review_timing` plus
+  `pull_claim.owner_review_timing` expose that same captured decision. The leaf's review gate
+  cross-checks `input.review` against the durable pull admission: a missing or mismatched
+  required admission fails closed, while a legacy owner-off claim without `input.review`
+  resolves as `timing: none` (`review_before_pr_off` / `review_before_landing_off`) without
+  reading follower settings. Pull-supervisor runs mark their own local snapshot
+  `scope: "supervisor_local"` so run views report the supervisor's local config distinctly from
+  each claimed leaf's owner-captured review policy. Task
   status `review` means a delivery handoff awaiting completion authority, not that a review
   occurred. The claimed-leaf gate and its owner-captured policy are described in
   [the decision](./4_decisions.md#a-claimed-leaf-runs-the-before-pr-review-its-claim-captured).

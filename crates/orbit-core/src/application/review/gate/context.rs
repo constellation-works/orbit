@@ -7,7 +7,10 @@ use orbit_automation::review::{combined_task_meaning_digest, task_meaning_digest
 use orbit_common::OrbitError;
 use orbit_engine::BaseSyncMode;
 use orbit_types::task::{Task, requires_security_state_review};
-use orbit_types::workflow::{ReviewAdmission, ReviewGateAdmissionOutput, ReviewGateNotApplicable};
+use orbit_types::workflow::{
+    REVIEW_CONTRACT_VERSION, ReviewAdmission, ReviewBudget, ReviewGateAdmissionOutput,
+    ReviewGateNotApplicable, ReviewTiming,
+};
 use serde_json::{Value, json};
 
 use super::super::{MAX_RESUME_CHAIN, automation_error, lineage_key, resumes_owner};
@@ -133,9 +136,18 @@ impl GateContext {
             }
             tasks.push(task);
         }
+        let claimed_leaf = if runtime.role().is_worker() {
+            Some(runtime.current_claimed_leaf()?)
+        } else {
+            None
+        };
         let mut admission = match admission {
             Some(admission) => Some(admission),
-            None => run_review_admission(runtime, &run_id)?,
+            None => reconcile_claimed_review_admission(
+                claimed_leaf.as_ref(),
+                &run_id,
+                run_review_admission(runtime, &run_id)?,
+            )?,
         };
         if let Some(admission) = &mut admission
             && tasks
@@ -213,6 +225,85 @@ impl GateContext {
     pub(super) fn refresh_task_digests(&mut self) -> Result<(), OrbitError> {
         self.task_digests = compute_task_digests(&self.tasks)?;
         Ok(())
+    }
+}
+
+/// Cross-check a claimed leaf's persisted review admission against the
+/// durable pull admission's owner-captured ship contract.
+///
+/// Non-workers (`leaf: None`) keep `persisted` unchanged. A claimed worker
+/// fails closed if its claim requires before-PR or before-landing review
+/// without a matching admission or review contract, or if the persisted
+/// admission disagrees with the owner's captured timing. Legacy owner-off
+/// claims whose leaf predates explicit `timing = none` persistence resolve to
+/// a claim-sourced [`ReviewTiming::None`] admission without reading follower
+/// configuration.
+pub(super) fn reconcile_claimed_review_admission(
+    leaf: Option<&crate::application::job::claimed::ClaimedLeaf>,
+    run_id: &str,
+    persisted: Option<ReviewAdmission>,
+) -> Result<Option<ReviewAdmission>, OrbitError> {
+    let Some(leaf) = leaf else {
+        return Ok(persisted);
+    };
+    if leaf.binding.bound_run_id != run_id {
+        return Err(OrbitError::PolicyDenied(format!(
+            "review gate: a claimed leaf reviews only its bound run '{}', not '{run_id}'",
+            leaf.binding.bound_run_id
+        )));
+    }
+    let ship = &leaf.admission.request.ship;
+    let expected = ship.review_timing();
+    match (expected, persisted) {
+        (ReviewTiming::None, Some(admission)) if admission.timing == ReviewTiming::None => {
+            Ok(Some(admission))
+        }
+        (ReviewTiming::None, None) => {
+            let gates = leaf.owner_gates();
+            Ok(Some(ReviewAdmission {
+                contract_version: REVIEW_CONTRACT_VERSION,
+                policy_version: 0,
+                timing: ReviewTiming::None,
+                timing_source: "claim".to_string(),
+                crew: None,
+                crew_source: "claim".to_string(),
+                crew_pool: Vec::new(),
+                budget: ReviewBudget::default(),
+                required_validation_commands: gates
+                    .as_ref()
+                    .map(|gates| gates.required_validation_commands.clone()),
+                baseline_commands: gates
+                    .map(|gates| gates.baseline_commands)
+                    .unwrap_or_default(),
+                host_evidence: Vec::new(),
+                selective_before_landing: None,
+                captured_at: chrono::Utc::now(),
+            }))
+        }
+        (ReviewTiming::None, Some(admission)) => Err(OrbitError::CapabilityDenied(format!(
+            "review_contract_mismatch: the claim captured review timing `none` but this leaf \
+             carries review admission `{}`",
+            admission.timing.as_str()
+        ))),
+        (required, _) if ship.review.is_none() => Err(OrbitError::CapabilityDenied(format!(
+            "review_contract_mismatch: the claim captured review timing `{}` without a review \
+             contract",
+            required.as_str()
+        ))),
+        (required, None) => Err(OrbitError::CapabilityDenied(format!(
+            "review_admission_missing: the claim captured review timing `{}` but this leaf has \
+             no captured review admission",
+            required.as_str()
+        ))),
+        (required, Some(admission)) if admission.timing != required => {
+            Err(OrbitError::CapabilityDenied(format!(
+                "review_contract_mismatch: the claim captured review timing `{}` but this leaf \
+                 carries review admission `{}`",
+                required.as_str(),
+                admission.timing.as_str()
+            )))
+        }
+        (_, Some(admission)) => Ok(Some(admission)),
     }
 }
 

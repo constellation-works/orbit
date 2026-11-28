@@ -323,8 +323,14 @@ export function renderRunDetailMeta() {
   addCell("finished", run.finished_at ? formatDateTime(run.finished_at) : "-");
   addCell("duration", recordDurationText(run));
   // ORB-16572: a delivery run's captured review layer and whether workspace
-  // policy or the run's own `--review` decided it.
-  if (run.review_layer) addCell("review", reviewLayerText(run.review_layer));
+  // policy, the run's own `--review`, or the owner's claim decided it. Pull
+  // supervisors tag their snapshot as `supervisor_local`; legacy claimed
+  // leaves without `review_layer` fall back to `pull_claim.owner_review_timing`.
+  if (run.review_layer) {
+    addCell(run.review_layer.scope === "supervisor_local" ? "local review" : "review", reviewLayerText(run.review_layer));
+  } else if (detail.pull_claim?.owner_review_timing) {
+    addCell("review", reviewLayerText({ timing: detail.pull_claim.owner_review_timing, source: "claim" }));
+  }
   // ORB-12516: with more than one execution host, a run id alone no longer says
   // where it ran. The store field is the truth; a row without one is *unknown*,
   // never assumed to be this machine. The value already reads "on <host>", so

@@ -94,10 +94,14 @@ impl TaskCommitBoundary {
             }
             return Ok(Vec::new());
         }
+        let captured = ship.review_timing();
         let Some(contract) = &ship.review else {
             return Err(review_refused(
-                R::ReviewEvidenceUnexpected,
-                "the claim captured no review contract",
+                R::ReviewContractMismatch,
+                &format!(
+                    "the claim captured review timing `{}` without a review contract",
+                    captured.as_str()
+                ),
             ));
         };
         if contract.required_validation_commands.is_none() {
@@ -109,7 +113,6 @@ impl TaskCommitBoundary {
         // The evidence must be for the timing the claim captured: a
         // before-PR review cannot stand in for a before-landing one, nor the
         // reverse [ORB-14849].
-        let captured = ship.review_timing();
         let evidence = match handoff.review.evidence() {
             Some(evidence)
                 if captured != ReviewTiming::None

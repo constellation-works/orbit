@@ -125,6 +125,7 @@ impl crate::OrbitRuntime {
                 leaf_state: run.state.to_string(),
                 settlement_phase: phase_name(record.phase),
                 stage,
+                owner_review_timing: record.request.ship.review_timing(),
             });
         }
         Ok(leaves)
@@ -621,6 +622,10 @@ impl crate::OrbitRuntime {
             _ => None,
         };
         let refusal = admission.refusal.clone();
+        let owner_review_timing = admission.request.ship.review_timing();
+        let repairs_claim_id = claim
+            .and_then(|claim| claim.repair.as_ref())
+            .map(|repair| repair.repairs_claim_id.clone());
         let guidance = phase_guidance(
             admission.phase,
             admission.refusal.as_deref(),
@@ -636,6 +641,8 @@ impl crate::OrbitRuntime {
             refusal,
             settlement_refusal,
             failure_class,
+            owner_review_timing,
+            repairs_claim_id,
             guidance,
         }))
     }
