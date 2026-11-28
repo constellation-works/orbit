@@ -17,6 +17,11 @@ use std::time::Duration;
 
 use assert_cmd::cargo::cargo_bin_cmd;
 use orbit_common::test_env;
+use orbit_core::runtime::OrbitRuntime;
+use orbit_core::runtime::context::ActorIdentity;
+use orbit_core::test_support::EngineHost;
+use orbit_core::test_support::fixture_engine::{RunLifecycle, TaskAutomationUpdate};
+use orbit_types::task::{DecisionAnswer, DecisionBinding, DecisionGate, DecisionRequest};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use tempfile::TempDir;
@@ -419,4 +424,167 @@ fn a_confined_bound_plugin_runs_the_digest_and_submission_end_to_end() {
         replayed.stdout,
         replayed.stderr
     );
+}
+
+/// A task-form plugin request retires an already-open generic approval before
+/// the callback returns, so a previously issued approval cannot still be
+/// answered alongside the plugin's decision.
+#[test]
+fn a_plugin_request_retires_an_open_task_approval() {
+    let probe = orbit_exec::probe_landlock();
+    if !probe.available {
+        #[allow(clippy::print_stdout)]
+        {
+            println!("skipping the native Landlock run: {}", probe.detail);
+        }
+        return;
+    }
+    let host = Host::new();
+    let source = host.root.join("sources/requester/.orbit-plugin");
+    std::fs::create_dir_all(source.join("bin")).expect("plugin source");
+    let backend = source.join("bin/backend.sh");
+    std::fs::write(
+        &backend,
+        r#"#!/bin/sh
+cat >/dev/null
+st="$ORBIT_PLUGIN_STATE"
+orbit tool run orbit.decision.plugin_raise --input-file "$st/raise.json" >"$st/out" 2>"$st/err"
+printf '%s\n' "$?" >"$st/status"
+printf '{"ok":true,"output":{}}\n'
+"#,
+    )
+    .expect("plugin backend");
+    std::fs::set_permissions(&backend, std::fs::Permissions::from_mode(0o755))
+        .expect("chmod backend");
+    std::fs::write(
+        source.join("plugin.yaml"),
+        "schemaVersion: 2\nkind: Plugin\nmetadata:\n  name: requester\n  version: 0.1.0\n  description: Plugin decision retirement fixture.\nspec:\n  permissions:\n    orbit_tools: [orbit.decision.plugin_raise]\n    fs:\n      read: [\"{{plugin_state}}\"]\n      write: [\"{{plugin_state}}\"]\n  backend:\n    type: exec\n    command: bin/backend.sh\n  tools:\n    - name: ask\n      description: Raise a fixture decision.\n      execution_kind: mutating\n      mcp_scope: none\n    - name: apply\n      description: Fixture apply tool.\n      execution_kind: mutating\n      agent_callable: false\n      mcp_scope: none\n",
+    )
+    .expect("plugin manifest");
+    let source_arg = source.to_str().expect("utf8 plugin source");
+    host.ok(&[
+        "plugin",
+        "add",
+        source_arg,
+        "--enable",
+        "--grant",
+        "fs,orbit_tools",
+    ]);
+
+    let added: Value = serde_json::from_slice(
+        &host
+            .ok(&[
+                "task",
+                "add",
+                "--title",
+                "Proposed result",
+                "--description",
+                "A plugin decision competes with the approval.",
+                "--status",
+                "proposed",
+                "--complexity",
+                "low",
+                "--acceptance-criteria",
+                "[\"result is ready\"]",
+                "--json",
+            ])
+            .stdout,
+    )
+    .expect("task JSON");
+    let task_id = added["id"].as_str().expect("task id").to_string();
+    let approval_id = {
+        let _authority = test_env::unset(test_env::INHERITED_AUTHORITY_ENV.iter().copied());
+        let workspace_root = host.ok(&["workspace", "show", "--format", "json"]).stdout;
+        let workspace: Value = serde_json::from_slice(&workspace_root).expect("workspace JSON");
+        let runtime = OrbitRuntime::from_roots(
+            &host.home.join(".orbit"),
+            Path::new(workspace["orbit_root"].as_str().expect("orbit root")),
+        )
+        .expect("runtime")
+        .with_actor(ActorIdentity::human("fixture-operator"));
+        let task = runtime.get_task(&task_id).expect("proposed task");
+        let request = DecisionRequest::new(
+            task.id.clone(),
+            DecisionGate::ProposedApproval,
+            vec![
+                DecisionAnswer::plain("approve", "Approve", "Move to backlog."),
+                DecisionAnswer::plain("reject", "Reject", "Decline the task."),
+            ],
+            DecisionBinding::for_task(&task, None),
+            "fixture".into(),
+            chrono::Utc::now(),
+        );
+        let id = request.id.clone();
+        EngineHost::new(&runtime)
+            .apply_task_automation_update(
+                &task_id,
+                TaskAutomationUpdate {
+                    append_history: vec![request.history_entry("fixture")],
+                    ..Default::default()
+                },
+            )
+            .expect("seed open approval");
+        id
+    };
+    let state = host.state("requester");
+    std::fs::create_dir_all(&state).expect("plugin state");
+    std::fs::write(
+        state.join("raise.json"),
+        json!({
+            "task_id": task_id,
+            "subject": "result-1",
+            "summary": "Accept the plugin result?",
+            "answers": [
+                {"id": "accept", "label": "Accept", "consequence": "Record acceptance."},
+                {"id": "reject", "label": "Reject", "consequence": "Record rejection."}
+            ],
+            "recommended": "accept",
+            "apply": {
+                "tool": "requester.apply",
+                "revision": "rev-1",
+                "input": {"result": "result-1"}
+            }
+        })
+        .to_string(),
+    )
+    .expect("plugin input");
+    let callback = host.run(
+        &["tool", "run", "requester.ask", "--input", "{}"],
+        &[("ORBIT_OPERATOR", "1")],
+    );
+    assert!(callback.status.success(), "{}", text(&callback));
+    assert_eq!(
+        std::fs::read_to_string(state.join("status"))
+            .expect("callback status")
+            .trim(),
+        "0",
+        "{}{}",
+        std::fs::read_to_string(state.join("out")).unwrap_or_default(),
+        std::fs::read_to_string(state.join("err")).unwrap_or_default()
+    );
+
+    let retired: Value = serde_json::from_slice(
+        &host
+            .ok(&["decision", "show", &approval_id, "--json"])
+            .stdout,
+    )
+    .expect("retired approval JSON");
+    assert_eq!(retired["state"], "superseded", "{retired}");
+    let raised: Value =
+        serde_json::from_slice(&std::fs::read(state.join("out")).expect("plugin callback output"))
+            .expect("plugin decision JSON");
+    assert_eq!(raised["state"], "open", "{raised}");
+    assert_eq!(raised["gate"], "plugin_request", "{raised}");
+
+    let answer = host.run(
+        &["decision", "answer", &approval_id, "approve", "--json"],
+        &[("ORBIT_OPERATOR", "1")],
+    );
+    assert!(
+        !answer.status.success(),
+        "the retired approval was answered"
+    );
+    let refusal: Value = serde_json::from_slice(&answer.stderr).expect("refusal JSON");
+    assert_eq!(refusal["code"], "request_superseded", "{refusal}");
+    assert_eq!(host.task_status(&task_id), "proposed");
 }

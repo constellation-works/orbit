@@ -15,6 +15,10 @@ pub const DECISION_REQUESTED_EVENT: &str = "decision_requested";
 
 /// History event with the id of a plugin request the raiser withdrew.
 pub const DECISION_WITHDRAWN_EVENT: &str = "decision_withdrawn";
+
+/// History event with the id of an approval retired by a plugin decision.
+pub const DECISION_SUPERSEDED_EVENT: &str = "decision_superseded";
+
 /// History event that records an applied answer to a [`DecisionRequest`].
 pub const DECISION_ANSWERED_EVENT: &str = "decision_answered";
 /// History event that re-opens a precedent answer. A later human answer

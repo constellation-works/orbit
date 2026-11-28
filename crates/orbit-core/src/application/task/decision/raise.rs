@@ -57,9 +57,10 @@ use orbit_types::plugin::{
     InstalledPlugin, PluginExecutionKind, PluginMcpScope, namespace_collides_with_tool,
 };
 use orbit_types::task::{
-    AgentDecisionOptionInput, DECISION_WITHDRAWN_EVENT, DecisionBinding, DecisionGate,
-    DecisionRequest, DecisionRequestState, PluginApply, Task, TaskHistoryEntry, TaskStatus,
-    agent_decision_answers, decision_requests_from_history, normalize_agent_decision_topic,
+    AgentDecisionOptionInput, DECISION_SUPERSEDED_EVENT, DECISION_WITHDRAWN_EVENT, DecisionBinding,
+    DecisionGate, DecisionRequest, DecisionRequestState, PluginApply, Task, TaskHistoryEntry,
+    TaskStatus, agent_decision_answers, decision_requests_from_history,
+    normalize_agent_decision_topic,
 };
 use serde_json::{Value, json};
 
@@ -459,7 +460,30 @@ impl OrbitRuntime {
             .with_summary(raise.summary, raise.recommended)
             .with_category(workspace_id)
             .with_plugin_apply(raise.apply);
-            self.write_plugin_decision_event(&task.id, actor, request.history_entry(actor))?;
+            let approvals = self.get_task_decision_requests(&task.id)?;
+            let mut append_history = approvals
+                .iter()
+                .filter(|approval| {
+                    approval.state == DecisionRequestState::Open
+                        && matches!(
+                            approval.gate,
+                            DecisionGate::ProposedApproval | DecisionGate::ReviewApproval
+                        )
+                })
+                .map(|approval| {
+                    TaskHistoryEntry::new(request.raised_at, actor, DECISION_SUPERSEDED_EVENT)
+                        .with_note(Some(approval.id.clone()))
+                })
+                .collect::<Vec<_>>();
+            append_history.push(request.history_entry(actor));
+            self.stores().task_records().update(
+                &task.id,
+                TaskRecordUpdateParams {
+                    actor: actor.to_owned(),
+                    append_history,
+                    ..Default::default()
+                },
+            )?;
             Ok(raised_json(&request, false))
         })
     }

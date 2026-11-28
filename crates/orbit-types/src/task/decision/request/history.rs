@@ -11,8 +11,8 @@ use super::binding::{self, DecisionBinding};
 use super::gates::DecisionGate;
 use super::model::{
     DECISION_ANSWERED_EVENT, DECISION_MODEL_CONFIRMED_EVENT, DECISION_REOPENED_EVENT,
-    DECISION_WITHDRAWN_EVENT, DecisionRequest, DecisionRequestState, DecisionResolution,
-    MODEL_ANSWER_ACTOR, ModelAnswerConfirmation, PRECEDENT_ACTOR,
+    DECISION_SUPERSEDED_EVENT, DECISION_WITHDRAWN_EVENT, DecisionRequest, DecisionRequestState,
+    DecisionResolution, MODEL_ANSWER_ACTOR, ModelAnswerConfirmation, PRECEDENT_ACTOR,
 };
 
 /// Note body of a [`DECISION_REOPENED_EVENT`].
@@ -55,6 +55,7 @@ pub fn decision_requests_from_history(
     let mut folded: std::collections::BTreeMap<String, (DecisionResolution, bool)> =
         std::collections::BTreeMap::new();
     let mut withdrawn = BTreeSet::new();
+    let mut superseded = BTreeSet::new();
     let mut last_close = None;
     for entry in history {
         if entry.to_status.is_some_and(TaskStatus::is_terminal) {
@@ -64,6 +65,11 @@ pub fn decision_requests_from_history(
             && let Some(id) = entry.note.as_deref()
         {
             withdrawn.insert(id);
+        }
+        if entry.event == DECISION_SUPERSEDED_EVENT
+            && let Some(id) = entry.note.as_deref()
+        {
+            superseded.insert(id);
         }
         if entry.event == DECISION_ANSWERED_EVENT {
             let Some(note) = entry.note.as_deref() else {
@@ -246,6 +252,7 @@ pub fn decision_requests_from_history(
             continue;
         }
         if withdrawn.contains(request.id.as_str())
+            || superseded.contains(request.id.as_str())
             || replaced.contains(&index)
             || !binding_current(request)
             || binding::task_revision_changed_since(request, history)
