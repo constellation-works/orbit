@@ -40,6 +40,7 @@ an install story of its own.
 | Which Orbit defaults a workspace carries | Implements the seeding policy | Selects a policy in its preset |
 | Which of its own definitions start enabled | Enables only definitions already seeded in the workspace | Lists those definitions in its preset |
 | Plugin permissions | Requires `orbit plugin enable` consent | Asks the user and never bypasses consent |
+| Human-in-the-loop domain decisions | Provides the generic `plugin_request` gate, `orbit attention` visibility, dashboard and channel routing ([human-decision-channel §12](../human-decision-channel/2_design.md#12-plugin-raised-decision-requests-with-an-apply-callback), designed) | Raises closed questions and owns its operator-allowlisted apply tool |
 | UI, onboarding and installer | Provides public interfaces | Owns them |
 
 ### Seeding policy
@@ -128,7 +129,9 @@ A distribution installer can follow this sequence:
    without asking.
 2. Add its plugin components and create the workspace.
 3. Ask for consent and run `orbit plugin enable` for components whose definitions the
-   preset will enable.
+   preset will enable. Once [plugin-raised decision requests](../human-decision-channel/2_design.md#12-plugin-raised-decision-requests-with-an-apply-callback)
+   ship, also ask for explicit operator consent via `orbit decision apply-tool allow <ns>.<verb>`
+   for any component apply tool; presets never grant apply-tool consent.
 4. Run `orbit workspace init --force --preset <file>` to apply its seeding policy, config
    and selected enables. The preset's `[enable]` entries must already have been seeded.
 5. Store secrets with `orbit plugin secret set`; never write them to a file.
