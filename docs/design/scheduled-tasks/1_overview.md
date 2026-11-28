@@ -10,13 +10,13 @@ next: "Consumer calendar and Schedule picker in orbit-office"
 feature: scheduled-tasks
 doc_role: overview
 type: design
-summary: "Let a task wait for a date — an optional not_before instant that every dispatcher honours as a self-lifting admission hold, readable by date range so a calendar can show it"
+summary: "Let a task wait for a date — an optional not_before instant that automatic dispatchers honour as a self-lifting admission hold, readable by date range so a calendar can show it"
 tags: [tasks, admission, scheduling, calendar, distributed-drain]
 ---
 
 # Scheduled Tasks — Overview
 
-A scheduled task carries a `not_before` time before which no dispatcher starts it, so one existing task can wait for a date while staying visible, listable and editable.
+A scheduled task carries a `not_before` time before which automatic admission and the tool surface's ship do not start it, so one existing task can wait for a date while staying visible, listable and editable. An operator's CLI or dashboard ship can still start it early.
 
 Status: shipped in Orbit. Phase 1 [ORB-19214] supplies the field, the
 `Scheduled` hold, the ship refusal and operator override, and readiness and
@@ -55,9 +55,10 @@ chosen time: "send the weekly numbers on Friday at 9", "check the renewal on
 
 ### Intended outcome
 
-A task can carry a time before which no dispatcher starts it. Everything else
-about the task stays normal. It is created, piloted, edited and approved as
-usual, and it is visible and listable by its date.
+A task can carry a time before which automatic admission and the tool surface's
+ship do not start it. An operator's CLI or dashboard ship can still start it
+early. Everything else about the task stays normal. It is created, piloted,
+edited and approved as usual, and it is visible and listable by its date.
 
 ### Out of scope
 
@@ -74,7 +75,7 @@ usual, and it is visible and listable by its date.
 ### Acceptance (feature level)
 
 - A backlog task with a future `not_before` is not started by an auto drain,
-  a pull drain or an explicit ship. The first two report it as waiting
+  a pull drain or the tool surface's ship. The first two report it as waiting
   `scheduled`. The tool surface's ship refuses with `task_scheduled`; an
   operator's CLI or dashboard ship overrides the hold.
 - After `not_before` passes, the next admission pass starts it with no
@@ -87,8 +88,8 @@ The mechanisms are in [2_design.md](./2_design.md); decisions that qualify are k
 
 ## 2. Core Concepts
 
-- **`not_before`.** The task field holding the time before which no dispatcher starts the task; everything else about the task stays normal.
-- **`Scheduled` hold.** The typed admission hold that keeps a backlog task waiting until `not_before` passes, then lifts by itself on the next admission pass.
+- **`not_before`.** The task field holding the time before which automatic admission and the tool surface's ship do not start the task; an operator's CLI or dashboard ship can start it early. Everything else about the task stays normal.
+- **`Scheduled` hold.** The typed admission hold that keeps a backlog task out of automatic admission and the tool surface's ship until `not_before` passes, then lifts by itself on the next admission pass.
 - **Operator override.** An operator's CLI or dashboard ship starts a scheduled task early; the tool surface's ship refuses with `task_scheduled`.
 - **Range listing.** `orbit.task.list` with a `not_before` range, which returns exactly the tasks in the range with the field on every row.
 
