@@ -1160,16 +1160,21 @@ matching generic approval as superseded before exposing the plugin request. A la
 answer to the retired request, including an issued mail token, is refused as
 `request_superseded` with no effect. An approval already answered before the raise is
 not undone; recheck the task status and binding under the lock and refuse the raise if
-the task is no longer eligible. While any task-form plugin request remains open, the
-digest does not raise that generic approval and an `--approve-proposed` drain holds the
-task as `decision_pending`. Once none remains open, a subsequent digest may raise a
-fresh generic approval if the task is still eligible; it never revives the retired one.
+the task is no longer eligible. While any task-form plugin request remains open, no path
+raises that generic approval on the task: the digest skips it, and pilot-warning triage
+(`crates/orbit-core/src/application/task/escalation_triage_steps/recording.rs`), which
+raises a `proposed_approval` under the same lock, records its disposition comment and
+raises no approval. An `--approve-proposed` drain holds the task as `decision_pending`.
+Once none remains open, a subsequent digest may raise a fresh generic approval if the
+task is still eligible; it never revives the retired one.
 
 History folding must give `plugin_request` independent identities by `(task, plugin,
 subject)`: a later revision or withdrawal retires only that identity, not other plugin
 subjects or unrelated independent gates. Conversely, generic approval retirement is
 explicit and must not rely on the existing ordinary-request-per-task fold accidentally
-superseding every plugin request. All open plugin subjects remain individually answerable.
+superseding every plugin request. The reverse holds too: a generic approval raised while a
+plugin request is open never supersedes that request. All open plugin subjects remain
+individually answerable.
 
 ### 12.4 The apply step
 
@@ -1404,9 +1409,10 @@ answers `accept` / `reject`). An internal `research.accept-apply` (`mcp_scope: n
 `review_approval` and suppresses another while the plugin request is open (§12.3); the
 request appears in `orbit attention` (§12.8), and an answer from the dashboard, CLI or
 `decision-mail` runs the apply tool on the workspace owner host. Closing the task
-supersedes an unanswered request. If publication instead completes the task before
-acceptance, the plugin must raise in holder form after closure, omitting `task_id`;
-it cannot raise on the closed investigation task.
+supersedes an unanswered request. If the task closes before acceptance, whether
+publication closes it or another path does, the request is superseded and the plugin
+must raise in holder form after closure, omitting `task_id`; it cannot raise on the
+closed investigation task.
 
 ### 12.11 Implementation slices
 
@@ -1425,8 +1431,8 @@ tool and a plugin raises a request.
    plugin's namespace, an `agent_callable: true` or `mcp_scope != none` tool are refused;
    re-raise dedupes or supersedes by revision; withdrawal targets the original form;
    an existing generic approval is superseded and its answer refused, while distinct
-   plugin subjects stay open and answerable; digest and answer races honor the task
-   lock; `orbit attention` folds task-form items and surfaces remaining requests and
+   plugin subjects stay open and answerable; the digest and pilot-warning triage raise no
+   generic approval while one is open; digest and answer races honor the task lock; `orbit attention` folds task-form items and surfaces remaining requests and
    holder-form items at `low` severity. Extend the existing decision-channel and raise
    fixtures to cover these cases and the post-closure holder lifecycle.
 2. **Apply-tool allowlist.** `orbit-core` and `orbit-cli`: the host-local store
