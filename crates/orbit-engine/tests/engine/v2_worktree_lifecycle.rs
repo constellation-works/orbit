@@ -3961,6 +3961,41 @@ fn primary_moves_off_the_base_branch_still_fail_closed() {
     }
 }
 
+/// [F2026-11-651] A primary drift's step error names its changed primary paths,
+/// quoted, and says whether the primary HEAD moved. The guard refuses both
+/// cases exactly as before; only the message carries the new detail.
+#[cfg(unix)]
+fn primary_drift_message_names_changed_paths_and_head_state() {
+    for (run_id, start_on_side, body, expected) in [
+        (
+            "jrun-primary-untracked",
+            false,
+            "printf 'stray\\n' > '{primary}/0'",
+            "HEAD did not move. Changed primary paths: \"0\".",
+        ),
+        (
+            "jrun-primary-head-moved",
+            true,
+            "printf 'more\\n' > '{primary}/hotfix.txt'\ngit -C '{primary}' commit --quiet -am 'side advance'",
+            "HEAD moved. Changed primary paths: \"hotfix.txt\".",
+        ),
+    ] {
+        let (fixture, host, checkout) = Fixture::with_checkout("T-DRIFT-MESSAGE", run_id);
+        if start_on_side {
+            git(&fixture.repo, &["checkout", "-b", "hotfix/side"]);
+            commit_file(&fixture.repo, "hotfix.txt", "hotfix\n");
+        }
+        let primary = fixture.repo.display().to_string();
+        let host = fixture.with_provider(&host, &body.replace("{primary}", &primary));
+
+        let error = dispatch_linked_provider(&host, run_id, "T-DRIFT-MESSAGE", &checkout.path)
+            .expect_err(&format!("{run_id}: the primary change is drift"));
+        integrity_diagnostic(&error, "primary_checkout_drift");
+        let message = error.to_string();
+        assert!(message.contains(expected), "{run_id}: {message}");
+    }
+}
+
 /// User Git presentation settings must not hide a second edit to tracked WIP
 /// or change the fingerprints and patches needed to detect and recover it.
 #[cfg(unix)]
@@ -5084,5 +5119,7 @@ worktree_families! {
         primary_returned_to_the_base_branch_mid_run_is_not_drift,
         #[cfg(unix)]
         primary_moves_off_the_base_branch_still_fail_closed,
+        #[cfg(unix)]
+        primary_drift_message_names_changed_paths_and_head_state,
     ],
 }

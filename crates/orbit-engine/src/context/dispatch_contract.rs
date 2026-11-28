@@ -537,7 +537,7 @@ fn worktree_dispatch_message(code: &str, diagnostic: &str) -> String {
     let message = orbit_types::workflow::activity_job::worktree_failure_message(code, &value);
     match stored_output_cite(&value) {
         Some(cite) => format!("{message} ({cite})"),
-        None => message.to_string(),
+        None => message,
     }
 }
 
