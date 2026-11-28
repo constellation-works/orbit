@@ -196,10 +196,15 @@ Consolidation still emits proposal text only; a human merge is the
 curation step.
 
 `auto: true` is operator-only (`orbit decision rule-auto`). An agent cannot
-set it, and neither can the precedent actor. When `orbit.decision` action `raise`
-names a `file/rule` topic, or a rule id that appears in exactly one decision
+set it, and neither can the precedent actor. For a newly raised agent request,
+`orbit.decision` action `raise` tries precedent when the request has a topic.
+If it names a `file/rule` topic, or a rule id that appears in exactly one decision
 file, and that rule is one such current rule whose answer is one of the
-request's options, Orbit answers immediately with that option. Matching a topic
+request's options, Orbit can answer immediately with that option. A deduplicated
+open request is returned unchanged, without another precedent attempt. Requests
+outside the agent-request gate, or offering the reserved `accept-findings`
+answer or an option with a land action, remain open even if a rule matches;
+these eligibility checks happen before rule matching. Matching a topic
 equal to a topic file's stem is not this contract [ORB-20823]. The history
 actor is `precedent`, not a human. The record carries
 the rule id, the rule's citations, and that the operator approved the rule. A
@@ -214,8 +219,9 @@ This corpus holds Orbit issue mechanisms, Orbit decision-request history and
 standing workspace judgement rules. Daniel's product direction and general
 office knowledge remain in the orbit-office Library. No Library read or write
 is introduced. Only a current rule may be cited. Raw entries never answer a
-new request. A current rule the operator marked auto may answer a request
-that names it exactly; every other corpus match leaves the request open.
+new request. A current rule the operator marked auto may answer an eligible
+newly raised agent request that names it exactly; other corpus matches leave
+the request open.
 Separately, [ORB-21097] shipped default-off, operator-enabled category assistance
 through the `model` actor
 ([precedent-decision scope](../_archived/decision-assistance/specs/precedent-decisions.md));
