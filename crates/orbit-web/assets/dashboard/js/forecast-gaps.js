@@ -30,10 +30,15 @@ function boundedGapCheckHint(forecast) {
   const gap = forecastBoundedGap(forecast);
   const population = "This count does not say which tasks entered the simulation or supplied its estimates.";
   if (gap) {
-    const subsetTasks = Number.isSafeInteger(forecast?.schedulable_subset?.tasks) && forecast.schedulable_subset.tasks >= 0
-      ? forecast.schedulable_subset.tasks
+    const subset = forecast?.schedulable_subset;
+    const hasSubset = subset != null;
+    const subsetTasks = Number.isSafeInteger(subset?.tasks) && subset.tasks >= 0 ? subset.tasks : null;
+    const simulationTasks = Number.isSafeInteger(forecast?.drain_tasks) && forecast.drain_tasks >= 0
+      ? forecast.drain_tasks
       : Number.isSafeInteger(forecast?.tasks) && forecast.tasks >= 0 ? forecast.tasks : null;
-    const scope = subsetTasks == null ? "In the simulation" : `In the ${subsetTasks}-task simulated subset`;
+    const scope = hasSubset
+      ? subsetTasks == null ? "In the simulated subset" : `In the ${subsetTasks}-task simulated subset`
+      : simulationTasks == null ? "In the simulation" : `In the ${simulationTasks}-task simulation`;
     return `${population} ${scope}, ${gap.detail}`;
   }
   const maxShare = num(forecast?.regression_rework?.support?.max_bounded_gap_share ?? forecastView.payload.inputs?.regression_rework?.max_bounded_gap_share);
