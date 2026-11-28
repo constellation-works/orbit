@@ -155,7 +155,7 @@ pub struct PageAction {
 pub struct PageActionRun {
     pub namespace: String,
     pub page: String,
-    pub tool: String,
+    pub tool: Option<String>,
     pub input: Value,
     pub confirmation: Result<(), String>,
     /// The web session the request arrived on, recorded on its audit row and
@@ -169,12 +169,16 @@ impl PageActionRun {
     /// The governed operation an action requires, and its audit row, which
     /// is written for every request, refused or run.
     pub(super) fn operation(&self) -> Operation {
+        let mut arguments = json!({"page": self.page});
+        if let Some(tool) = &self.tool {
+            arguments["tool"] = json!(tool);
+        }
         Operation::dashboard_read("plugin", "page-action")
             .requires(&DASHBOARD_PLUGIN_PAGE_ACTION)
             .dashboard_row(
                 &DASHBOARD_PLUGIN_PAGE_ACTION,
                 self.namespace.clone(),
-                json!({"page": self.page, "tool": self.tool}),
+                arguments,
                 DashboardOrigin {
                     host: self.host.clone(),
                     session: self.session.clone(),
@@ -333,6 +337,11 @@ pub(super) fn run_page_action(core: &Core, run: PageActionRun) -> Result<Value, 
         ..
     } = run;
     confirmation.map_err(OrbitError::PolicyDenied)?;
+    let Some(tool) = tool else {
+        return Err(OrbitError::InvalidInput(
+            "a page action names its `tool`".to_string(),
+        ));
+    };
     let action = check_page_action(core, &namespace, &page, &tool, input)?;
     core.runtime().run_tool_command_with_session(
         &action.tool,
