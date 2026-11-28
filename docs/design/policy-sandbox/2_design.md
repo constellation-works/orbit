@@ -345,8 +345,8 @@ global restriction is active, and repeating the copy-and-load sequence restores 
 Do not disable
 `kernel.apparmor_restrict_unprivileged_userns` globally or install a broad unconfined profile:
 those changes expand the user-namespace attack surface beyond Bubblewrap. Do not set
-`allow_fallback: true` to hide a failed probe, because that bypasses the fail-closed OS boundary
-and runs the provider without `linux-bwrap`.
+`allow_fallback: true` to hide a failed probe: it runs the provider without `linux-bwrap`,
+which [refuse, not degrade](../../principles/refuse-not-degrade.md) rules out.
 
 This subsection records the shipped Linux behavior from [ORB-10552] and the Ubuntu host rescue
 documented by [ORB-10556] (which also cites the [ORB-10553] rescue context). No sandbox design decision changed, and this operational remediation

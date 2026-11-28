@@ -32,9 +32,8 @@ outcome.
 ## Migration
 
 Each retired declaration is recognized, so it is either accepted as inert or
-refused with an actionable message. Nothing is silently reinterpreted:
-remapping `http` onto the CLI agent would change which runtime executes the
-work without saying so.
+refused with an actionable message. Nothing is silently reinterpreted; the
+reason is in [refuse, not degrade](../../../principles/refuse-not-degrade.md).
 
 | Declaration | `cli` | `http` / `auto` |
 |---|---|---|
