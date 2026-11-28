@@ -37,7 +37,9 @@ instruction = "docs/agents/pilot-review-focus.md"
 - **The tables layer like tag instructions.** A workspace table replaces the global one of the
   same label. `instruction = false` in a workspace switches off a note the global config
   defines.
-- Unset by default: a workspace with no table gets today's pilot, byte for byte.
+- Unset by default: a workspace with no table gets no `Pilot notes` section and no audit event.
+  The activity's output schema has `notes` for every workspace, and a pilot given no note
+  returns none ([§8](#8-acceptance)).
 
 ## 2. The pilot's prompt
 
