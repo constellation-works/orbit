@@ -196,7 +196,7 @@ Confirm the selected workspace before you act.
 | **[Analytics](#analytics)** | How delivery is trending: **Metrics**, **Reliability**, **Codebase**, **Resources**, **Forecast**, **Cost**, **[Agents](#agents)**, and **Experiments**. |
 | **[Automation](#automation)** | **Routines** (with the host scheduler clock), **Auto-tasks**, and **Scripts**. |
 | **Knowledge** | **Frictions** (friction records). |
-| **[Plugins](#plugins)** | Installed plugins and the panels they add. |
+| **[Plugins](#plugins)** | Installed plugins, their panels, and declared local pages. |
 | **[Fleet](#fleet)** | Registered hosts with their health, drains, and provider capacity. |
 | **[Settings](#settings)** | Workflow, Execution, Review, Crews, Machine, and Other. |
 
@@ -921,9 +921,13 @@ see [Report and triage friction](/how-to/friction/).
 ## Plugins
 
 **Plugins** lists the plugins installed on the selected host and how the
-selected workspace uses them. Open it when a tool or panel is missing, or to
-switch a plugin on or off. Installing, upgrading, removing, and editing
-grants stay on the command line; see
+selected workspace uses them. Open **Installed** when a tool or panel is
+missing, or to switch a plugin on or off. For an active plugin, each declared
+local page appears in a tab beside **Installed**; select the tab, or its page
+tile on the Installed card, to open it. The page runs its plugin-authored
+JavaScript in a sandboxed frame when the page is active. Panels remain generic
+views of tool data.
+Installing, upgrading, removing, and editing grants stay on the command line; see
 [Install and grant plugins](/how-to/plugins/).
 
 | Status | Meaning |
@@ -940,7 +944,14 @@ grants stay on the command line; see
 | **certified for** `<version>` | `orbit plugin test` passed for that Orbit version on this host. **· behind host** means the certificate is older than this host's Orbit. |
 | A dimmed tool chip | The tool is not active: the plugin is not serving tools, or a grant it needs is missing. See [Diagnose inactive tools](/how-to/plugins/#diagnose-inactive-tools). |
 
-Panels and link tiles appear only while the status is `active`.
+Panels and link tiles appear only while the status is `active`. A declared
+page with an inactive page state still appears in the tab bar and has an
+inactive badge on its Installed card. Opening it shows a diagnostic card
+instead of loading the page. If the plugin is disabled, its Installed card
+shows that status; opening one of its page tiles shows that the page is not
+served and gives the host or workspace step to enable it. An inactive plugin
+or page shows its diagnostic and, when the diagnostic has no command, a
+suggested inspection or reinstall step.
 
 ### Enable or disable a plugin
 
