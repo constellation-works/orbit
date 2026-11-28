@@ -59,9 +59,11 @@ impl PilotRequest {
             runtime.validate_task_pilot_base_branch(branch)?;
         }
         // Refuse the whole explicit selection before submitting a run. Prepare
-        // repeats this check against current state for every other caller and
-        // for status changes after this read. Mixed stored crews are submitted
-        // as separate, homogeneous runs so no unanimous run fails at startup.
+        // does not refuse on status: a direct pipeline caller, or a status
+        // change after this read, has each non-assessable task skipped as a
+        // `status_not_eligible` exclusion while its eligible siblings proceed.
+        // Mixed stored crews are submitted as separate, homogeneous runs so no
+        // unanimous run fails at startup.
         let mut unsupported = Vec::new();
         let mut by_crew: Vec<(Option<String>, Vec<String>)> = Vec::new();
         for task_id in &self.task_ids {
