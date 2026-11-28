@@ -382,6 +382,12 @@ pub(crate) fn router(state: crate::state::DashboardState) -> Router<crate::state
             "/plugins/{namespace}/pages/{page}/",
             get(plugins::read_page),
         )
+        // The same page's parts as data, so another host's dashboard can
+        // write the document under its own policy [plugin-pages §5].
+        .route(
+            "/plugins/{namespace}/pages/{page}/parts",
+            get(plugins::read_page_parts),
+        )
         .route(
             "/plugins/{namespace}/pages/{page}/call",
             post(plugins::call_page),

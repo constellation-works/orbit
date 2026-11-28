@@ -19,7 +19,7 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Experiments](./experiments/1_overview.md) | The horizon decision-channel step remains unfiled | claude |
 | [Model Ranking](./model-ranking/1_overview.md) | R4 has no open task (ORB-23305 rejected): file the freeze and 4-week shadow run | claude |
 | [Operations as Data](./operations-as-data/1_overview.md) | Restore ORB-15934 after 2026-11-12 to refuse unknown fields | claude |
-| [Plugin Pages](./plugin-pages/1_overview.md) | Show another host's pages through the forwarder [ORB-29538] | claude |
+| [Plugin Pages](./plugin-pages/1_overview.md) | First pages: a Formation page and a Scribe page, each designed in its own repository | claude |
 | [Resident Orchestrator](./resident-orchestrator/1_overview.md) | Re-file slice 10 pilot (ORB-21251 archived) once mandate, authority grant & manager are ready | claude |
 | [Script Steps](./script-steps/1_overview.md) | File the explicit script_grant raise surface for orbit-office proposals (phase 4 part; unfiled) | claude |
 | [Standing Drain](./standing-drain/1_overview.md) | Phases 1 (intent and surfaces) and 2 (the opt-in keeper) are built; enabling the keeper is Daniel's; next is the deploy hold, ORB-25992 | claude |

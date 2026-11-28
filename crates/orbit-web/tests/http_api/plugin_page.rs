@@ -849,3 +849,115 @@ fn a_page_runs_only_its_declared_read_only_tools_within_its_bounds() {
         },
     );
 }
+
+fn parts_path(namespace: &str, page: &str) -> String {
+    format!("/api/plugins/{namespace}/pages/{page}/parts?{WS}")
+}
+
+fn parts_not_found(server: &Server, path: &str, reason: &str) {
+    let response = server.get(path);
+    let status = response.status().as_u16();
+    let body = response.text().unwrap();
+    assert_eq!(status, 404, "{path}: {body}");
+    assert!(body.contains(reason), "{path} names `{reason}`: {body}");
+}
+
+/// The parts route another host's dashboard writes a page from
+/// (plugin-pages design §5): an active page's bytes in manifest order and
+/// its kit version, and the document route's 404s for an unknown, inactive
+/// or disabled page. Coverage admitted by the owner's exception in
+/// `docs/design/plugin-pages/4_decisions.md`.
+#[test]
+fn the_parts_route_returns_an_active_pages_parts_in_manifest_order() {
+    isolated(
+        "plugin_page::the_parts_route_returns_an_active_pages_parts_in_manifest_order",
+        || {
+            let fixture = Fixture::new();
+            install(&fixture, "pages", PAGES);
+            let server = fixture.server(false);
+            let decode = |value: &Value| {
+                String::from_utf8(
+                    base64::engine::general_purpose::STANDARD
+                        .decode(value.as_str().unwrap())
+                        .unwrap(),
+                )
+                .unwrap()
+            };
+
+            let response = server.get(&parts_path("pages", "overview"));
+            assert_eq!(response.status().as_u16(), 200);
+            assert!(header(&response, "content-type").starts_with("application/json"));
+            assert_eq!(header(&response, "cache-control"), "no-store");
+            let parts: Value = response.json().unwrap();
+            assert_eq!(parts["encoding"], "base64");
+            assert_eq!(parts["kit"], 1);
+            assert_eq!(decode(&parts["markup"]), MARKUP);
+            let files = |key: &str| -> Vec<(String, String)> {
+                parts[key]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|file| {
+                        (
+                            file["name"].as_str().unwrap().to_string(),
+                            decode(&file["content"]),
+                        )
+                    })
+                    .collect()
+            };
+            assert_eq!(
+                files("scripts"),
+                [
+                    ("app.js".to_string(), APP_JS.to_string()),
+                    ("mod.mjs".to_string(), MOD_MJS.to_string())
+                ]
+            );
+            assert_eq!(
+                files("styles"),
+                [("app.css".to_string(), APP_CSS.to_string())]
+            );
+            assert!(
+                !parts.to_string().contains(KIT_SCRIPT_MARK),
+                "the kit is the writer's"
+            );
+
+            let plain: Value = json_ok(server.get(&parts_path("pages", "plain")));
+            assert_eq!(plain["kit"], Value::Null);
+            assert_eq!(plain["styles"], json!([]));
+
+            parts_not_found(
+                &server,
+                &parts_path("pages", "missing"),
+                "declares no page 'missing'",
+            );
+            parts_not_found(
+                &server,
+                &parts_path("absent", "overview"),
+                "is not active on this host",
+            );
+            drop(server);
+
+            // Inactive: a page file edited after install fails its digest.
+            let installed = plugin::show_plugin(&fixture.runtime, "pages").unwrap();
+            let app = Path::new(&installed.install_path).join("web/overview/app.js");
+            fs::write(&app, "window.tampered = 1;").unwrap();
+            let server = fixture.server(false);
+            parts_not_found(&server, &parts_path("pages", "overview"), "recorded");
+            assert_eq!(
+                server.get(&parts_path("pages", "plain")).status().as_u16(),
+                200
+            );
+            drop(server);
+            fs::write(&app, APP_JS).unwrap();
+
+            // Disabled for the workspace.
+            plugin::disable_plugin_in_workspace(&fixture.runtime, "pages").unwrap();
+            let server = fixture.server(false);
+            parts_not_found(
+                &server,
+                &parts_path("pages", "plain"),
+                "disabled in this workspace",
+            );
+        },
+    );
+}

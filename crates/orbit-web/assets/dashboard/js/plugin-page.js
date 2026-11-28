@@ -7,7 +7,9 @@
 // activeFrame.contentWindow`, forwards declared tool calls to
 // `POST /api/plugins/<ns>/pages/<page>/call` without client-side filtering,
 // sends the init context on load, reloads on workspace or host change, and
-// updates the hash query in place when the page asks.
+// updates the hash query in place when the page asks. With another host
+// selected, the frame and call URLs go through `/api/on/<host>/…`, and this
+// dashboard writes that host's page from its parts (§5).
 //
 // An action (`{act: tool, input}`) is a mutating tool the page names under
 // `actions`. The relay asks the server to check it and issue a one-time
@@ -23,6 +25,7 @@ import {
   currentHostToken,
   el,
   escCloseButton,
+  getHost,
   getWorkspaceRevision,
   hostWriteRefusal,
   isAggregateView,
@@ -203,7 +206,12 @@ function renderStrip(plugin, namespace) {
   if (!strip) return;
   const label = plugin?.name || namespace || "Plugin";
   const version = plugin?.version ? `v${plugin.version}` : null;
-  const signature = `${label}\0${version || ""}`;
+  // Another host's page loads through the forward, but its calls are POSTs
+  // the forward refuses without the operator session (design §10).
+  const callsRefused = getHost() && hostWriteRefusal()
+    ? "Calls are refused: a page on another host needs an operator dashboard."
+    : "";
+  const signature = `${label}\0${version || ""}\0${callsRefused}`;
   if (signature === lastStripSignature && strip.childElementCount) return;
   lastStripSignature = signature;
   const reload = el("button", {
@@ -216,6 +224,7 @@ function renderStrip(plugin, namespace) {
   const identity = el("div", { class: "plugin-page-identity" }, [
     el("span", { class: "plugin-page-name", text: label }),
     version ? el("span", { class: "plugin-page-version", text: version }) : null,
+    callsRefused ? el("span", { class: "plugin-page-note", text: callsRefused }) : null,
   ].filter(Boolean));
   strip.replaceChildren(identity, reload);
 }

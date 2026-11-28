@@ -267,6 +267,14 @@
   flex: 0 0 auto;
   white-space: nowrap;
 }
+.plugin-page-note {
+  color: var(--fg-mute);
+  font-size: var(--text-xs);
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .plugin-page-reload { flex: 0 0 auto; }
 .plugin-page-panel > .plugin-page-body {
   display: flex;

@@ -8,13 +8,16 @@
 //! does not list are never opened.
 
 use orbit_types::identity::lower_hex;
-use orbit_types::plugin::{PAGE_INDEX_FILE, PluginWebPage};
+use orbit_types::plugin::{
+    MAX_PAGE_BYTES, PAGE_INDEX_FILE, PAGE_MARKUP_REFUSED, PAGE_SCRIPT_REFUSED, PAGE_STYLE_REFUSED,
+    PluginWebPage, find_page_refused,
+};
 
 use super::*;
 
 /// The most bytes one page may hold: `index.html` plus every listed script
 /// and style, as read from disk (2 MiB).
-pub const MAX_PLUGIN_PAGE_BYTES: u64 = 2 * 1024 * 1024;
+pub const MAX_PLUGIN_PAGE_BYTES: u64 = MAX_PAGE_BYTES;
 
 /// Why one page cannot be written out. Every message names the page; the
 /// strict loader reports it as the refusal of the plugin, and the serving
@@ -299,7 +302,7 @@ fn load_page_bundle(
         &mut seen,
         &mut total,
     )?;
-    if let Some(element) = find_any_ascii_ci(&markup, &["<script", "<link"]) {
+    if let Some(element) = find_page_refused(&markup, PAGE_MARKUP_REFUSED) {
         return Err(PluginPageError::MarkupElement {
             page: id.clone(),
             element: element.to_string(),
@@ -309,7 +312,7 @@ fn load_page_bundle(
     for name in &page.scripts {
         let name = name.trim();
         let bytes = read_page_file(root, &page_root, page, name, &mut seen, &mut total)?;
-        if let Some(found) = find_any_ascii_ci(&bytes, &["</script", "<!--"]) {
+        if let Some(found) = find_page_refused(&bytes, PAGE_SCRIPT_REFUSED) {
             return Err(PluginPageError::ScriptEndsEarly {
                 page: id.clone(),
                 file: name.to_string(),
@@ -325,7 +328,7 @@ fn load_page_bundle(
     for name in &page.styles {
         let name = name.trim();
         let bytes = read_page_file(root, &page_root, page, name, &mut seen, &mut total)?;
-        if let Some(found) = find_any_ascii_ci(&bytes, &["</style"]) {
+        if let Some(found) = find_page_refused(&bytes, PAGE_STYLE_REFUSED) {
             return Err(PluginPageError::StyleEndsEarly {
                 page: id.clone(),
                 file: name.to_string(),
@@ -435,16 +438,6 @@ fn read_page_file(
         });
     }
     Ok(bytes)
-}
-
-/// The first needle found in `haystack`, compared without ASCII case.
-fn find_any_ascii_ci<'a>(haystack: &[u8], needles: &[&'a str]) -> Option<&'a str> {
-    needles.iter().copied().find(|needle| {
-        let needle = needle.as_bytes();
-        haystack
-            .windows(needle.len())
-            .any(|window| window.eq_ignore_ascii_case(needle))
-    })
 }
 
 /// Name the page whose root holds a refused symbolic link, when one does.

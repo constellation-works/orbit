@@ -30,6 +30,22 @@ pub const PAGE_SCRIPT_EXTENSIONS: &[&str] = &[".js", ".mjs"];
 /// The file name ending a page style must have.
 pub const PAGE_STYLE_EXTENSION: &str = ".css";
 
+/// The most bytes one page may hold: `index.html` plus every listed script
+/// and style (2 MiB).
+pub const MAX_PAGE_BYTES: u64 = 2 * 1024 * 1024;
+
+/// Text a page's markup may not hold, compared without ASCII case: Orbit
+/// writes the page's scripts and styles itself.
+pub const PAGE_MARKUP_REFUSED: &[&str] = &["<script", "<link"];
+
+/// Text a page script may not hold, compared without ASCII case: either
+/// would end its `script` element early.
+pub const PAGE_SCRIPT_REFUSED: &[&str] = &["</script", "<!--"];
+
+/// Text a page style may not hold, compared without ASCII case: it would
+/// end its `style` element early.
+pub const PAGE_STYLE_REFUSED: &[&str] = &["</style"];
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PluginWebSection {
@@ -179,4 +195,16 @@ impl PluginWebPage {
             &self.title
         }
     }
+}
+
+/// The first of `needles` found in `haystack`, compared without ASCII case.
+/// The one matcher every page-part check uses, for a local page's files and
+/// another host's parts alike.
+pub fn find_page_refused<'a>(haystack: &[u8], needles: &[&'a str]) -> Option<&'a str> {
+    needles.iter().copied().find(|needle| {
+        let needle = needle.as_bytes();
+        haystack
+            .windows(needle.len())
+            .any(|window| window.eq_ignore_ascii_case(needle))
+    })
 }
