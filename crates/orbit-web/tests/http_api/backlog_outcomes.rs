@@ -8,6 +8,7 @@ use orbit_core::test_support::fixture_store::contract::StoredBacklogForecast;
 use orbit_core::test_support::fixture_store::contract::{
     InvocationInsertParams, TaskHistoryUpdateParams,
 };
+use orbit_core::unit::backlog_forecast::{backlog_forecasts, record_backlog_forecast};
 use orbit_types::task::{TaskComment, TaskComplexity, TaskEnvelopeV2, TaskEventRowV2, TaskStatus};
 use orbit_types::telemetry::{InvocationTrace, TokenUsage};
 use serde_json::{Value, json};
@@ -345,22 +346,19 @@ fn abandoned_and_blocked_tasks_do_not_corrupt_settled_actuals() {
                     .map(|id| json!({"id": id, "complexity": "medium", "forecast": {"hours": quantiles}}))
                     .collect();
                 assert!(
-                    fixture
-                        .runtime
-                        .record_backlog_forecast(
-                            StoredBacklogForecast {
-                                workspace_id: String::new(),
-                                forecast_at: done_at
-                                    - Duration::hours(1)
-                                    - Duration::minutes(minutes),
-                                model_version: version,
-                                inputs_json: "{}".into(),
-                                result_json: json!({"time_to_drain_hours": quantiles}).to_string(),
-                                tasks_json: Value::Array(tasks).to_string(),
-                            },
-                            Duration::minutes(1),
-                        )
-                        .unwrap()
+                    record_backlog_forecast(
+                        &fixture.runtime,
+                        StoredBacklogForecast {
+                            workspace_id: String::new(),
+                            forecast_at: done_at - Duration::hours(1) - Duration::minutes(minutes),
+                            model_version: version,
+                            inputs_json: "{}".into(),
+                            result_json: json!({"time_to_drain_hours": quantiles}).to_string(),
+                            tasks_json: Value::Array(tasks).to_string(),
+                        },
+                        Duration::minutes(1),
+                    )
+                    .unwrap()
                 );
             };
             store(4, 180, &[&delivered, &rejected]);
@@ -450,17 +448,23 @@ fn whole_forecast_baseline_scores_without_filling_withheld_adjusted_totals() {
                 "usd": {"p50": 2.0, "p90": 2.0},
             });
             let store = |when, result: Value| {
-                assert!(fixture.runtime.record_backlog_forecast(
-                    StoredBacklogForecast {
-                        workspace_id: String::new(),
-                        forecast_at: when,
-                        model_version: version,
-                        inputs_json: "{}".into(),
-                        result_json: result.to_string(),
-                        tasks_json: json!([{"id": delivered, "complexity": "medium", "forecast": {}}]).to_string(),
-                    },
-                    Duration::minutes(1),
-                ).unwrap());
+                assert!(
+                    record_backlog_forecast(
+                        &fixture.runtime,
+                        StoredBacklogForecast {
+                            workspace_id: String::new(),
+                            forecast_at: when,
+                            model_version: version,
+                            inputs_json: "{}".into(),
+                            result_json: result.to_string(),
+                            tasks_json:
+                                json!([{"id": delivered, "complexity": "medium", "forecast": {}}])
+                                    .to_string(),
+                        },
+                        Duration::minutes(1),
+                    )
+                    .unwrap()
+                );
             };
             store(
                 at - Duration::hours(2),
@@ -1028,7 +1032,7 @@ fn stored_task_forecasts_count_failed_attempts_and_score_like_measures() {
             let cohort = &response["forecast"];
             assert_eq!(cohort["tasks"], 1, "{response}");
             let simulated = prediction(&response, &queued);
-            let stored = fixture.runtime.backlog_forecasts(1).unwrap().remove(0);
+            let stored = backlog_forecasts(&fixture.runtime, 1).unwrap().remove(0);
             assert_eq!(stored.model_version, 24);
             let tasks: Value = serde_json::from_str(&stored.tasks_json).unwrap();
             let task = &tasks[0]["forecast"];
@@ -1084,20 +1088,19 @@ fn stored_task_forecasts_count_failed_attempts_and_score_like_measures() {
             ] {
                 let tasks = json!([{"id": retried, "complexity": "medium", "forecast": forecast}]);
                 assert!(
-                    fixture
-                        .runtime
-                        .record_backlog_forecast(
-                            StoredBacklogForecast {
-                                workspace_id: String::new(),
-                                forecast_at: forecast_at - Duration::minutes(minutes),
-                                model_version: version,
-                                inputs_json: "{}".into(),
-                                result_json: "{}".into(),
-                                tasks_json: tasks.to_string(),
-                            },
-                            Duration::minutes(1),
-                        )
-                        .unwrap()
+                    record_backlog_forecast(
+                        &fixture.runtime,
+                        StoredBacklogForecast {
+                            workspace_id: String::new(),
+                            forecast_at: forecast_at - Duration::minutes(minutes),
+                            model_version: version,
+                            inputs_json: "{}".into(),
+                            result_json: "{}".into(),
+                            tasks_json: tasks.to_string(),
+                        },
+                        Duration::minutes(1),
+                    )
+                    .unwrap()
                 );
             }
             let calibration = &json_ok(fixture.server(false).get(ENDPOINT))["calibration"];
@@ -1259,20 +1262,19 @@ fn mature_model10_cohort_keeps_retry_slot_hours_outside_the_sample_window() {
                     "forecast": forecast,
                 }]);
                 assert!(
-                    fixture
-                        .runtime
-                        .record_backlog_forecast(
-                            StoredBacklogForecast {
-                                workspace_id: String::new(),
-                                forecast_at: at,
-                                model_version: version,
-                                inputs_json: "{}".into(),
-                                result_json: "{}".into(),
-                                tasks_json: tasks.to_string(),
-                            },
-                            Duration::minutes(1),
-                        )
-                        .unwrap(),
+                    record_backlog_forecast(
+                        &fixture.runtime,
+                        StoredBacklogForecast {
+                            workspace_id: String::new(),
+                            forecast_at: at,
+                            model_version: version,
+                            inputs_json: "{}".into(),
+                            result_json: "{}".into(),
+                            tasks_json: tasks.to_string(),
+                        },
+                        Duration::minutes(1),
+                    )
+                    .unwrap(),
                     "model {version} snapshot was not stored"
                 );
             }
@@ -1376,21 +1378,20 @@ fn calibrated_origin_with_unmeasured_fix(
         "usd": {"p50": 0.5, "p90": 2.0},
     });
     assert!(
-        fixture
-            .runtime
-            .record_backlog_forecast(
-                StoredBacklogForecast {
-                    workspace_id: String::new(),
-                    forecast_at: at - Duration::hours(2),
-                    model_version: version,
-                    inputs_json: "{}".into(),
-                    result_json: quantiles.to_string(),
-                    tasks_json: json!([{"id": origin, "complexity": "medium", "forecast": {}}])
-                        .to_string(),
-                },
-                Duration::minutes(1),
-            )
-            .unwrap()
+        record_backlog_forecast(
+            &fixture.runtime,
+            StoredBacklogForecast {
+                workspace_id: String::new(),
+                forecast_at: at - Duration::hours(2),
+                model_version: version,
+                inputs_json: "{}".into(),
+                result_json: quantiles.to_string(),
+                tasks_json: json!([{"id": origin, "complexity": "medium", "forecast": {}}])
+                    .to_string(),
+            },
+            Duration::minutes(1),
+        )
+        .unwrap()
     );
     forecast(&fixture)["calibration"].clone()
 }

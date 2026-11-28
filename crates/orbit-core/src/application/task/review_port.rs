@@ -17,7 +17,7 @@ use serde_json::Value;
 use super::HandoffPullRequest;
 
 /// The review-evidence operations task code calls, implemented by `review`.
-pub(in crate::application) trait TaskReviewPort {
+pub(crate) trait TaskReviewPort {
     /// The current effective review admission, before any per-run request.
     fn forecast_review_admission(&self) -> Result<ReviewAdmission, OrbitError>;
 

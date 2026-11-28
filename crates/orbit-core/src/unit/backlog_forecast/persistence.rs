@@ -25,7 +25,7 @@ pub(super) fn stored_forecast_response(
     runtime: &OrbitRuntime,
     now: DateTime<Utc>,
 ) -> Result<Option<Value>, OrbitError> {
-    let Some(latest) = runtime.backlog_forecasts(1)?.into_iter().next() else {
+    let Some(latest) = super::backlog_forecasts(runtime, 1)?.into_iter().next() else {
         return Ok(None);
     };
     if latest.model_version != model::MODEL_VERSION
@@ -185,7 +185,11 @@ pub(super) fn persist_forecast(
             )?;
             result[SNAPSHOT_KEY] = response.clone();
             row.result_json = result.to_string();
-            match runtime.record_backlog_forecast(row, Duration::minutes(STORE_INTERVAL_MINUTES)) {
+            match super::record_backlog_forecast(
+                runtime,
+                row,
+                Duration::minutes(STORE_INTERVAL_MINUTES),
+            ) {
                 Ok(true) => return Ok(response),
                 Ok(false) => stored_now = Some(false),
                 Err(error) => tracing::warn!(%error, "backlog forecast: not stored"),

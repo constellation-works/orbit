@@ -205,7 +205,15 @@ dashboard_reads! {
         arrivals: Option<&'a str>,
         refresh: bool,
     ) -> Value = "backlog-forecast",
-        |rt| rt.serve_backlog_forecast(history, concurrency, arrivals, refresh);
+        |rt| {
+            crate::unit::backlog_forecast::serve_backlog_forecast(
+                rt,
+                history,
+                concurrency,
+                arrivals,
+                refresh,
+            )
+        };
     /// When each terminal task reached its terminal status.
     task_terminal_dates(since: Option<DateTime<Utc>>) -> TerminalTaskDates = "task-terminal-dates",
         |rt| rt.task_terminal_dates(since);

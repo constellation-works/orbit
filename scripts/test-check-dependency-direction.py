@@ -517,7 +517,7 @@ class RelativeImportTests(unittest.TestCase):
         # Each owner defines its own name, so a row's call is reported only when
         # the guard derives that owner's inherent names.
         owners = ("automation", "job", "review", "distributed", "pull_drain",
-                  "admission", "backlog_forecast", "workspace_auto")
+                  "admission", "workspace_auto")
         self.check_rows(
             [("task/worker.rs",
               "impl OrbitRuntime {\n    pub(crate) fn drive_task(&self) {\n"
@@ -658,37 +658,31 @@ class RelativeImportTests(unittest.TestCase):
         }, rejected=False)
 
     def test_lower_modules_cannot_reach_the_forecast(self):
-        lowers = ("job", "automation", "review", "distributed", "pull_drain",
-                  "admission", "workspace_auto")
-        self.check_rows(
-            [(f"{lower}/probe.rs",
-              "impl OrbitRuntime {\n    pub(crate) fn probe(&self) {\n"
-              "        self.fresh_forecast_method();\n    }\n}\n") for lower in lowers],
-            rejected=True,
-            shared={"backlog_forecast/runtime.rs":
-                    "impl OrbitRuntime {\n    pub(crate) fn fresh_forecast_method(&self) {}\n}\n"})
-        self.check_rows(
-            [(f"{lower}/probe.rs", "use crate::application::backlog_forecast::Probe;\n")
-             for lower in lowers],
-            rejected=True)
+        lowers = ("contracts", "task", "job", "automation", "review", "distributed",
+                  "pull_drain", "admission", "workspace_auto")
+        self.check_rows([
+            row for lower in lowers for row in (
+                (f"{lower}/probe.rs", "use crate::unit::backlog_forecast::Probe;\n"),
+                (f"{lower}/deep/probe.rs",
+                 "fn probe(rt: &OrbitRuntime) {\n"
+                 "    crate::unit::backlog_forecast::backlog_forecasts(rt, 1);\n}\n"),
+                (f"{lower}/probe.rs", "use crate::unit::{\n    backlog_forecast::Probe,\n};\n"),
+                (f"{lower}/probe.rs",
+                 "use super::super::super::unit::backlog_forecast::Probe;\n"),
+            )
+        ], rejected=True)
 
     def test_task_cannot_name_the_forecast(self):
-        shim = ("pub use crate::application::backlog_forecast::BacklogForecastHistory;\n"
-                "pub use crate::application::backlog_forecast::COMPUTE_BUDGET_ENV;\n")
-        # One batch per detector in the task chain (direct paths, grouped
-        # trees, super chains): the guard stops at the first detector with a
-        # hit, so a mixed batch could hide a row behind an earlier detector.
+        shim = ("pub use crate::unit::backlog_forecast::BacklogForecastHistory;\n"
+                "pub use crate::unit::backlog_forecast::COMPUTE_BUDGET_ENV;\n")
         # The retired task/mod.rs re-exports are no longer an exception.
         self.check_files({"task/mod.rs": shim}, rejected=True)
         self.check_rows([
-            ("task/mod.rs", "pub use crate::application::backlog_forecast::Options;\n"),
+            ("task/mod.rs", "pub use crate::unit::backlog_forecast::Options;\n"),
             ("task/worker.rs", shim),
-        ], rejected=True)
-        self.check_rows([
-            ("task/mod.rs", "use crate::application::{backlog_forecast::BacklogForecastHistory};\n"),
-        ], rejected=True)
-        self.check_rows([
-            ("task/mod.rs", "pub use super::backlog_forecast::BacklogForecastHistory;\n"),
+            ("task/grouped.rs", "use crate::unit::{backlog_forecast::BacklogForecastHistory};\n"),
+            ("task/chain.rs",
+             "pub use super::super::super::unit::backlog_forecast::BacklogForecastHistory;\n"),
         ], rejected=True)
 
     def test_forecast_codebase_edge_is_exactly_the_authorized_call(self):
@@ -698,21 +692,21 @@ class RelativeImportTests(unittest.TestCase):
                    "    let risk_model = crate::app::codebase::task_riskiness_model(runtime)?;\n}\n")
         self.check_files({
             "app/codebase/risk.rs": codebase,
-            "application/backlog_forecast/assembly.rs": allowed,
+            "unit/backlog_forecast/assembly.rs": allowed,
         }, rejected=False, base=core_src)
         for relative, source in (
-            ("application/backlog_forecast/assembly.rs",
+            ("unit/backlog_forecast/assembly.rs",
              "fn assemble(runtime: &OrbitRuntime) {\n"
              "    crate::app::codebase::other_codebase_function(runtime);\n}\n"),
-            ("application/backlog_forecast/projection.rs", allowed),
-            ("application/backlog_forecast/assembly.rs", "use crate::app::codebase::Probe;\n"),
-            ("application/backlog_forecast/assembly.rs",
+            ("unit/backlog_forecast/projection.rs", allowed),
+            ("unit/backlog_forecast/assembly.rs", "use crate::app::codebase::Probe;\n"),
+            ("unit/backlog_forecast/assembly.rs",
              "use crate::app::{codebase as risk};\n"),
-            ("application/backlog_forecast/assembly.rs",
+            ("unit/backlog_forecast/assembly.rs",
              "use super::super::super::app::codebase::Probe;\n"),
-            ("app/codebase/probe.rs", "use crate::application::backlog_forecast::Probe;\n"),
+            ("app/codebase/probe.rs", "use crate::unit::backlog_forecast::Probe;\n"),
             ("app/codebase/probe.rs",
-             "use super::super::super::application::{backlog_forecast::Probe};\n"),
+             "use super::super::super::unit::{backlog_forecast::Probe};\n"),
         ):
             with self.subTest(relative=relative, source=source):
                 self.check_files({"app/codebase/risk.rs": codebase, relative: source},
@@ -720,23 +714,23 @@ class RelativeImportTests(unittest.TestCase):
 
     def test_codebase_parent_module_aliases_are_rejected(self):
         core = self.root / "crates/orbit-core/src"
-        for module in ("backlog_forecast", "review", "task"):
+        for module in ("unit/backlog_forecast", "application/review", "application/task"):
             for source in (
                 "use crate::app as apps;\nuse apps::codebase::TaskRiskinessModel;\n",
                 "use crate::{app as apps};\nuse apps::{codebase::TaskRiskinessModel};\n",
                 "use crate::app as apps;\nuse apps as renamed;\nuse renamed::codebase::TaskRiskinessModel;\n",
             ):
                 with self.subTest(module=module, source=source):
-                    self.check_files({f"application/{module}/probe.rs": source},
+                    self.check_files({f"{module}/probe.rs": source},
                                      rejected=True, base=core)
         self.check_files({
-            "application/backlog_forecast/probe.rs":
+            "unit/backlog_forecast/probe.rs":
                 "use crate::app as apps;\nuse apps::port::Other;\n",
         }, rejected=False, base=core)
 
     def test_codebase_unaliased_parent_module_imports_are_rejected(self):
         core = self.root / "crates/orbit-core/src"
-        for module in ("backlog_forecast", "review", "task"):
+        for module in ("unit/backlog_forecast", "application/review", "application/task"):
             for source in (
                 "use crate::app;\nuse app::codebase::TaskRiskinessModel;\n",
                 "use crate::app::{self};\nuse app::codebase::TaskRiskinessModel;\n",
@@ -746,7 +740,7 @@ class RelativeImportTests(unittest.TestCase):
                 "use crate::app::{self as apps};\nuse apps::codebase::TaskRiskinessModel;\n",
             ):
                 with self.subTest(module=module, source=source):
-                    self.check_files({f"application/{module}/probe.rs": source},
+                    self.check_files({f"{module}/probe.rs": source},
                                      rejected=True, base=core)
         for source in (
             "use crate::app;\nuse app::port::Other;\n",
@@ -754,7 +748,7 @@ class RelativeImportTests(unittest.TestCase):
             "use crate::app::*;\nuse port::Other;\n",
         ):
             with self.subTest(source=source):
-                self.check_files({"application/backlog_forecast/probe.rs": source},
+                self.check_files({"unit/backlog_forecast/probe.rs": source},
                                  rejected=False, base=core)
 
     def test_parent_import_visibility_respects_lexical_scopes(self):
@@ -1133,7 +1127,7 @@ class RelativeImportTests(unittest.TestCase):
             "../app/routine/sweep.rs":
                 "use crate::app::auto_task::run;\n"
                 "use crate::application::automation::SourceCache;\n"
-                "use crate::application::backlog_forecast::record;\n",
+                "use crate::unit::backlog_forecast::record;\n",
         }, rejected=False)
 
     def test_resident_reaches_routine_status_only_through_its_port(self):
@@ -1241,7 +1235,7 @@ class RelativeImportTests(unittest.TestCase):
         }, rejected=False, base=core_src)
 
     def test_lower_modules_cannot_reach_sweep_filing(self):
-        modules = ("contracts", "task", "job", "review", "backlog_forecast")
+        modules = ("contracts", "task", "job", "review", "../unit/backlog_forecast")
         self.check_rows([
             row for module in modules for row in (
                 (f"{module}/probe.rs", "use crate::unit::sweep_filing::Probe;\n"),
@@ -1466,8 +1460,8 @@ class RelativeImportTests(unittest.TestCase):
         ("app/agent/probe.rs", 2, "experiment"),
         ("application/task/probe.rs", 3, "app::agent"),
         ("application/review/probe.rs", 3, "app::codebase"),
-        ("application/backlog_forecast/probe.rs", 3, "app::codebase"),
-        ("app/codebase/probe.rs", 3, "application::backlog_forecast"),
+        ("unit/backlog_forecast/probe.rs", 3, "app::codebase"),
+        ("app/codebase/probe.rs", 3, "unit::backlog_forecast"),
         # orbit-core bootstrap, composition and runtime layering.
         ("application/workspace/sync.rs", 3, "bootstrap"),
         ("adapter/tool_host/operation.rs", 3, "composition"),

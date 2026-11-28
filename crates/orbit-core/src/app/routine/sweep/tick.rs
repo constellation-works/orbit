@@ -771,7 +771,9 @@ fn run_post_scheduling_maintenance(
         deadline,
         skipped,
         Some("sweep.backlog_forecast_failed"),
-        |_, runtime| runtime.record_scheduled_backlog_forecast(now_utc),
+        |_, runtime| {
+            crate::unit::backlog_forecast::record_scheduled_backlog_forecast(runtime, now_utc)
+        },
     );
 
     // [ORB-14739, ORB-14823] Standing baseline-red holds are re-checked

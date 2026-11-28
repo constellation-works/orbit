@@ -35,7 +35,7 @@ SCAN_DIRECTORIES = (
     f"{CORE_APPLICATION}/pull_drain",
     f"{CORE_APPLICATION}/admission",
     f"{CORE_APPLICATION}/workspace_auto",
-    f"{CORE_APPLICATION}/backlog_forecast",
+    "crates/orbit-core/src/unit/backlog_forecast",
     "crates/orbit-core/src/app/codebase",
     "crates/orbit-core/src/app/resident",
     "crates/orbit-core/src/app/gc",

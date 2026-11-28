@@ -10,6 +10,7 @@ use orbit_core::application::task::TaskAddParams;
 use orbit_core::test_support::fixture_store;
 use orbit_core::test_support::fixture_store::contract::InvocationInsertParams;
 use orbit_core::test_support::fixture_store::contract::StoredBacklogForecast;
+use orbit_core::unit::backlog_forecast::record_backlog_forecast;
 use orbit_types::task::{TaskComplexity, TaskEventRowV2, TaskStatus};
 use orbit_types::telemetry::{InvocationTrace, TokenUsage};
 use serde_json::{Value, json};
@@ -176,20 +177,19 @@ fn failed_attempt(fixture: &Fixture, at: DateTime<Utc>) {
 
 fn record(fixture: &Fixture, at: chrono::DateTime<Utc>, version: u32, tasks: Vec<Value>) {
     assert!(
-        fixture
-            .runtime
-            .record_backlog_forecast(
-                StoredBacklogForecast {
-                    workspace_id: String::new(),
-                    forecast_at: at,
-                    model_version: version,
-                    inputs_json: "{}".into(),
-                    result_json: "{}".into(),
-                    tasks_json: Value::Array(tasks).to_string(),
-                },
-                Duration::zero(),
-            )
-            .unwrap(),
+        record_backlog_forecast(
+            &fixture.runtime,
+            StoredBacklogForecast {
+                workspace_id: String::new(),
+                forecast_at: at,
+                model_version: version,
+                inputs_json: "{}".into(),
+                result_json: "{}".into(),
+                tasks_json: Value::Array(tasks).to_string(),
+            },
+            Duration::zero(),
+        )
+        .unwrap(),
         "forecast at {at} version {version} was refused"
     );
 }

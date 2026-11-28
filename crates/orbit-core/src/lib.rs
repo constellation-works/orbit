@@ -124,12 +124,6 @@ pub mod test_support {
     pub use crate::application::automation::source::SOURCE_ELAPSED_ENV;
     pub use crate::application::automation::source::test_support::with_delivery_source_clock;
     pub use crate::application::automation::with_reset_probe_hook;
-    /// Replace the backlog forecast's wall-time budget for a scenario with
-    /// arrivals, in milliseconds, in an isolated test's server child.
-    pub use crate::application::backlog_forecast::COMPUTE_BUDGET_ENV as BACKLOG_FORECAST_COMPUTE_BUDGET_ENV;
-    /// Replace the backlog forecast's generated-node bound for a scenario
-    /// with arrivals, in an isolated test's server child.
-    pub use crate::application::backlog_forecast::MAX_GENERATED_ENV as BACKLOG_FORECAST_MAX_GENERATED_ENV;
     pub use crate::application::distributed::admission_checkpoint::{
         with_claim_settle_checkpoint, with_pull_admission_checkpoint,
     };
@@ -168,6 +162,13 @@ pub mod test_support {
     pub use crate::application::workspace_auto::with_reservation_release_failure;
     pub use crate::runtime::{
         with_host_load_sampling_wait, with_owner_read_retry_wait, with_pipeline_poll_wait,
+    };
+    /// Replace the backlog forecast's wall-time budget for a scenario with
+    /// arrivals, in milliseconds, or its generated-node bound, in an isolated
+    /// test's server child.
+    pub use crate::unit::backlog_forecast::{
+        COMPUTE_BUDGET_ENV as BACKLOG_FORECAST_COMPUTE_BUDGET_ENV,
+        MAX_GENERATED_ENV as BACKLOG_FORECAST_MAX_GENERATED_ENV,
     };
     pub use crate::unit::landing::with_landing_retry_reservation_hook;
     pub use crate::unit::managed_asset::with_auto_task_manifest_read_hook;
@@ -293,7 +294,6 @@ pub use orbit_common::OrbitError as Error;
 pub(crate) use app::routine::RoutineSeedIdentity;
 pub(crate) use app::search::{GlobalSearchKind, SearchRequest, SearchRequestProfile};
 pub(crate) use app::workspace::reconcile_workspace_managed_artifacts;
-pub(crate) use application::backlog_forecast::BacklogForecastHistory;
 pub(crate) use application::contracts::DrainEntryPoint;
 pub(crate) use application::distributed::WorkspacePullRequest;
 pub(crate) use application::job::{
@@ -316,6 +316,7 @@ pub(crate) use orbit_types::telemetry::incident::FailureIncidentReport;
 pub(crate) use orbit_types::workflow::{JobRun, JobRunState, JobRunStep};
 pub(crate) use runtime::OrbitRuntime;
 pub(crate) use runtime::engine::ResolvedCrewProjection;
+pub(crate) use unit::backlog_forecast::BacklogForecastHistory;
 
 use orbit_runtime::paths;
 
