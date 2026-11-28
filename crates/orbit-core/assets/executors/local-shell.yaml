@@ -24,9 +24,12 @@ spec:
   # profile's `read` list, plus default credential denies and any configured
   # agent-sandbox masks. Providers may re-allow credential paths they need.
   # Linux Bubblewrap enforces modify rules but not profile read rules,
-  # including `denyRead`. Only fixed credential and runtime-directory masks
-  # and explicit caller masks restrict host reads.
-  # Do not rely on Linux `denyRead` to protect other secrets. A backend that
+  # including `denyRead`. It replaces host /tmp, /dev and /proc with sandbox
+  # views, selectively mounts host paths at their planned destinations, and
+  # applies fixed credential and runtime-directory masks and explicit caller
+  # masks. Host files under /tmp stay hidden unless a mount restores them;
+  # other host paths stay readable outside those views and masks. Do not rely
+  # on Linux `denyRead` to protect other secrets. A backend that
   # does not match the host OS fails closed, even with `allow_fallback: true`.
   # When the matching backend's native primitive is unavailable (bwrap absent
   # or failing its probe, or sandbox-exec missing), the step fails unless

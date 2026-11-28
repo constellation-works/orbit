@@ -159,9 +159,15 @@ Orbit process inherited.
    with default credential denies and any configured agent-sandbox masks.
    Providers may re-allow credential paths they need. On Linux, Bubblewrap
    enforces modify rules but does not enforce profile read rules, including
-   `denyRead`: host reads remain available except for fixed credential and
-   runtime-directory masks and any explicit caller-provided masks. Do not rely
-   on `denyRead` to protect other secrets on Linux.
+   `denyRead`. It replaces host `/tmp`, `/dev` and `/proc` with sandbox views:
+   `/tmp` is a private tmpfs, and `/dev` and `/proc` are fresh namespace views.
+   The plan may selectively mount host paths into the sandbox at their planned
+   destinations, such as paths named by modify rules and Git metadata, and
+   applies fixed credential and runtime-directory masks and any explicit
+   caller-provided masks. Host paths
+   outside `/tmp`, `/dev` and `/proc` stay readable unless masked, and host
+   files under `/tmp` are hidden unless a mount restores them. Do not rely on
+   `denyRead` to protect other secrets on Linux.
 
    A declared backend that does not match the host OS fails closed, even when
    the definition sets `allow_fallback: true`: the step fails before anything
