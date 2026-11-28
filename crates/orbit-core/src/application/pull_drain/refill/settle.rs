@@ -335,7 +335,7 @@ impl Pass<'_, '_> {
         degraded: bool,
     ) -> Result<Value, DispatchError> {
         let sleep_seconds = self.sleep_seconds(gate, settled, &ledger);
-        self.warn_incomplete(&ledger);
+        self.warn_incomplete(&ledger, settled.done);
         let refusal = self.refusal_reason(gate, settled, &ledger);
         let owner_answer = match ledger.idle_receipt.as_deref() {
             Some(receipt) => OwnerAnswer::Idle(receipt),
@@ -378,18 +378,37 @@ impl Pass<'_, '_> {
                     format!("pull drain could not record pass health: {error}"),
                 )
             })?;
+        // A single-pass drain (including an owner repair-only pull) has no next
+        // iteration to retry on: ending with zero admissions and a pass error
+        // must fail the run rather than report success [ORB-29594].
+        if self.refill.single_pass
+            && window.open
+            && settled.done
+            && ledger.admitted == 0
+            && let Some(error) = ledger.error.as_deref()
+        {
+            return Err(deterministic_failure(
+                self.action,
+                format!("single-pass pull drain failed without admitting work: {error}"),
+            ));
+        }
         let refusal = refusal.or_else(|| degraded_refusal(&health));
         Ok(settled.answer(gate, &ledger, &health, refusal, sleep_seconds))
     }
 
-    fn warn_incomplete(&self, ledger: &PassLedger) {
+    fn warn_incomplete(&self, ledger: &PassLedger, done: bool) {
         if let Some(message) = ledger.error.as_deref() {
+            let summary = if done && self.refill.single_pass && ledger.admitted == 0 {
+                "single-pass pull drain failed without admitting work"
+            } else {
+                "pull drain pass did not complete; retrying next iteration"
+            };
             tracing::warn!(
                 target: "orbit.core.pull",
                 owner = %self.refill.destination.owner_machine_id,
                 selector = %self.refill.destination.selector,
                 %message,
-                "pull drain pass did not complete; retrying next iteration",
+                "{summary}",
             );
         }
     }

@@ -67,6 +67,7 @@
     },
     "orbit-cmd": {
       "test_function_paths": [
+        "tests/worker_coordination.rs::federated_drain_owner_routes_local_repair_pull_in_process_and_keeps_remote_and_self_ssh_guards",
         "update/tests/source.rs::http_rejects_declared_and_streamed_oversized_bodies",
         "update/tests/source.rs::release_requests_never_leave_https"
       ]

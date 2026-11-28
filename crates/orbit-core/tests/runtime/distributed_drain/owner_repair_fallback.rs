@@ -470,7 +470,8 @@ crate::scenario_table!(
     the_owner_drain_takes_a_repair_its_original_executor_never_pulls,
     the_owner_repairs_beside_an_implementing_leaf_and_waits_when_full,
     repair_and_backlog_share_the_owner_ceiling_with_other_pulls,
-    a_registered_owner_binds_its_partition_instead_of_its_catalog_id
+    a_registered_owner_binds_its_partition_instead_of_its_catalog_id,
+    a_repair_pull_routing_failure_fails_durably_and_leaves_the_claim_repair_pending
 );
 
 /// The owner's repair worker uses its own machine as the authenticated caller.
@@ -491,4 +492,202 @@ impl OwnerCoordinator for RepairOwnerCoordinator {
         session.effective_capabilities = BTreeSet::from([McpCapability::Agent]);
         self.0.execute_owner_coordination(name, input, session)
     }
+}
+
+/// [ORB-29594] When a single-pass owner repair pull cannot route to its owner
+/// (such as the reproduced self-SSH failure), its durable run state fails
+/// visibly with `last_pass_error` and `DrainPassOutcome::Failed` instead of
+/// ending `Success`, and the original claim stays `repair_pending`.
+fn a_repair_pull_routing_failure_fails_durably_and_leaves_the_claim_repair_pending() {
+    struct SelfSshRoutingFailure;
+
+    impl DrainOwnerTransport for SelfSshRoutingFailure {
+        fn call(&self, _: &str, _: &str, _: Value) -> Result<Value, OrbitError> {
+            Err(OrbitError::UnreachableDestination(format!(
+                "{OWNER}: invalid input: local destination '{OWNER}' cannot be opened over SSH"
+            )))
+        }
+
+        fn show_task(&self, _: &str, _: Value) -> Result<Value, OrbitError> {
+            Err(OrbitError::UnreachableDestination(format!(
+                "{OWNER}: invalid input: local destination '{OWNER}' cannot be opened over SSH"
+            )))
+        }
+
+        fn worker_coordinator(&self) -> Arc<dyn OwnerCoordinator> {
+            Arc::new(NoWorkerRoute)
+        }
+    }
+
+    let pair = Pair::new(1);
+    let task = pair.tasks[0].clone();
+    let follower_drain = pair.run_drain();
+    let leaf = pair.running_leaf(&follower_drain, 1);
+    let delivered = handoff(&pair.admission(&leaf));
+    pair.leaf_hands_off(&leaf);
+    let settled = pair.pass(&follower_drain);
+    assert!(settled["error"].is_null(), "{settled}");
+
+    let broken_owner = pair
+        .wire
+        .owner
+        .clone()
+        .with_drain_owner_transport(Arc::new(SelfSshRoutingFailure));
+    launchable_providers(&broken_owner);
+    let handoff_id = broken_owner
+        .accepted_task_handoff(&delivered.claim_id)
+        .unwrap()
+        .handoff_id;
+    let landing = ClaimInvocation::trusted_operator(
+        task.clone(),
+        delivered.claim_id.clone(),
+        "owner-landing".into(),
+    )
+    .with_handoff_observation(HandoffObservation {
+        candidate: delivered.candidate.clone(),
+        footprint_widening: vec![],
+        required_commands: vec![],
+        owner_completion_authority: None,
+        review: None,
+        known_red: vec![],
+        light_delivery: Vec::new(),
+    });
+    for (id, mutation) in [
+        (
+            "approve-landing",
+            ClaimMutation::ApproveHandoff {
+                handoff_id: handoff_id.clone(),
+                candidate: delivered.candidate.clone(),
+            },
+        ),
+        (
+            "dispatch-landing",
+            ClaimMutation::DispatchLanding {
+                handoff_id: handoff_id.clone(),
+                job_run_id: None,
+            },
+        ),
+    ] {
+        broken_owner
+            .mutate_execution_claim(Some(&landing), id, &mutation)
+            .unwrap();
+    }
+    ReviewGate::record_handoff_landing(
+        &orbit_core::test_support::EngineHost::new(&broken_owner),
+        &orbit_engine::HandoffLandingUpdate {
+            handoff_id,
+            step: orbit_engine::HandoffLandingStep::Stop { repairable: true },
+            observed: None,
+            evidence: "PR conflicts with agent-main".into(),
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        pair.owner_claim(&delivered.claim_id)["claim"]["phase"],
+        "repair_pending"
+    );
+
+    let assets = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets");
+    let resources = broken_owner.global_root().join("resources");
+    for (kind, name) in [
+        ("jobs", "workspace_pull_pipeline"),
+        ("activities", "drain_window"),
+        ("activities", "pull_refill"),
+        ("activities", "sleep"),
+    ] {
+        let file = format!("{name}.yaml");
+        std::fs::create_dir_all(resources.join(kind)).unwrap();
+        std::fs::copy(
+            assets.join(kind).join(&file),
+            resources.join(kind).join(&file),
+        )
+        .unwrap();
+    }
+
+    let workers = LandingWorkers::new();
+    let owner_jobs = orbit_core::runtime::JobRuns::shared(
+        broken_owner.sqlite_store().unwrap(),
+        broken_owner.workspace_id().unwrap(),
+    );
+    let auto = owner_jobs
+        .insert_job_run("workspace_auto_pipeline", 1, Utc::now(), None, None)
+        .unwrap();
+    broken_owner
+        .write_run_state(
+            &auto.run_id,
+            &PipelineState::new(auto.run_id.clone(), auto.job_id, json!({})),
+        )
+        .unwrap();
+
+    let pull = orbit_core::test_support::with_repair_owner_fallback_elapsed(|| {
+        let wave = orbit_core::test_support::EngineHost::new(&broken_owner)
+            .run_deterministic(
+                "classify_workspace_auto_tasks",
+                &json!({}),
+                &json!({"run_id": auto.run_id, "max_active_leaf_runs": 4}),
+                ToolContext::default(),
+            )
+            .expect("classify");
+        wave["owner_repair_pull"]
+            .as_str()
+            .expect("owner repair pull started")
+            .to_string()
+    });
+    workers.own(&pull).expect("hold repair pull worker");
+
+    let failed = broken_owner
+        .execute_pipeline_run_worker(&pull)
+        .expect_err("routing failure on single-pass repair pull must fail the run");
+    assert!(
+        failed.to_string().contains(&format!(
+            "local destination '{OWNER}' cannot be opened over SSH"
+        )),
+        "{failed}"
+    );
+    workers.release(&pull).expect("release repair pull worker");
+
+    let run = owner_jobs
+        .get_job_run(&pull)
+        .unwrap()
+        .expect("repair pull job run");
+    assert_eq!(
+        run.state,
+        JobRunState::Failed,
+        "durable run state must distinguish routing failure from successful delivery: {run:#?}"
+    );
+    let state = broken_owner
+        .read_run_state(&pull)
+        .unwrap()
+        .expect("repair pull durable state");
+    let last_pass = state
+        .pull_drain
+        .drain_last_pass
+        .as_ref()
+        .expect("recorded last pass");
+    assert_eq!(last_pass.consecutive_pass_failures, 1, "{last_pass:#?}");
+    assert!(
+        last_pass
+            .last_pass_error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("cannot be opened over SSH"),
+        "{last_pass:#?}"
+    );
+    let counters = state
+        .pull_drain
+        .drain_pass_counters
+        .as_ref()
+        .expect("recorded pass counters");
+    assert_eq!(
+        counters.outcome(orbit_types::workflow::DrainPassOutcome::Failed),
+        1
+    );
+    assert_eq!(
+        counters.outcome(orbit_types::workflow::DrainPassOutcome::Admitted),
+        0
+    );
+    assert_eq!(
+        pair.owner_claim(&delivered.claim_id)["claim"]["phase"],
+        "repair_pending"
+    );
 }
