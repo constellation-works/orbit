@@ -1,6 +1,6 @@
 ---
 type: design
-summary: "Spec, approved in shape and not built: a hold record that states why a task is tagged `no-drain` and what releases it, the refusal of the tag without one, and the `held_ready` attention kind for a backlog task only the tag holds"
+summary: "Spec, approved and not built: a hold record that states why a task is tagged `no-drain` and what releases it, the refusal of the tag without one, and the `held_ready` attention kind for a backlog task only the tag holds"
 last_validated: 2026-11-28
 title: Spec — Task hold
 owner: claude
@@ -8,7 +8,7 @@ status: Draft
 feature: operator-attention
 tags: [operator-attention, spec]
 related_features: [operator-attention, standing-drain, distributed-drain]
-related_artifacts: [ORB-29623]
+related_artifacts: [ORB-29623, ORB-29656, ORB-29657, ORB-29658]
 last_updated: 2026-11-28
 ---
 
@@ -17,7 +17,7 @@ last_updated: 2026-11-28
 A task tagged `no-drain` carries a **hold**: a short reason, a short release condition, who
 set it and when. The tag cannot be added without one. A backlog task that the tag alone keeps
 out of a drain becomes one attention item of kind `held_ready`, which shows the hold or says
-that none was recorded. The operator approved this shape on 2026-11-27 ([ORB-29623]). Nothing
+that none was recorded. The operator approved this design on 2026-11-28 ([ORB-29623]). Nothing
 in this spec is built, and the kind is not in the
 [item spec](./attention-item.md#kinds-and-sources-of-truth) until its build task adds it.
 
@@ -181,13 +181,13 @@ reader who wants only the unexplained holds asks for `--kind held_ready --severi
 
 ## Phasing
 
-1. **The record and the refusal.** The `hold` field, the `hold` input on add and update, the
+1. **The record and the refusal** ([ORB-29656]). The `hold` field, the `hold` input on add and update, the
    CLI flags, the history events, the readouts in `orbit.task.show`, `orbit.task.list`,
    `orbit task show` and readiness, the refusal, and the skill and config text. This is the
    breaking change.
-2. **The kind.** `held_ready`, its row in the item spec, its severity and `next`, and the
+2. **The kind** ([ORB-29657]). `held_ready`, its row in the item spec, its severity and `next`, and the
    skill's attention reference.
-3. **The dashboard.** The hold on a task's detail, and the two texts in the tag control.
+3. **The dashboard** ([ORB-29658]). The hold on a task's detail, and the two texts in the tag control.
    Until this lands, adding `no-drain` in the dashboard is refused with the one-line error.
 
 ## Acceptance
@@ -213,5 +213,8 @@ reader who wants only the unexplained holds asks for `--kind held_ready --severi
 ## Task References
 
 - [ORB-29623] — designed the hold record, the refusal and the `held_ready` kind.
+- [ORB-29656] — builds the hold record, the `hold` input and the refusal.
+- [ORB-29657] — builds the `held_ready` kind.
+- [ORB-29658] — shows a hold on the dashboard and asks for it in the tag control.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

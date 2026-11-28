@@ -175,7 +175,8 @@ References below; all four implementation tasks are done.
    destination's candidate set. Depends on slice 1; its unreachable-host item is useful
    before slices 2 and 3 land. It consumes the shared §5 fixed fan-out value.
 
-5. **Designed, not built — held tasks: the hold record and `held_ready`** ([ORB-29623]). A
+5. **Approved, not built — held tasks: the hold record and `held_ready`** ([ORB-29623]; build
+   tasks [ORB-29656], [ORB-29657], [ORB-29658]). A
    task tagged `no-drain` gains a hold record that states its reason and its release
    condition, adding the tag without one is refused, and a backlog task that only the tag
    keeps out of a drain becomes a `held_ready` item. The contract, its phasing and its
@@ -267,5 +268,8 @@ Slice 1 also measures per-source cost on the real workspace so explicit polling 
 - [ORB-25277] — shell wait through a session-minted read grant
 - [ORB-22808] — fixed the former `[attention]` bounds at their defaults and deprecated the keys
 - [ORB-29623] — designed slice 5: the hold record and the `held_ready` kind
+- [ORB-29656] — slice 5, phase 1: the hold record, the `hold` input and the refusal
+- [ORB-29657] — slice 5, phase 2: the `held_ready` kind
+- [ORB-29658] — slice 5, phase 3: the hold on the dashboard
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
