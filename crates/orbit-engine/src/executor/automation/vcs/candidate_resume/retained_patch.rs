@@ -141,7 +141,7 @@ fn read_unmerged_stages(
         let stage = stage_str
             .parse::<usize>()
             .ok()
-            .filter(|s| (1..=3).contains(s))
+            .filter(|stage_number| (1..=3).contains(stage_number))
             .ok_or_else(|| {
                 OrbitError::Execution(format!(
                     "retained edits: unexpected index stage '{stage_str}' for '{path}'"
