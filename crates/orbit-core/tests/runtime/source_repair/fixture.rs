@@ -489,6 +489,22 @@ impl Fixture {
             _env: env,
         }
     }
+
+    /// The refusal a deterministic action returns instead of a result.
+    pub(super) fn action_error(&self, name: &str, input: Value) -> String {
+        execute_deterministic_action(
+            &orbit_core::test_support::EngineHost::new(&self.runtime),
+            name,
+            &json!({}),
+            &input,
+            false,
+            &HashMap::new(),
+            None,
+        )
+        .expect_err(name)
+        .to_string()
+    }
+
     /// Admit final recovery on this fixture's runtime: give it a crew pool
     /// and reopen the runtime on that configuration.
     pub(super) fn enable_final_recovery(&mut self) {

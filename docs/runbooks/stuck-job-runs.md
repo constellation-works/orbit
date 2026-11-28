@@ -1375,7 +1375,11 @@ that conflicts with the moved base: the bytes never land over conflict
 markers. A three-way conflict inside the patch goes to the implementer as a
 `conflict` repair; for a binary or unmarked conflict, `candidate_resume` saves
 the conflicting sides under `.orbit/tmp/` and names them in the repair output
-so both versions stay recoverable after the index is reset. The task history entry
+so both versions stay recoverable after the index is reset. If a side cannot be
+saved, the successor is refused with the index left unreset: the refusal names the
+conflicting paths still unmerged, the sides already saved and that the source
+checkout and recorded patch are untouched. Inspect the source repair again for a
+fresh successor. The task history entry
 `source_repair_retained_patch_applied` names the request key, source run,
 patch digest and successor run. The original checkout and its edits stay
 intact. Leave it for worktree GC after the successor publishes.
