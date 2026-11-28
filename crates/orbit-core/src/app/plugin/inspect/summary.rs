@@ -19,7 +19,7 @@ use crate::app::plugin::panel::{PluginLinkSummary, PluginPanelSummary, web_summa
 
 use crate::OrbitRuntime;
 use crate::runtime::plugin::cache::load_installed_plugin;
-use crate::runtime::plugin::grants::recorded_program_paths;
+use crate::runtime::plugin::grants::{recorded_program_paths, witnessed_page_actions};
 use crate::runtime::plugin::paths::{plugin_state_dir, read_pin_file};
 
 /// One plugin tool as the CLI reports it.
@@ -44,6 +44,9 @@ pub struct PluginPageSummary {
     pub title: String,
     /// Canonical names of the `read_only` tools the page may call.
     pub tools: Vec<String>,
+    /// The mutating tools the page may ask to run, each behind the
+    /// dashboard's confirmation.
+    pub actions: Vec<PluginPageActionSummary>,
     /// The bridge version the page was written for, when it names one.
     pub kit: Option<u32>,
     /// Whether the page would be served: its plugin is active and its files
@@ -51,6 +54,17 @@ pub struct PluginPageSummary {
     pub active: bool,
     /// Why the page is not served, when it is not.
     pub diagnostic: Option<String>,
+}
+
+/// One `spec.web.pages[].actions` entry with whether it would run.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginPageActionSummary {
+    /// Canonical name of the mutating tool.
+    pub tool: String,
+    /// Whether the operator's recorded consent at enable lists it for this
+    /// page. An action the manifest added since stays inactive until an
+    /// enabling command records it (STD-05 §R21).
+    pub consented: bool,
 }
 
 /// One grant as `orbit plugin show` reports it: what the manifest asks for
@@ -231,6 +245,15 @@ pub fn plugin_summary_json(
                 "id": page.id,
                 "title": page.title,
                 "tools": page.tools,
+                "actions": page
+                    .actions
+                    .iter()
+                    .map(|action| json!({
+                        "tool": action.tool,
+                        "consented": action.consented,
+                        "active": page.active && action.consented,
+                    }))
+                    .collect::<Vec<_>>(),
                 "kit": page.kit,
                 "state": if page.active { "active" } else { "inactive" },
                 "diagnostic": page.diagnostic,
@@ -482,7 +505,7 @@ pub(in crate::app::plugin) fn summary_for_installed(
         panels,
         links,
         pages: plugin
-            .map(|plugin| page_summaries(installed, plugin, status))
+            .map(|plugin| page_summaries(installed, plugin, status, global_root))
             .unwrap_or_default(),
         certified_orbit_version: installed.certified_orbit_version.clone(),
         build: installed.build.clone(),
@@ -502,7 +525,9 @@ fn page_summaries(
     installed: &InstalledPlugin,
     plugin: &LoadedPlugin,
     status: PluginStatus,
+    global_root: &Path,
 ) -> Vec<PluginPageSummary> {
+    let consented = witnessed_page_actions(global_root, installed);
     plugin
         .pages
         .iter()
@@ -529,6 +554,16 @@ fn page_summaries(
                     .tools
                     .iter()
                     .map(|verb| plugin_tool_name(plugin.namespace(), verb, installed.first_party))
+                    .collect(),
+                actions: page
+                    .actions
+                    .iter()
+                    .map(|verb| PluginPageActionSummary {
+                        tool: plugin_tool_name(plugin.namespace(), verb, installed.first_party),
+                        consented: consented
+                            .get(&page.id)
+                            .is_some_and(|verbs| verbs.contains(verb)),
+                    })
                     .collect(),
                 kit: page.kit,
                 active: diagnostic.is_none(),

@@ -85,6 +85,17 @@ pub(super) fn append_pages_consent_text(text: &mut String, summary: &PluginSumma
             format!("calls {}", page.tools.join(", "))
         };
         text.push_str(&format!("\n  {} ({}): {tools}", page.id, page.title));
+        if !page.actions.is_empty() {
+            let actions = page
+                .actions
+                .iter()
+                .map(|action| action.tool.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            text.push_str(&format!(
+                "\n    actions: {actions} (each run asks for your confirmation in the dashboard)"
+            ));
+        }
         if let Some(diagnostic) = page
             .diagnostic
             .as_deref()

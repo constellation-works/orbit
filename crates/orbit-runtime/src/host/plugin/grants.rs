@@ -66,6 +66,16 @@
 //! whatever `PATH` the spawning caller has. Changing one means writing this
 //! file again, which only an enabling command does — a changed resolution is
 //! a re-consent event.
+//!
+//! # Page actions
+//!
+//! The witness carries, the same way, the `spec.web.pages[].actions` list
+//! of each page as the operator consented to it at enable (plugin-pages
+//! design §1). The dashboard runs an action only when the page still names it
+//! and the witness lists it for that page, so a list that changed since
+//! consent leaves its new actions inactive until an enabling command records
+//! it again (STD-05 §R21). A witness written before actions existed lists
+//! none, which consents to none.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -110,7 +120,15 @@ struct GrantAuthorization {
     /// therefore grant no program (see the module docs).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     programs: BTreeMap<String, PathBuf>,
+    /// Page id → the action verbs the operator consented to for that page.
+    /// Absent from witnesses written before page actions, which therefore
+    /// consent to none (see the module docs).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    page_actions: PageActionConsent,
 }
+
+/// Page id → the action verbs consented to for that page.
+pub type PageActionConsent = BTreeMap<String, Vec<String>>;
 
 /// Where the witness for `name` lives.
 ///
@@ -179,17 +197,26 @@ pub fn record_authorized_grants(
     enabled: bool,
     grants: &[String],
 ) -> Result<(), OrbitError> {
-    record_authorization(global_root, name, enabled, grants, &BTreeMap::new())
+    record_authorization(
+        global_root,
+        name,
+        enabled,
+        grants,
+        &BTreeMap::new(),
+        &PageActionConsent::new(),
+    )
 }
 
 /// [`record_authorized_grants`], plus the program paths this consent
-/// resolved `requires.programs` to (module docs).
+/// resolved `requires.programs` to and the page actions it consented to
+/// (module docs).
 pub fn record_authorization(
     global_root: &Path,
     name: &str,
     enabled: bool,
     grants: &[String],
     programs: &BTreeMap<String, PathBuf>,
+    page_actions: &PageActionConsent,
 ) -> Result<(), OrbitError> {
     if !is_valid_namespace(name) {
         return Err(OrbitError::Execution(format!(
@@ -203,6 +230,7 @@ pub fn record_authorization(
         grants_digest: plugin_grants_digest(name, enabled, grants),
         authorized_at: chrono::Utc::now().to_rfc3339(),
         programs: programs.clone(),
+        page_actions: page_actions.clone(),
     };
     let body = serde_json::to_string_pretty(&witness).map_err(|error| {
         OrbitError::Execution(format!("serialize grant authorization: {error}"))
@@ -233,6 +261,47 @@ pub fn recorded_program_paths(global_root: &Path, name: &str) -> BTreeMap<String
         })
         .map(|witness| witness.programs)
         .unwrap_or_default()
+}
+
+/// The page actions the last enabling command recorded for `name`, empty
+/// when there is no readable witness written for it.
+pub fn recorded_page_actions(global_root: &Path, name: &str) -> PageActionConsent {
+    read_witness(global_root, name)
+        .map(|witness| witness.page_actions)
+        .unwrap_or_default()
+}
+
+/// The page actions an enabled row's operator consented to, read back from
+/// a witness that still matches the row. Empty for a disabled row, a row
+/// without a witness, or one whose grants no longer match it, so a call
+/// checked against this runs nothing the operator did not consent to.
+pub fn witnessed_page_actions(
+    global_root: &Path,
+    installed: &InstalledPlugin,
+) -> PageActionConsent {
+    if !installed.enabled {
+        return PageActionConsent::new();
+    }
+    read_witness(global_root, &installed.name)
+        .filter(|witness| {
+            witness.grants_digest
+                == plugin_grants_digest(&installed.name, installed.enabled, &installed.grants)
+        })
+        .map(|witness| witness.page_actions)
+        .unwrap_or_default()
+}
+
+/// The readable witness written for `name`, at this schema.
+fn read_witness(global_root: &Path, name: &str) -> Option<GrantAuthorization> {
+    if !is_valid_namespace(name) {
+        return None;
+    }
+    std::fs::read_to_string(plugin_grant_witness_path(global_root, name))
+        .ok()
+        .and_then(|raw| serde_json::from_str::<GrantAuthorization>(&raw).ok())
+        .filter(|witness| {
+            witness.schema_version == WITNESS_SCHEMA_VERSION && witness.plugin == name
+        })
 }
 
 /// Program paths from a readable witness matching the current row's consent.

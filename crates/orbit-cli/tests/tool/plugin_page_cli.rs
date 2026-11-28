@@ -122,3 +122,49 @@ fn a_page_installs_lists_and_goes_inactive_alone_when_its_files_change() {
     let shown = fixture.json(["plugin", "show", "pages"]);
     assert_eq!(only_page(&shown)["state"], "active", "{shown}");
 }
+
+#[test]
+fn enabling_a_plugin_whose_page_names_actions_lists_them_and_records_consent() {
+    if !orbit_exec::macos_sandbox_test_guard(
+        &orbit_common::Env::capture(),
+        "enabling_a_plugin_whose_page_names_actions_lists_them_and_records_consent",
+    ) {
+        return;
+    }
+    let fixture = Fixture::new();
+    let source = fixture.source("pages");
+    write_status_plugin(
+        &source,
+        "pages",
+        &PAGES_SPEC.replace(
+            "        tools: [status]\n",
+            "        tools: [status]\n        actions: [settle]\n",
+        ),
+    );
+    // `tools` is the manifest's last key, so a tool appended is in it.
+    let manifest = source.join(".orbit-plugin/plugin.yaml");
+    let mut raw = std::fs::read_to_string(&manifest).expect("manifest");
+    raw.push_str(
+        "    - name: settle\n      description: Settle a request.\n      execution_kind: \
+         mutating\n      mcp_scope: workspace\n",
+    );
+    std::fs::write(&manifest, raw).expect("write manifest");
+    write_page(&source.join(".orbit-plugin"));
+
+    let added = fixture
+        .command(["plugin", "add"])
+        .arg(&source)
+        .arg("--enable")
+        .success_output();
+    let added = String::from_utf8_lossy(&added.stdout);
+    assert!(
+        added.contains("actions: pages.settle"),
+        "the consent output lists the page's actions: {added}"
+    );
+    let shown = fixture.json(["plugin", "show", "pages"]);
+    assert_eq!(
+        only_page(&shown)["actions"],
+        serde_json::json!([{"tool": "pages.settle", "consented": true, "active": true}]),
+        "{shown}"
+    );
+}

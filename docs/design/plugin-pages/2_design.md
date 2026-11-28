@@ -8,10 +8,10 @@ status: Accepted
 feature: plugin-pages
 doc_role: design
 type: design
-summary: "Approved design; phase 1 (manifest, serving, bridge relay, kit and Plugins sub-tabs) is built, followed by pages on other hosts and actions"
+summary: "Approved design; phase 1 (manifest, serving, bridge relay, kit and Plugins sub-tabs) and phase 3 (actions behind consent and a dashboard-drawn confirmation) are built, with pages on other hosts to follow"
 tags: [plugin-pages, plugins, dashboard, orbit-web]
 related_features: [plugins, user-interface, remote-access]
-related_artifacts: [ORB-29504]
+related_artifacts: [ORB-29504, ORB-29539]
 ---
 
 # Plugin Pages — Design
@@ -19,12 +19,12 @@ related_artifacts: [ORB-29504]
 The operator approved this design on 2026-11-27 ([ORB-29504]). The page contract in sections 1
 and 2 was revised after it was measured in two browser engines ([ORB-29532]), and the operator
 approved the revision the same day ([ORB-29573]).
-Section 1 (the manifest), section 2 (serving), section 3 (the bridge and kit) and section 4
-(Plugins sub-tabs, frame strip and diagnostics) are built ([ORB-29534], [ORB-29536],
-[ORB-29537]). The rest describes what later phases make true. The problem, the goal and the
-build tasks are in the
-[overview](./1_overview.md). The plugin manifest,
-grants and tool dispatch it builds on are the [plugin standard](../plugins/2_design.md)'s.
+Section 1 (the manifest), section 2 (serving), section 3 (the bridge, kit and actions) and
+section 4 (Plugins sub-tabs, frame strip and diagnostics) are built ([ORB-29534],
+[ORB-29536], [ORB-29537], [ORB-29539]). The rest describes what later phases make true.
+The problem, the goal and the build tasks are in the [overview](./1_overview.md). The plugin
+manifest, grants and tool dispatch it builds on are the
+[plugin standard](../plugins/2_design.md)'s.
 
 ## 1. The manifest
 
@@ -39,6 +39,7 @@ spec:
         styles: [app.css]         # files under root, written into the page in this order
         kit: 1                    # optional: Orbit's bridge script and stylesheet, by version
         tools: [status, mail_log, roster_show]   # this plugin's tools the page may call
+        actions: [request_settle]                 # optional: its mutating tools, run as actions
 ```
 
 - **A page is markup, scripts and styles, built ahead.** `index.html` holds the markup and no
@@ -51,6 +52,16 @@ spec:
   classic one.
 - **`tools` names only the plugin's own tools, and only `read_only` ones.** `orbit plugin
   validate` refuses any other name and a mutating tool.
+- **`actions` names only the plugin's own mutating tools.** `orbit plugin validate` refuses
+  any other name, a `read_only` tool (which belongs under `tools`) and a name listed twice.
+  An action runs only as [The bridge](#3-the-bridge) describes.
+- **The operator consents to the actions.** `orbit plugin add --enable` and `orbit plugin
+  enable` list each page's actions and record that list as the operator's consent in the
+  host-owned grant witness beside the grants and program paths. An action runs only while
+  its page names it and the consent lists it for that page. A manifest whose list changed
+  since consent leaves the new actions inactive until an enabling command records it again
+  (STD-05 §R21); the dashboard's host re-enable keeps the list last consented to, and a
+  witness written before actions existed consents to none.
 - **`orbit plugin validate` refuses a page Orbit could not write out safely,** by name: a
   missing `index.html` or listed file; markup that holds a `script` or `link` element, which
   the browser would refuse anyway with nothing shown to the author; a script that contains
@@ -68,8 +79,9 @@ spec:
   (STD-05 §R21); so does a page whose files now fail a check above. The rest of the plugin
   keeps loading, and the recovery is the forced reinstall a changed manifest needs.
 - **The operator sees pages before consenting.** `orbit plugin add` and `enable` name each
-  page and the tools it may call, and `orbit plugin show` and `GET /api/plugins` list
-  `pages[]` with id, title, tools, kit version and the active or inactive state with its
+  page, the tools it may call and its actions, and `orbit plugin show` and `GET
+  /api/plugins` list `pages[]` with id, title, tools, `actions[]` (each with `tool`,
+  `consented` and `active`), kit version and the active or inactive state with its
   diagnostic.
 
 ## 2. Serving
@@ -81,6 +93,8 @@ bytes served are the bytes that were hashed.
 |---|---|
 | `GET /api/plugins/<ns>/pages/<page>/` | The page, as one document |
 | `POST /api/plugins/<ns>/pages/<page>/call` | Runs one tool the page declares, with input |
+| `POST /api/plugins/<ns>/pages/<page>/actions/confirm` | Checks one action and issues its one-time confirmation; runs nothing |
+| `POST /api/plugins/<ns>/pages/<page>/actions/run` | Spends the confirmation and runs the action once |
 
 **Orbit writes the document.** In order: the kit's stylesheet and each style, each in a
 `style` element; the markup; the kit's script and each script, each in a `script` element.
@@ -133,6 +147,7 @@ dashboard →  server    POST /api/plugins/<ns>/pages/<page>/call
 dashboard →  page      {v: 1, id, ok: true, output: …}   or   {v: 1, id, ok: false, error: {code, message}}
 dashboard →  page      {v: 1, init: {theme, host, workspace, operator, query}}
 page    →  dashboard   {v: 1, query: "…"}
+page    →  dashboard   {v: 1, id, act: "request_settle", input: {request: 268}}
 ```
 
 The call route takes `{tool, input}` and answers with a panel read's body (`output`, plus
@@ -154,8 +169,39 @@ none of them runs anything.
   (`#plugins/<ns>/<page>?…`) and receives it on load, since a sandboxed page has no storage of
   its own.
 
+**An action** is a page asking to run one of its `actions`. The operator's intent is
+established outside the page ([decision](./4_decisions.md#plugin-code-acts-only-behind-a-confirmation-drawn-outside-its-frame)):
+
+1. The dashboard sends `{tool, input}` to `.../actions/confirm`. The server requires the
+   operator session, checks that the tool is this plugin's and mutating, that the page
+   names it under `actions`, that the recorded consent lists it for the page and that the
+   input fits the schema. It answers with what the dialog shows (plugin and version, page,
+   canonical tool name, description, input) and a random one-time confirmation bound to
+   this workspace runtime, plugin, page, tool and input. It holds at most 32 unused ones,
+   each for five minutes; over the bound it answers 429 `busy`. Nothing runs.
+2. The dashboard draws a modal dialog in its own document, naming the plugin, the tool and
+   the input from the server's answer. The dialog sits in the browser's top layer and makes
+   the rest of the document, the frame included, inert, so the page cannot draw over it,
+   dismiss it or confirm it. Run is armed only after the dialog has been visible for
+   800 ms, and only a trusted click confirms; Cancel, Escape and the frame unloading cancel.
+   One action dialog is open at a time, and a page asking again meanwhile gets `busy`.
+3. On Run, the dashboard sends `{tool, input, confirmation}` to `.../actions/run`. The
+   server spends the confirmation first, whatever the request turns out to be, then
+   requires the operator session again, refuses a missing, unknown, used, expired or
+   differently bound confirmation with 403 `confirmation_refused`, repeats the step-1
+   checks, and runs the tool once through the audited dispatch with operator capability
+   and the web session as its origin.
+
+Every run request, refused or run, writes a `dashboard.operations` row recorded as
+`plugin.page_action`, with the web session, the plugin as target and the page and tool
+as arguments; the tool call that runs writes its own row too. A refused action or a
+cancelled dialog reaches the page as `{ok: false, error: {code}}` (`cancelled` for a
+cancel), and a run as the tool's output, capped as a call's is. A page cannot reach a
+mutating tool through `call`, which still refuses one with `tool_refused`.
+
 **The kit** is two parts Orbit writes into the document when the manifest names `kit`: a
-script that wraps the messages as `orbit.call(tool, input)`, and a stylesheet with the
+script that wraps the messages as `orbit.call(tool, input)` and `orbit.act(tool, input)`,
+and a stylesheet with the
 dashboard's colours, type scale, spacing and table styles in both themes. Using them is
 optional. They make a plugin's page look like the rest of the dashboard without copying its
 CSS. The manifest's `kit` number is the bridge version the page was written for.
@@ -212,10 +258,10 @@ whose manifest has pages lists them in the consent prompt.
 2. **Pages on other hosts.** The route that gives a page's parts, the forwarder writing the
    document from them, and the decision on a read-only call from a dashboard without the
    operator session.
-3. **Actions.** A page may name mutating tools under a separate `actions` list. Each call
-   needs the operator session and a confirmation the dashboard draws outside the frame, naming
-   the plugin, the tool and the input, and is audited with the web session. Enabling such a
-   plugin asks consent for the list.
+3. **Actions** (built, [ORB-29539]). A page may name mutating tools under a separate
+   `actions` list. Each call needs the operator session and a confirmation the dashboard
+   draws outside the frame, naming the plugin, the tool and the input, and is audited with
+   the web session. Enabling such a plugin asks consent for the list.
 4. **First pages.** A Formation page and a Scribe page, each from its own repository, once
    their plugins exist.
 
@@ -240,6 +286,12 @@ whose manifest has pages lists them in the consent prompt.
 - Given another host selected, that host's page is written by this dashboard from the parts
   the tunnel returns, under the same frame policy.
 - Given a plugin with panels and no pages, the Plugins tab behaves as it does today.
+- Given a page that calls a consented action, the dashboard draws a confirmation outside the
+  frame naming the plugin, the tool and the input; Run runs the tool once and Cancel runs
+  nothing.
+- Given an action request sent straight to the server without the operator session,
+  without a confirmation, with one issued for another input, or replaying a used one, it
+  is refused, nothing runs, and the request has an audit row with the web session.
 
 ## 10. Concerns & Honest Limitations
 
@@ -274,6 +326,10 @@ whose manifest has pages lists them in the consent prompt.
   polls every second costs a process every second. The in-flight sharing and the bound cap the
   damage and do not make polling cheap.
 - **No push.** A page learns of a change by asking again.
+- **A confirmation proves what the dashboard showed, not what the operator read.** The
+  dialog names the tool and the input the server checked; a page can still describe an
+  action misleadingly inside its frame before asking. The arm delay stops a click timed by
+  the page, not a hurried operator. An action from another host's page is phase 2's.
 - **Another host's page needs an operator dashboard at first.** The forwarder refuses a `POST`
   without the operator session, and the call route is a `POST`. Phase 2 decides whether a
   read-only call is exempt.
@@ -288,6 +344,7 @@ whose manifest has pages lists them in the consent prompt.
 - [ORB-29534] — built the manifest key, validation, the bundle digest and the listings.
 - [ORB-29536] — built the document and call routes and the kit.
 - [ORB-29537] — built the Plugins sub-tabs, the sandboxed page frame, the strip and the bridge relay.
+- [ORB-29539] — built page actions behind consent and a dashboard-drawn confirmation.
 - [ORB-29532] — measured the initial frame policy in Chromium and WebKit, then validated the one-document policy in Chromium, WebKit and Firefox.
 - [ORB-29573] — revised the page contract to one document after that measurement.
 

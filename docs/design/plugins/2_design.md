@@ -3,7 +3,7 @@ title: Plugins — Design
 owner: claude
 created_date: 2026-09-20
 updated_date: 2026-11-28
-last_validated: 2026-11-27
+last_validated: 2026-11-28
 status: Accepted
 feature: plugins
 doc_role: design
@@ -147,6 +147,7 @@ spec:
         styles: [app.css]                            # .css, written in this order
         kit: 1                                       # optional bridge version
         tools: [status]                              # this plugin's read_only tools only
+        actions: [maintain]                          # optional; its mutating tools, each run confirmed by the operator
 
   tests: [tests/conformance/*.yaml]                  # request/response goldens run by `orbit plugin test`
 
@@ -1224,8 +1225,9 @@ state, diagnostics, tools, panels, links). Its plugin records and CLI JSON from
 `plugin list`, `show`, `add`, `enable`, `disable` and `upgrade` share one
 `orbit-core` projection. Both include the consented `build` record, program
 resolution/grant diagnostics, `tools[].agent_callable`, `panels[].refresh_ms` and
-`pages[]` (id, title, tools, kit version, `state` and its `diagnostic`). `add` and
-`enable` also name each page and the tools it may call in the text they show.
+`pages[]` (id, title, tools, `actions[]` with `tool`, `consented` and `active`, kit
+version, `state` and its `diagnostic`). `add` and `enable` also name each page, the tools
+it may call and its actions in the text they show.
 The HTTP profile also includes effective `enabled` and `host_orbit_version`,
 and abbreviates `source` and `install_path` under the home directory to `~`;
 CLI paths remain usable as filesystem arguments. Session `capabilities` are
@@ -1256,6 +1258,16 @@ Typed definition hashes retain their existing struct field order.
   tool the page declares, with schema-checked input, through the same audited dispatch.
   Both sit behind the unchanged origin guard; the [plugin-pages design](../plugin-pages/2_design.md)
   §2–§3 holds the contract.
+- A page's `actions` name mutating tools of its own plugin; `validate_structure` refuses
+  any other name, a `read_only` tool there and a mutating tool under `tools`. An enabling
+  CLI command records consent to each page's list in the host-owned grant witness (§4.1),
+  and a dashboard host re-enable keeps the list last consented to, so an action a changed
+  manifest added stays inactive until `orbit plugin enable` records it.
+  `POST /api/plugins/<ns>/pages/<page>/actions/confirm` checks one action for an operator
+  session and issues a one-time confirmation; `.../actions/run` spends it and runs the tool
+  once with operator capability. Every run request, refused or run, has a
+  `dashboard.operations` row (`plugin.page_action`) carrying the web session, the plugin
+  and the tool.
 - `POST /api/plugins/<ns>/enable` and `/disable` accept `{scope: "workspace"|"host"}`
   only from operator sessions; every attempt, including a denied one, is audited.
   Workspace writes change `[plugin_enablement]` in the served workspace;
@@ -1283,8 +1295,8 @@ Typed definition hashes retain their existing struct field order.
 - Plugins cannot add top-level destinations or toggle built-in features. `router.js` has one
   `plugins` entry, so new plugins need no frontend edits. A plugin may ship
   [pages](../plugin-pages/1_overview.md), sub-tabs under Plugins. Their manifest key,
-  validation, bundle digest and listings are built [ORB-29534]; serving and drawing them
-  are not yet.
+  validation, bundle digest and listings [ORB-29534], serving [ORB-29536], drawing
+  [ORB-29537] and actions [ORB-29539] are built.
 
 ### 4.8 Compatibility
 
@@ -1450,5 +1462,8 @@ after these four phases. Neither is pending phase-5 provider work.
 - [ORB-29534] — added `spec.web.pages`, its validation, the page bundle digest and the
   page listings.
 - [ORB-25955] — denied plugin children read access to the broker's GitHub run-log cache (`state/github-run-logs/`).
+- [ORB-29536] — served plugin pages and their read-only tool calls.
+- [ORB-29537] — drew plugin pages as sub-tabs under Plugins.
+- [ORB-29539] — added page actions behind consent and a dashboard-drawn confirmation.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

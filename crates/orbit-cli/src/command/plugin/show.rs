@@ -207,7 +207,7 @@ impl ExecuteCore for PluginShowArgs {
         if !plugin.pages.is_empty() {
             blocks.push(Block::text(bold("Pages:")));
             let mut pages = crate::output::common::table::build_table(&[
-                "ID", "TITLE", "KIT", "TOOLS", "STATE",
+                "ID", "TITLE", "KIT", "TOOLS", "ACTIONS", "STATE",
             ])
             .keep_all_columns();
             for page in &plugin.pages {
@@ -217,6 +217,17 @@ impl ExecuteCore for PluginShowArgs {
                     page.kit
                         .map_or_else(|| "-".to_string(), |kit| kit.to_string()),
                     page.tools.join(", "),
+                    page.actions
+                        .iter()
+                        .map(|action| {
+                            if action.consented {
+                                action.tool.clone()
+                            } else {
+                                format!("{} (not consented)", action.tool)
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                        .join(", "),
                     match &page.diagnostic {
                         Some(diagnostic) => format!("inactive ({diagnostic})"),
                         None => "active".to_string(),

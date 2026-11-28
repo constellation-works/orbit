@@ -5,20 +5,29 @@
 //! read-only surface: only a page that is active is handed out (its plugin
 //! active in this workspace and its files hashing to the digest recorded at
 //! install), and a call runs only a `read_only` tool of the same plugin that
-//! the page declares, with input that fits the tool's schema. Everything is
-//! checked before anything runs.
+//! the page declares, with input that fits the tool's schema. An action — a
+//! mutating tool the page names under `actions` — additionally needs the
+//! operator session, the operator's consent to that list at enable, and a
+//! one-time confirmation the dashboard obtained outside the frame for that
+//! exact plugin, page, tool and input. Everything is checked before anything
+//! runs.
 
 use std::sync::Arc;
 
+use orbit_common::governance::authorization::DASHBOARD_PLUGIN_PAGE_ACTION;
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_tools::plugin::{
-    CompiledSchema, LoadedPlugin, LoadedPluginPage, PluginPageBundle, page_digest_diagnostic,
+    CompiledSchema, LoadedPlugin, LoadedPluginPage, PluginPageBundle, ResolvedPluginTool,
+    page_digest_diagnostic,
 };
 use orbit_types::plugin::{PluginExecutionKind, plugin_tool_name};
+use orbit_types::task::TaskWriteSurface;
 use orbit_types::tool::{McpCapability, ToolSessionContext};
-use serde_json::Value;
+use serde_json::{Value, json};
 
+use crate::app::exec::{DashboardOrigin, Operation};
 use crate::application::contracts::ToolInvocationPort;
+use crate::runtime::plugin::grants::witnessed_page_actions;
 use crate::{Core, OrbitRuntime};
 
 /// An active page's files, held in the plugin load that hashed them, so the
@@ -72,6 +81,10 @@ impl PageSource {
         &self.plugin.pages[self.index]
     }
 
+    fn first_party(&self) -> bool {
+        self.plugin.manifest.claims_first_party_namespace()
+    }
+
     fn bundle(&self) -> &PluginPageBundle {
         match &self.page().bundle {
             Ok(bundle) => bundle,
@@ -112,6 +125,62 @@ impl PageCall {
                 ..ToolSessionContext::default()
             },
         )
+    }
+}
+
+/// One page action the server has checked and nothing has run for: what the
+/// dashboard's confirmation names.
+#[derive(Debug, Clone)]
+pub struct PageAction {
+    /// The plugin's namespace.
+    pub plugin: String,
+    /// The plugin's version.
+    pub version: String,
+    /// The page that asked.
+    pub page: String,
+    /// The page's sub-tab label.
+    pub page_title: String,
+    /// Canonical name of the mutating tool.
+    pub tool: String,
+    /// The tool's manifest description.
+    pub description: String,
+    /// The input the action passes, after its schema check.
+    pub input: Value,
+}
+
+/// One action request a dashboard relays, with its server-side confirmation
+/// verdict. The dashboard consumes the one-time confirmation before it asks,
+/// so `confirmation` is `Err` with the refusal when it was missing, used,
+/// expired or issued for another plugin, page, tool or input.
+pub struct PageActionRun {
+    pub namespace: String,
+    pub page: String,
+    pub tool: String,
+    pub input: Value,
+    pub confirmation: Result<(), String>,
+    /// The web session the request arrived on, recorded on its audit row and
+    /// on the tool call's.
+    pub session: Option<String>,
+    /// The serving host's name, recorded on the audit row.
+    pub host: Option<String>,
+}
+
+impl PageActionRun {
+    /// The governed operation an action requires, and its audit row, which
+    /// is written for every request, refused or run.
+    pub(super) fn operation(&self) -> Operation {
+        Operation::dashboard_read("plugin", "page-action")
+            .requires(&DASHBOARD_PLUGIN_PAGE_ACTION)
+            .dashboard_row(
+                &DASHBOARD_PLUGIN_PAGE_ACTION,
+                self.namespace.clone(),
+                json!({"page": self.page, "tool": self.tool}),
+                DashboardOrigin {
+                    host: self.host.clone(),
+                    session: self.session.clone(),
+                    ..Default::default()
+                },
+            )
     }
 }
 
@@ -168,9 +237,126 @@ pub(super) fn check_page_call(
     input: Value,
 ) -> Result<PageCall, OrbitError> {
     let source = resolve_page(core, namespace, page_id)?;
-    let plugin = &source.plugin;
-    let first_party = plugin.manifest.claims_first_party_namespace();
-    let prefix = plugin_tool_name(namespace, "", first_party);
+    let (verb, resolved) = page_tool(&source, namespace, tool)?;
+    if resolved.execution_kind != PluginExecutionKind::ReadOnly {
+        return Err(OrbitError::PolicyDenied(format!(
+            "tool '{verb}' of plugin '{namespace}' may change state; a page calls one only as \
+             an action the operator confirms"
+        )));
+    }
+    if !source.page().tools.iter().any(|declared| declared == verb) {
+        return Err(OrbitError::PolicyDenied(format!(
+            "page '{page_id}' of plugin '{namespace}' does not declare tool '{verb}'; list \
+                 it under the page's `tools`"
+        )));
+    }
+    check_input(namespace, verb, resolved, &input)?;
+    Ok(PageCall {
+        runtime: core.runtime().clone(),
+        tool: source.plugin.tool_name(verb, source.first_party()),
+        input,
+    })
+}
+
+/// Check one action request from an active page: the tool is this plugin's
+/// and mutating, the page names it under `actions`, the operator's consent
+/// recorded at enable lists it for this page, and `input` fits its schema.
+/// Nothing runs.
+pub(super) fn check_page_action(
+    core: &Core,
+    namespace: &str,
+    page_id: &str,
+    tool: &str,
+    input: Value,
+) -> Result<PageAction, OrbitError> {
+    let source = resolve_page(core, namespace, page_id)?;
+    let (verb, resolved) = page_tool(&source, namespace, tool)?;
+    if resolved.execution_kind != PluginExecutionKind::Mutating {
+        return Err(OrbitError::PolicyDenied(format!(
+            "tool '{verb}' of plugin '{namespace}' is `read_only`; a page reads it with a call, \
+             not an action"
+        )));
+    }
+    if !source
+        .page()
+        .actions
+        .iter()
+        .any(|declared| declared == verb)
+    {
+        return Err(OrbitError::PolicyDenied(format!(
+            "page '{page_id}' of plugin '{namespace}' does not declare action '{verb}'; list it \
+             under the page's `actions`"
+        )));
+    }
+    let runtime = core.runtime();
+    let installed = runtime
+        .stores()
+        .host_store()
+        .read()
+        .and_then(|snapshot| snapshot.plugin().get(namespace))?;
+    let consented = installed
+        .as_ref()
+        .map(|installed| witnessed_page_actions(&runtime.global_root(), installed))
+        .unwrap_or_default();
+    if !consented
+        .get(page_id)
+        .is_some_and(|verbs| verbs.iter().any(|consented| consented == verb))
+    {
+        return Err(OrbitError::PolicyDenied(format!(
+            "action '{verb}' of page '{page_id}' of plugin '{namespace}' has no recorded \
+             consent; review the page's actions with `orbit plugin enable {namespace}`"
+        )));
+    }
+    check_input(namespace, verb, resolved, &input)?;
+    Ok(PageAction {
+        plugin: namespace.to_string(),
+        version: source.plugin.manifest.metadata.version.clone(),
+        page: page_id.to_string(),
+        page_title: source.page().title.clone(),
+        tool: source.plugin.tool_name(verb, source.first_party()),
+        description: resolved.description.clone(),
+        input,
+    })
+}
+
+/// Run one confirmed action: refused unless its confirmation held, then
+/// checked again as [`check_page_action`] checks it, then run once through
+/// the audited dispatch with the operator's capability and the web session.
+pub(super) fn run_page_action(core: &Core, run: PageActionRun) -> Result<Value, OrbitError> {
+    let PageActionRun {
+        namespace,
+        page,
+        tool,
+        input,
+        confirmation,
+        session,
+        ..
+    } = run;
+    confirmation.map_err(OrbitError::PolicyDenied)?;
+    let action = check_page_action(core, &namespace, &page, &tool, input)?;
+    core.runtime().run_tool_command_with_session(
+        &action.tool,
+        action.input,
+        None,
+        None,
+        ToolSessionContext {
+            effective_capabilities: [McpCapability::Operator].into_iter().collect(),
+            origin_session_id: session,
+            write_surface: Some(TaskWriteSurface::Web),
+            ..ToolSessionContext::default()
+        },
+    )
+}
+
+/// The tool of `source`'s plugin a page names, by verb or canonical name. A
+/// dotted name of another plugin's tool, or a verb the plugin lacks, is a
+/// policy refusal.
+fn page_tool<'a>(
+    source: &'a PageSource,
+    namespace: &str,
+    tool: &'a str,
+) -> Result<(&'a str, &'a ResolvedPluginTool), OrbitError> {
+    let prefix = plugin_tool_name(namespace, "", source.first_party());
     // The bridge names a verb; a canonical name of this plugin's tool is
     // accepted too. Any other dotted name is another plugin's.
     let verb = match tool.strip_prefix(prefix.as_str()) {
@@ -183,36 +369,34 @@ pub(super) fn check_page_call(
         }
         None => tool,
     };
-    let Some(resolved) = plugin.tools.iter().find(|candidate| candidate.verb == verb) else {
+    let Some(resolved) = source
+        .plugin
+        .tools
+        .iter()
+        .find(|candidate| candidate.verb == verb)
+    else {
         return Err(OrbitError::PolicyDenied(format!(
             "plugin '{namespace}' has no tool '{verb}'"
         )));
     };
-    if resolved.execution_kind != PluginExecutionKind::ReadOnly {
-        return Err(OrbitError::PolicyDenied(format!(
-            "tool '{verb}' of plugin '{namespace}' may change state; a page may call only \
-                 `read_only` tools"
-        )));
-    }
-    if !source.page().tools.iter().any(|declared| declared == verb) {
-        return Err(OrbitError::PolicyDenied(format!(
-            "page '{page_id}' of plugin '{namespace}' does not declare tool '{verb}'; list \
-                 it under the page's `tools`"
-        )));
-    }
+    Ok((verb, resolved))
+}
+
+fn check_input(
+    namespace: &str,
+    verb: &str,
+    resolved: &ResolvedPluginTool,
+    input: &Value,
+) -> Result<(), OrbitError> {
     let schema = CompiledSchema::compile(resolved.input_schema.clone()).map_err(|error| {
         OrbitError::Execution(format!(
             "input schema of tool '{verb}' of plugin '{namespace}': {error}"
         ))
     })?;
-    if let Some(violations) = schema.violations(&input) {
+    if let Some(violations) = schema.violations(input) {
         return Err(OrbitError::InvalidInput(format!(
             "input for tool '{verb}' does not fit its schema: {violations}"
         )));
     }
-    Ok(PageCall {
-        runtime: core.runtime().clone(),
-        tool: plugin_tool_name(namespace, verb, first_party),
-        input,
-    })
+    Ok(())
 }

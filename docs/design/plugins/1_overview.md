@@ -3,7 +3,7 @@ title: Plugins — Overview
 owner: claude
 created_date: 2026-09-20
 updated_date: 2026-11-28
-last_validated: 2026-11-27
+last_validated: 2026-11-28
 status: Accepted
 stage: shipped
 next: "—"
@@ -49,8 +49,9 @@ are also implemented (see [2_design.md §7](./2_design.md#7-phases-each-its-own-
 - **Dashboard code with the dashboard's authority, top-level destinations or built-in
   feature toggles.** Plugins get declarative panels and links, and
   [pages](../plugin-pages/1_overview.md): sub-tabs under Plugins that run in a sandboxed
-  frame and reach data only through the plugin's own `read_only` tools. A plugin adds no
-  destination to the rail.
+  frame and reach data only through the plugin's own `read_only` tools; a page runs one of
+  its plugin's mutating tools only as a consented action the operator confirms in a dialog
+  the dashboard draws outside the frame. A plugin adds no destination to the rail.
 - Marketplace/discovery. Sources are a path, a git URL or an archive.
 
 The full specification and contracts are in [2_design.md](./2_design.md); recorded decisions are in [4_decisions.md](./4_decisions.md).

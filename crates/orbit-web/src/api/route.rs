@@ -386,6 +386,18 @@ pub(crate) fn router(state: crate::state::DashboardState) -> Router<crate::state
             "/plugins/{namespace}/pages/{page}/call",
             post(plugins::call_page),
         )
+        // An action: a mutating tool the page names under `actions`. The
+        // dashboard obtains a one-time confirmation, draws its own dialog
+        // outside the frame and runs the action only on the operator's
+        // confirm [plugin-pages §3]. Both need the operator session.
+        .route(
+            "/plugins/{namespace}/pages/{page}/actions/confirm",
+            post(plugins::confirm_page_action),
+        )
+        .route(
+            "/plugins/{namespace}/pages/{page}/actions/run",
+            post(plugins::run_page_action),
+        )
         .layer(middleware::map_response(json_client_error))
         .layer(middleware::from_fn_with_state(
             remote_access,

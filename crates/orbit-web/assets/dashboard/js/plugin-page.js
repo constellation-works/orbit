@@ -8,12 +8,21 @@
 // `POST /api/plugins/<ns>/pages/<page>/call` without client-side filtering,
 // sends the init context on load, reloads on workspace or host change, and
 // updates the hash query in place when the page asks.
+//
+// An action (`{act: tool, input}`) is a mutating tool the page names under
+// `actions`. The relay asks the server to check it and issue a one-time
+// confirmation, draws its own modal dialog in the dashboard document naming
+// the plugin, the tool and the input, and sends the run only when the
+// operator presses Run. The dialog sits in the top layer and makes the rest
+// of the document, the frame included, inert: the page can neither draw over
+// it, dismiss it nor confirm it.
 
 import {
   AGGREGATE_PANEL_PLACEHOLDER,
   captureWorkspaceVisit,
   currentHostToken,
   el,
+  escCloseButton,
   getWorkspaceRevision,
   hostWriteRefusal,
   isAggregateView,
@@ -26,6 +35,14 @@ import {
 const $ = (id) => document.getElementById(id);
 
 const BRIDGE_VERSION = 1;
+
+// Run is armed only after the dialog has been on screen this long, so a
+// click the page timed to land where the button appears confirms nothing.
+const ACTION_ARM_MS = 800;
+
+// The open action dialog's settle function, or null. One action at a time:
+// a page asking again while one is open is answered `busy`.
+let openActionDialog = null;
 
 // Remembered route while Plugins is open or revisited in the same workspace:
 // `{ namespace, page, query }` or null when Installed is selected.
@@ -141,6 +158,8 @@ export function reloadActivePluginPage() {
 }
 
 function unmountFrame() {
+  // The frame that asked is gone; its action is cancelled, never run.
+  if (openActionDialog) openActionDialog(false);
   if (activeFrame) {
     activeFrame.remove();
     activeFrame = null;
@@ -509,9 +528,167 @@ function handleBridgeMessage(event) {
     return;
   }
 
+  if (typeof message.act === "string") {
+    if (message.id === undefined || message.id === null) return;
+    void relayAction(activeFrame, meta, message.id, message.act, message.input);
+    return;
+  }
+
   if (typeof message.query === "string") {
     applyPageQuery(message.query);
   }
+}
+
+function replyToFrame(frame, reply) {
+  if (frame !== activeFrame || !frame.isConnected || !frame.contentWindow) return;
+  frame.contentWindow.postMessage({ v: BRIDGE_VERSION, ...reply }, "*");
+}
+
+function replyError(frame, id, code, message) {
+  replyToFrame(frame, { id, ok: false, error: { code: String(code), message: String(message) } });
+}
+
+async function relayAction(frame, meta, id, tool, input) {
+  if (openActionDialog) {
+    replyError(frame, id, "busy", "another action is waiting for the operator");
+    return;
+  }
+  const base = `/api/plugins/${encodeURIComponent(meta.namespace)}/pages/${encodeURIComponent(meta.page)}/actions`;
+  const body = { tool, input: input === undefined ? {} : input };
+  let checked;
+  try {
+    checked = await requestJson(`${base}/confirm`, "POST", body, meta.visit);
+  } catch (error) {
+    replyError(frame, id, error?.code || "action_refused", error?.message || "the action was refused");
+    return;
+  }
+  if (frame !== activeFrame || !frame.isConnected) return;
+  if (openActionDialog) {
+    replyError(frame, id, "busy", "another action is waiting for the operator");
+    return;
+  }
+  const confirmed = await confirmPageAction(checked);
+  if (!confirmed) {
+    replyError(frame, id, "cancelled", "the operator cancelled the action");
+    return;
+  }
+  if (frame !== activeFrame || !frame.isConnected) return;
+  try {
+    const payload = await requestJson(
+      `${base}/run`,
+      "POST",
+      { ...body, confirmation: checked.confirmation },
+      meta.visit,
+    );
+    const reply = { id, ok: true, output: payload?.output };
+    if (payload?.truncated === true) reply.truncated = true;
+    if (typeof payload?.diagnostic === "string") reply.diagnostic = payload.diagnostic;
+    replyToFrame(frame, reply);
+  } catch (error) {
+    replyError(frame, id, error?.code || "call_failed", error?.message || "the action failed");
+  }
+}
+
+function prettyInput(input) {
+  try {
+    return JSON.stringify(input ?? {}, null, 2);
+  } catch {
+    return String(input);
+  }
+}
+
+// The dashboard-drawn confirmation for one checked action. Resolves true
+// only on Run; Cancel, Escape, dismissal or the frame going away resolve
+// false. Every line it shows comes from the server's check, not the page.
+function confirmPageAction(checked) {
+  if (typeof document === "undefined" || typeof document.createElement !== "function") {
+    return Promise.resolve(false);
+  }
+  const dialog = document.createElement("dialog");
+  if (!dialog || typeof dialog.showModal !== "function") return Promise.resolve(false);
+  return new Promise((resolve) => {
+    dialog.className = "plugin-action-dialog dialog-surface";
+    dialog.setAttribute("aria-labelledby", "plugin-action-heading");
+    dialog.setAttribute("aria-describedby", "plugin-action-body");
+    const title = el("h3", { text: "Run a plugin action?" });
+    title.id = "plugin-action-heading";
+    const plugin = checked.version ? `${checked.plugin} v${checked.version}` : String(checked.plugin || "");
+    const facts = el("dl", { class: "plugin-action-facts" }, [
+      el("dt", { text: "Plugin" }),
+      el("dd", { class: "mono", text: plugin }),
+      el("dt", { text: "Page" }),
+      el("dd", { text: String(checked.page_title || checked.page || "") }),
+      el("dt", { text: "Tool" }),
+      el("dd", { class: "mono", text: String(checked.tool || "") }),
+    ]);
+    const children = [facts];
+    if (checked.description) {
+      children.push(el("p", { class: "plugin-action-description", text: String(checked.description) }));
+    }
+    children.push(
+      el("p", { class: "plugin-action-label", text: "Input" }),
+      el("pre", { class: "plugin-action-input mono", text: prettyInput(checked.input) }),
+      el("p", {
+        class: "plugin-action-note",
+        text: "The page asked for this. It runs once, with your authority, only if you press Run.",
+      }),
+    );
+    const copy = el("div", { class: "dialog-body" }, children);
+    copy.id = "plugin-action-body";
+    const runButton = el("button", { class: "action ship", text: "Run", type: "button" });
+    const cancelButton = el("button", { class: "action cancel", text: "Cancel", type: "button" });
+    runButton.disabled = true;
+    const actions = el("div", { class: "plugin-action-actions dialog-actions" }, [runButton, cancelButton]);
+    const closeButton = escCloseButton("Cancel (Esc)", { onClick: () => settle(false) });
+    dialog.append(el("header", { class: "dialog-header" }, [title, closeButton]), copy, actions);
+    const previouslyFocused = document.activeElement;
+    let settled = false;
+    const arm = setTimeout(() => { runButton.disabled = false; }, ACTION_ARM_MS);
+    const onDocumentEscape = (event) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      settle(false);
+    };
+    const settle = (value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(arm);
+      openActionDialog = null;
+      document.removeEventListener("keydown", onDocumentEscape, true);
+      if (dialog.open) dialog.close();
+      dialog.remove();
+      if (previouslyFocused && typeof previouslyFocused.focus === "function") {
+        previouslyFocused.focus();
+      }
+      resolve(value);
+    };
+    openActionDialog = settle;
+    // Only a trusted click from the operator runs the action.
+    runButton.addEventListener("click", (event) => {
+      if (!event.isTrusted || runButton.disabled) return;
+      settle(true);
+    });
+    cancelButton.addEventListener("click", () => settle(false));
+    dialog.addEventListener("cancel", (event) => {
+      event.preventDefault();
+      settle(false);
+    });
+    dialog.addEventListener("close", () => settle(false));
+    dialog.addEventListener("keydown", (event) => {
+      if (event.key !== "Tab" || event.altKey || event.ctrlKey || event.metaKey) return;
+      const controls = [closeButton, runButton, cancelButton].filter((node) => !node.disabled);
+      if (!controls.length) return;
+      const active = document.activeElement;
+      if (event.shiftKey ? active === controls[0] : active === controls[controls.length - 1]) {
+        event.preventDefault();
+        (event.shiftKey ? controls[controls.length - 1] : controls[0]).focus();
+      }
+    });
+    document.addEventListener("keydown", onDocumentEscape, true);
+    document.body.appendChild(dialog);
+    dialog.showModal();
+    cancelButton.focus();
+  });
 }
 
 async function relayToolCall(frame, meta, id, tool, input) {

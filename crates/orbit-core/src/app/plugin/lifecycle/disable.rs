@@ -18,7 +18,7 @@ use crate::app::plugin::skill::unlink_plugin_skills;
 /// (§3).
 pub fn disable_plugin(runtime: &OrbitRuntime, name: &str) -> Result<PluginSummary, OrbitError> {
     verified_install_path(runtime, &installed_plugin(runtime, name)?)?;
-    let summary = set_enabled(runtime, name, false, None, None)?;
+    let summary = set_enabled(runtime, name, false, None, None, None)?;
     unlink_namespace_skills(runtime, name)?;
     Ok(summary)
 }

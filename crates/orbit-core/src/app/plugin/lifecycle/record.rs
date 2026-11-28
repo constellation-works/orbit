@@ -13,7 +13,8 @@ use orbit_types::record::OrbitEvent;
 
 use crate::OrbitRuntime;
 use crate::runtime::plugin::grants::{
-    record_authorization, recorded_program_paths, verify_install_path,
+    PageActionConsent, record_authorization, recorded_page_actions, recorded_program_paths,
+    verify_install_path,
 };
 use crate::runtime::plugin::host::projected_status;
 use crate::runtime::plugin::paths::read_pin_file;
@@ -52,15 +53,16 @@ pub(in crate::app::plugin) fn installed_plugin(
         .ok_or_else(|| missing_install(runtime, name))
 }
 
-/// `programs` is the resolution an enabling command just made; `None` keeps
-/// the one last recorded, so a disabled plugin still shows what it was
-/// consented to run.
+/// `programs` is the resolution an enabling command just made and
+/// `page_actions` the page actions it consented to; `None` keeps the one last
+/// recorded, so a disabled plugin still shows what it was consented to run.
 pub(super) fn set_enabled(
     runtime: &OrbitRuntime,
     name: &str,
     enabled: bool,
     grants: Option<&[String]>,
     programs: Option<&BTreeMap<String, PathBuf>>,
+    page_actions: Option<&PageActionConsent>,
 ) -> Result<PluginSummary, OrbitError> {
     let mut existing = runtime
         .stores()
@@ -113,7 +115,17 @@ pub(super) fn set_enabled(
     let programs = programs
         .cloned()
         .unwrap_or_else(|| recorded_program_paths(&runtime.global_root(), name));
-    record_authorization(&runtime.global_root(), name, enabled, &grants, &programs)?;
+    let page_actions = page_actions
+        .cloned()
+        .unwrap_or_else(|| recorded_page_actions(&runtime.global_root(), name));
+    record_authorization(
+        &runtime.global_root(),
+        name,
+        enabled,
+        &grants,
+        &programs,
+        &page_actions,
+    )?;
     if let Some((projection, plugin)) = projection {
         let mut summary = summary_for_installed(
             &existing,

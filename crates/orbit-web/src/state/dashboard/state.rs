@@ -488,6 +488,13 @@ impl DashboardState {
             .then_some(self.inner.session_id.as_str())
     }
 
+    /// The server-instance session identifier whether or not it holds the
+    /// operator capability, for an audit row that records a refused request
+    /// too.
+    pub(crate) fn web_session_id(&self) -> &str {
+        self.inner.session_id.as_str()
+    }
+
     /// Observe the native host clock.
     pub(crate) fn clock_status(&self) -> Result<ClockStatus, OrbitError> {
         #[cfg(test)]

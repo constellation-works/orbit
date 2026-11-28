@@ -18,8 +18,10 @@ use crate::runtime::plugin::grants::{
 use crate::runtime::plugin::host::projected_status;
 use crate::runtime::plugin::paths::plugin_install_path;
 
-use super::super::inspect::{PluginSummary, summary_for_installed};
-use super::super::lifecycle::{resolve_consented_programs, unrequested_grant_warnings};
+use crate::app::plugin::inspect::{PluginSummary, summary_for_installed};
+use crate::app::plugin::lifecycle::{
+    declared_page_actions, resolve_consented_programs, unrequested_grant_warnings,
+};
 use crate::app::plugin::secret::{prune_undeclared_secrets, unset_secret_warnings};
 
 use super::permissions::{
@@ -391,7 +393,14 @@ fn install_plugin_inner(
             runtime.execution_env_policy().process_env(),
         );
         program_warnings = warnings;
-        record_authorization(&global_root, &name, enabled, &record.grants, &programs)?;
+        record_authorization(
+            &global_root,
+            &name,
+            enabled,
+            &record.grants,
+            &programs,
+            &declared_page_actions(&plugin),
+        )?;
     }
 
     // `--enable` is an enable: the plugin's schedules are seeded and its
