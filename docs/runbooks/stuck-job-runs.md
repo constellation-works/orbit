@@ -1347,8 +1347,10 @@ review the decoded bytes before submitting. Inspection refuses when:
 - the source is not a failed kept inline publication whose final recovery
   settled (escalated or requeued) or applied its `resume` in place;
 - the checkout is missing, clean, holds an untracked or unmerged path, has a
-  staged or unstaged Git-link (submodule) change the patch cannot carry, has a
-  truncated listing, or its patch exceeds 8 MiB;
+  Git link (submodule) in its index, has a truncated listing, or its patch
+  exceeds 8 MiB. Git links are refused even when apparently clean because
+  inspection does not enter nested checkouts to verify their state; reconcile
+  such edits manually;
 - the checkout's `HEAD` is not the binding's candidate head.
 
 Submit the inspected binding unchanged with the usual `request_key`,

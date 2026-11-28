@@ -221,6 +221,29 @@ impl OrbitRuntime {
         let Some(worktree) = paths.into_iter().find(|path| path.is_dir()) else {
             return Err(format!("run {}'s worktree no longer exists", run.run_id));
         };
+        // Inspect only the superproject index. Status deliberately ignores nested
+        // checkouts, so even a seemingly clean gitlink cannot be proved unchanged.
+        let (index, truncated) = read_only_git(
+            &worktree,
+            &["ls-files", "--stage", "-z"],
+            candidate_status_limit(),
+        )?;
+        if truncated {
+            return Err("the retained checkout's index listing is truncated".into());
+        }
+        if let Some(entry) = index
+            .split(|byte| *byte == 0)
+            .find(|entry| entry.starts_with(b"160000 "))
+        {
+            let path = entry
+                .iter()
+                .position(|byte| *byte == b'\t')
+                .map(|pos| String::from_utf8_lossy(&entry[pos + 1..]))
+                .unwrap_or_default();
+            return Err(format!(
+                "the retained checkout contains Git link (submodule) {path}; its nested state cannot be verified without entering it, so its edits cannot be adopted exactly. Reconcile the retained checkout manually"
+            ));
+        }
         let (status, truncated) = read_only_git(
             &worktree,
             &["status", "--porcelain=v1", "-z", "--untracked-files=all"],

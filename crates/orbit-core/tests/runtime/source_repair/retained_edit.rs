@@ -261,10 +261,67 @@ fn adoption_refuses_a_staged_git_link() {
     assert_eq!(git(&checkout, &["status", "--porcelain"]), dirty);
 }
 
+fn adoption_refuses_an_unstaged_git_link_move() {
+    let (f, checkout, _) = incident();
+    let nested = checkout.join("nested");
+    std::fs::create_dir(&nested).unwrap();
+    git(&nested, &["init", "-q"]);
+    git(&nested, &["config", "user.name", "Fixture"]);
+    git(&nested, &["config", "user.email", "fixture@example.com"]);
+    std::fs::write(nested.join("file"), "first\n").unwrap();
+    git(&nested, &["add", "file"]);
+    git(&nested, &["commit", "-qm", "first"]);
+    let first = git(&nested, &["rev-parse", "HEAD"]);
+    let original_head = git(&checkout, &["rev-parse", "HEAD"]);
+    git(
+        &checkout,
+        &[
+            "update-index",
+            "--add",
+            "--cacheinfo",
+            &format!("160000,{first},nested"),
+        ],
+    );
+    git(&checkout, &["commit", "-qm", "add git link"]);
+    let tree = git(&checkout, &["rev-parse", "HEAD^{tree}"]);
+    let parent = git(&checkout, &["rev-parse", &format!("{original_head}^")]);
+    let linked_head = git(
+        &checkout,
+        &["commit-tree", &tree, "-p", &parent, "-m", "fixture"],
+    );
+    // Keep the published identity while giving this isolated fixture a HEAD
+    // tree containing the link, as a real published candidate would have.
+    git(&checkout, &["replace", &original_head, &linked_head]);
+    git(&checkout, &["update-ref", "HEAD", &original_head]);
+    std::fs::write(nested.join("file"), "second\n").unwrap();
+    git(&nested, &["commit", "-qam", "second"]);
+    let nested_head = git(&nested, &["rev-parse", "HEAD"]);
+    let dirty = git(&checkout, &["status", "--porcelain"]);
+    assert!(dirty.contains("nested"), "{dirty}");
+    assert!(
+        !git(
+            &checkout,
+            &["-c", "diff.ignoreSubmodules=all", "status", "--porcelain"]
+        )
+        .contains("nested")
+    );
+
+    let mut request = f.request("inspect");
+    request["source_repair"]["adopt_retained_edits"] = json!(true);
+    let error = refused_without_effects(&f, request, "unstaged git link");
+    assert!(
+        error.contains("nested") && error.contains("Git link"),
+        "{error}"
+    );
+    assert_eq!(git(&checkout, &["status", "--porcelain"]), dirty);
+    assert_eq!(git(&nested, &["rev-parse", "HEAD"]), nested_head);
+}
+
 crate::scenario_table!(
     retained_edit_scenarios,
     retained_final_recovery_edits_reach_a_fresh_same_pr_repair,
     non_utf8_patch_is_reconstructable_from_the_inspection,
     adoption_refuses_a_clean_checkout,
-    adoption_refuses_a_staged_git_link
+    adoption_refuses_a_staged_git_link,
+    adoption_refuses_an_unstaged_git_link_move
 );
