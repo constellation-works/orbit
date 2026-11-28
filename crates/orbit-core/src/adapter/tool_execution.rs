@@ -155,10 +155,14 @@ impl OrbitRuntime {
         }
         if tool_context.orbit_host.is_none() {
             let task_id = resolve_task_id_from_context(self, &tool_context)?;
+            let run_id = tool_context
+                .activity_binding
+                .as_ref()
+                .map(|binding| binding.job_run_id.clone());
             tool_context.orbit_host = Some(super::tool_host::build_orbit_tool_host(
                 crate::Core::within_tool_entry(self.clone()),
                 task_id,
-                super::tool_host::ToolHostRun::InProcess(None),
+                super::tool_host::ToolHostRun::InProcess(run_id),
                 tool_context.session_context.clone(),
             ));
         }

@@ -330,10 +330,17 @@ pub fn populate_filesystem_policy_context(
 /// Cwd-inside-repo is not a task selector: scanning the table and returning
 /// the first row was both arbitrary and unused by root resolution.
 pub fn resolve_task_id_from_context(
-    _runtime: &RuntimeKernel,
-    _tool_context: &ToolContext,
+    runtime: &RuntimeKernel,
+    tool_context: &ToolContext,
 ) -> Result<Option<String>, OrbitError> {
-    Ok(None)
+    if let Some(binding) = tool_context.activity_binding.as_ref() {
+        return Ok(binding
+            .task_id
+            .as_deref()
+            .and_then(crate::base::managed_env::non_empty)
+            .map(ToOwned::to_owned));
+    }
+    Ok(crate::base::managed_env::managed_run_context_task_id_from_env(runtime.env()))
 }
 
 fn resolve_workspace_root_from_context(
