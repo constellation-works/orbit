@@ -41,7 +41,7 @@ Design intent: [docs/design/orbit-core/](../../docs/design/orbit-core/) — this
 - `lock_modes`: Ordered per-path footprint lock modes (`workflow.lock_modes`); imports `orbit-common` and `serde` only.
 - `memory_limit`: Grammar and parser for worker memory limits (`machine.worker_memory_*`); imports `std` and `serde` only.
 - `operation`: Typed review timing and operation preferences; imports `alias`, `document`, `orbit-common`, and `orbit-types`.
-- `pilot_note`: Admission of `[workflow.pilot_notes.<label>]` instruction-file mappings; imports `document`, `orbit-common`, and `orbit-types`.
+- `pilot_note`: Admission of `[workflow.pilot_notes.<label>]` instruction-file mappings; imports `document`, `tag_instructions`, `orbit-common`, and `orbit-types`.
 - `persistence`: Resolved persistent artifact store paths derived from explicit roots; imports `orbit-types` and `serde_json` only.
 - `plugin_enablement`: Workspace-scoped `[plugin_enablement]` toggle admission; imports `roots`, `document`, `orbit-common`, and `orbit-types`.
 - `plugins`: Dynamically named `[plugins.<ns>]` configuration section admission; imports `jsonschema`, `orbit-common`, and `serde_json` only.

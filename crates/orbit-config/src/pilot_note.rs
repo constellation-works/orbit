@@ -24,11 +24,6 @@ pub struct PilotNoteSettings {
 }
 
 impl PilotNoteSettings {
-    /// Repository-relative instruction path mapped to `label`, if enabled.
-    pub fn path(&self, label: &str) -> Option<&str> {
-        self.notes.get(label).map(String::as_str)
-    }
-
     /// Every enabled `(label, path)` mapping, in sorted label order.
     pub fn entries(&self) -> impl Iterator<Item = (&str, &str)> {
         self.notes
