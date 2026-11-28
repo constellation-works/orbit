@@ -11,12 +11,14 @@ use orbit_store::contract::{JobRunInputTextFilter, JobRunStepTargetQuery};
 use orbit_types::tool::{AttentionItem, AttentionKind, AttentionNext, AttentionSeverity};
 use orbit_types::workflow::{
     DELIVERY_LEAF_JOBS, JobRun, JobRunState, JobRunStep, JobTargetType,
-    TASK_CLAIMED_LOCAL_PIPELINE_JOB, WORKTREE_SETUP_STEP_ID,
+    TASK_CLAIMED_LOCAL_PIPELINE_JOB, Trailer, TrailerKey, WORKTREE_SETUP_STEP_ID,
 };
 use serde_json::json;
 use std::time::Instant;
 
 const KIND: AttentionKind = AttentionKind::DeliveryStaleBase;
+
+const OWNER_ONLY_COMMIT_LIMIT: usize = 20;
 
 const STALE_BASE_HOLD_QUERY_LIMIT: usize = 128;
 
@@ -233,7 +235,7 @@ fn observe(
             "Cannot compare local and origin history for {branch}: {error}"
         ))
     })?;
-    let dirty = if ahead == 0 && behind > 0 {
+    let dirty = if behind > 0 {
         if let Some(path) = checkout {
             let holder = git2::Repository::open(path).map_err(|error| {
                 OrbitError::Execution(format!("Cannot open recorded checkout '{}': {error}", path))
@@ -279,7 +281,7 @@ fn observe(
             OrbitError::Execution(format!("Cannot compare commits for {branch}: {error}"))
         })?;
     let mut commits = Vec::new();
-    for oid in walk {
+    for oid in walk.take(OWNER_ONLY_COMMIT_LIMIT) {
         let commit = repo
             .find_commit(oid.map_err(|error| {
                 OrbitError::Execution(format!("Cannot read commit history for {branch}: {error}"))
@@ -291,7 +293,13 @@ fn observe(
         commits.push(json!({
             "sha": commit.id().to_string(),
             "summary": message,
-            "task_id": task_from_message(message),
+            "task_id": task_from_message(message).map(str::to_owned).or_else(|| {
+                commit.message().ok().and_then(|full| {
+                    full.lines().skip(1).filter_map(Trailer::parse_line)
+                        .find(|trailer| trailer.key == TrailerKey::OrbitTask)
+                        .map(|trailer| trailer.value)
+                })
+            }),
         }));
     }
     let commit_hint = commits
@@ -315,6 +323,24 @@ fn observe(
     });
     let refs = json!({});
     let since = run.finished_at.unwrap_or(run.created_at);
+    let reason = if ahead == 0 {
+        format!(
+            "Deliveries held: {branch} is behind {behind} of origin/{branch}; checkout has tracked changes"
+        )
+    } else {
+        format!(
+            "Deliveries held: {branch} is ahead {ahead}, behind {behind} of origin/{branch}; owner-only commit {commit_hint}{task_hint}"
+        )
+    };
+    let command = if ahead == 0 {
+        let path = checkout.unwrap_or(".").replace('\'', "'\\''");
+        format!("git -C '{path}' status --short --untracked-files=no")
+    } else {
+        format!(
+            "git log --oneline '{}'",
+            format!("origin/{branch}..{branch}").replace('\'', "'\\''")
+        )
+    };
     let mut item = AttentionItem {
         id: cursor::attention_item_id(KIND, &context.host.machine_id, &context.workspace.id, &refs),
         kind: KIND,
@@ -326,9 +352,7 @@ fn observe(
         since: Some(since),
         age_seconds: Some((context.now - since).num_seconds().max(0) as u64),
         expires_at: None,
-        reason: attention_reason(&format!(
-            "Deliveries held: {branch} is ahead {ahead}, behind {behind} of origin/{branch}; owner-only commit {commit_hint}{task_hint}"
-        )),
+        reason: attention_reason(&reason),
         detail: detail.clone(),
         next: AttentionNext {
             summary: concat!(
@@ -338,10 +362,7 @@ fn observe(
             .into(),
             tool: None,
             input: None,
-            command: format!(
-                "git log --oneline '{}'",
-                format!("origin/{branch}..{branch}").replace('\'', "'\\''")
-            ),
+            command,
             needs: vec![],
             also: vec![],
         },
