@@ -31,8 +31,15 @@ function refreshDraftDetails(wrap, task, context, readinessTask = task) {
   taskReadiness.refreshOperatorRecordFeedback(wrap, task);
   refreshDecisionAnswerFeedback(wrap, task, context);
   if (Array.isArray(readinessTask.context_files)) {
-    const count = wrap.querySelector(`#${CSS.escape(`detail-${task.id}-tab-context_files`)} .detail-tab-count`);
-    if (count) count.textContent = String(readinessTask.context_files.length);
+    const tabButton = wrap.querySelector(`#${CSS.escape(`detail-${task.id}-tab-context_files`)}`);
+    const countText = String(readinessTask.context_files.length);
+    const detail = tabButton?.closest?.(".task-detail");
+    if (detail && typeof detail.setTabCount === "function") {
+      detail.setTabCount("context_files", countText);
+    } else {
+      const count = tabButton?.querySelector?.(".detail-tab-count");
+      if (count) count.textContent = countText;
+    }
     for (const ul of wrap.querySelectorAll(".file-list")) {
       if (!ul.contentionTask) continue;
       ul.contentionTask = readinessTask;

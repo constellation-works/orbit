@@ -733,16 +733,18 @@ function buildDetailTabs(task, detail, tabs, context) {
   strip.append(list, overflow);
   const buttons = new Map();
   const menuItems = new Map();
+  const tabEntries = new Map();
   const panels = new Map();
   const available = new Set(tabs.filter((tab) => tab.available !== false).map((tab) => tab.name));
   const runsNode = tabs.find((tab) => tab.name === "runs")?.content || null;
   let current = null;
+  let tornDown = false;
   const closeMenu = () => {
     menu.hidden = true;
     more.setAttribute("aria-expanded", "false");
   };
   const syncTabLayout = () => {
-    if (!strip.isConnected || !list.clientWidth) return;
+    if (tornDown || !strip.isConnected || !list.clientWidth) return;
     for (const [name, button] of buttons) button.hidden = !available.has(name);
     strip.removeAttribute("data-tight");
     strip.removeAttribute("data-condensed");
@@ -846,6 +848,26 @@ function buildDetailTabs(task, detail, tabs, context) {
     document.addEventListener("pointercancel", schedulePointerReset);
     document.addEventListener("mouseup", schedulePointerReset);
   }
+  const syncTabLabel = (name) => {
+    const entry = tabEntries.get(name);
+    if (!entry) return false;
+    const countText = entry.countEl.textContent || "";
+    const accessibleLabel = countText ? `${entry.tab.label} ${countText}` : entry.tab.label;
+    let changed = false;
+    if (entry.button.getAttribute("aria-label") !== accessibleLabel) {
+      entry.button.setAttribute("aria-label", accessibleLabel);
+      changed = true;
+    }
+    if (entry.item.textContent !== accessibleLabel) {
+      entry.item.textContent = accessibleLabel;
+      changed = true;
+    }
+    if (entry.item.getAttribute("aria-label") !== accessibleLabel) {
+      entry.item.setAttribute("aria-label", accessibleLabel);
+      changed = true;
+    }
+    return changed;
+  };
   let layoutObserver = null;
   if (typeof ResizeObserver !== "undefined") {
     layoutObserver = new ResizeObserver(syncTabLayout);
@@ -853,9 +875,31 @@ function buildDetailTabs(task, detail, tabs, context) {
   } else if (typeof window !== "undefined") {
     window.addEventListener("resize", syncTabLayout);
   }
+  let countObserver = null;
+  if (typeof MutationObserver !== "undefined") {
+    countObserver = new MutationObserver((records) => {
+      let changed = false;
+      const seen = new Set();
+      for (const record of records) {
+        const target = record.target?.nodeType === 1 ? record.target : record.target?.parentElement;
+        const name = target?.closest?.(".detail-tab")?.dataset?.tab;
+        if (!name || seen.has(name)) continue;
+        seen.add(name);
+        if (syncTabLabel(name)) changed = true;
+      }
+      if (changed) syncTabLayout();
+    });
+  }
+  if (typeof document !== "undefined" && document.fonts?.ready && typeof document.fonts.ready.then === "function") {
+    document.fonts.ready.then(() => {
+      if (!tornDown) syncTabLayout();
+    });
+  }
   const originalTeardown = detail.teardown;
   detail.teardown = () => {
+    tornDown = true;
     clearPointerInside();
+    countObserver?.disconnect();
     layoutObserver?.disconnect();
     if (typeof window !== "undefined") window.removeEventListener("resize", syncTabLayout);
     if (typeof document !== "undefined") {
@@ -890,6 +934,7 @@ function buildDetailTabs(task, detail, tabs, context) {
   for (const tab of tabs) {
     const countText = tab.count != null && (tab.count > 0 || tab.showZeroCount) ? String(tab.count) : "";
     const accessibleLabel = countText ? `${tab.label} ${countText}` : tab.label;
+    const countEl = el("span", { class: "detail-tab-count", text: countText });
     const button = el("button", {
       class: "detail-tab",
       type: "button",
@@ -899,7 +944,7 @@ function buildDetailTabs(task, detail, tabs, context) {
       "aria-label": accessibleLabel,
     }, [
       el("span", { class: "detail-tab-label-full", text: tab.label }),
-      el("span", { class: "detail-tab-count", text: countText }),
+      countEl,
     ]);
     button.dataset.tab = tab.name;
     button.addEventListener("click", (event) => {
@@ -924,6 +969,8 @@ function buildDetailTabs(task, detail, tabs, context) {
     });
     menuItems.set(tab.name, item);
     menu.appendChild(item);
+    tabEntries.set(tab.name, { tab, button, countEl, item });
+    countObserver?.observe(countEl, { childList: true, characterData: true, subtree: true });
     const panel = el("div", {
       class: "detail-tabpanel",
       role: "tabpanel",
@@ -947,6 +994,19 @@ function buildDetailTabs(task, detail, tabs, context) {
     activate(next, { focus: true });
   });
   detail.activateTab = (name, opts) => activate(DETAIL_TAB_NAMES.includes(name) ? name : "overview", opts);
+  detail.setTabCount = (name, count) => {
+    const entry = tabEntries.get(name);
+    if (!entry) return;
+    const countText = count == null || count === ""
+      ? ""
+      : typeof count === "string"
+        ? count
+        : (count > 0 || entry.tab.showZeroCount ? String(count) : "");
+    const textChanged = entry.countEl.textContent !== countText;
+    if (textChanged) entry.countEl.textContent = countText;
+    const labelChanged = syncTabLabel(name);
+    if (textChanged || labelChanged) syncTabLayout();
+  };
   detail.setTabAvailable = (name, on) => {
     const button = buttons.get(name);
     if (!button || available.has(name) === Boolean(on)) return;
@@ -1037,9 +1097,16 @@ function renderTaskRuns(node, task, context) {
     }
   }
   node.replaceChildren(...children);
-  const count = document.getElementById(`detail-${task.id}-tab-runs`)?.querySelector?.(".detail-tab-count");
-  if (count && document.getElementById(`detail-${task.id}-runs`) === node) {
-    count.textContent = load && load.items ? String(load.total) : "";
+  const tabButton = document.getElementById(`detail-${task.id}-tab-runs`);
+  if (tabButton && document.getElementById(`detail-${task.id}-runs`) === node) {
+    const nextCount = load && load.items ? String(load.total) : "";
+    const detail = tabButton.closest?.(".task-detail");
+    if (detail && typeof detail.setTabCount === "function") {
+      detail.setTabCount("runs", nextCount);
+    } else {
+      const count = tabButton.querySelector?.(".detail-tab-count");
+      if (count) count.textContent = nextCount;
+    }
   }
 }
 
