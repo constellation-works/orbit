@@ -19,5 +19,5 @@ pub use kinds::{
     UnknownWorkspaceSelector, UpgradeAdmissionRefusal, UpgradeAdmissionRefusalKind,
     WorkflowEvidenceUnavailable, WorkspaceClaimHeld,
 };
-pub use orbit_error::OrbitError;
+pub use orbit_error::{McpErrorSurface, OrbitError};
 pub use reader::{SourceRepairReaderText, source_repair_reader_text};

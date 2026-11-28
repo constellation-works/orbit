@@ -3105,7 +3105,15 @@ fn task_and_delivery_refusals_use_the_calling_surface_syntax() {
         json!({"action": "show", "id": task_id}),
         "not_found",
     );
-    assert_message_parts(&missing_run, &["ask an operator to check run history"]);
+    let delivery_remedy = format!(
+        "orbit_task_show {}",
+        json!({"id": task_id, "field": "delivery"})
+    );
+    assert_message_parts(
+        &missing_run,
+        &["orbit_run {\"action\":\"list\"}", &delivery_remedy],
+    );
+    assert!(!message_contains(&missing_run, "ask an operator"));
     assert!(!message_contains(&missing_run, "orbit run "));
     assert!(!message_contains(&missing_run, "orbit.task."));
     client.call_tool_ok("orbit_run", json!({"action": "list"}));
@@ -3123,7 +3131,8 @@ fn task_and_delivery_refusals_use_the_calling_surface_syntax() {
         json!({"action": "show", "id": "jrun-bogus"}),
         "not_found",
     );
-    assert_message_parts(&missing_run_id, &["ask an operator to check run history"]);
+    assert_message_parts(&missing_run_id, &["orbit_run {\"action\":\"list\"}"]);
+    assert!(!message_contains(&missing_run_id, "ask an operator"));
     assert!(!message_contains(&missing_run_id, "orbit_task_show"));
     assert!(!message_contains(&missing_run_id, "task show"));
     let missing =
@@ -3143,6 +3152,20 @@ fn task_and_delivery_refusals_use_the_calling_surface_syntax() {
     assert!(!message_contains(&no_delivery, "orbit task "));
     assert!(!message_contains(&no_delivery, "orbit.task."));
     client.call_tool_ok("orbit_task_show", json!({"id": task_id}));
+
+    let mut reader = workspace.serve_with_args(&["--operator", "--role", "reader"]);
+    let reader_listed = reader.tools_list();
+    find_tool(tools_array(&reader_listed), "orbit_run");
+    find_tool(tools_array(&reader_listed), "orbit_task_show");
+    let reader_missing_run = reader.assert_tool_error(
+        "orbit_run",
+        json!({"action": "show", "id": "jrun-bogus"}),
+        "not_found",
+    );
+    assert_message_parts(&reader_missing_run, &["orbit_run {\"action\":\"list\"}"]);
+    assert!(!message_contains(&reader_missing_run, "ask an operator"));
+    assert!(!message_contains(&reader_missing_run, "orbit_task_show"));
+    reader.call_tool_ok("orbit_run", json!({"action": "list"}));
 }
 
 /// [ORB-17648] A missing artifact path refuses with the listing remedy in the

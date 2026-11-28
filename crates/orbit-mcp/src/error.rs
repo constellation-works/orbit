@@ -1,43 +1,35 @@
 //! Translation of `OrbitError` values into structured MCP tool error payloads; imports `orbit-common` only.
 
-use orbit_common::OrbitError;
+use orbit_common::{McpErrorSurface, OrbitError};
 use rmcp::model::CallToolResult;
 use serde_json::{Value, json};
 
 /// Map an [`OrbitError`] into a structured MCP error result.
 pub(crate) fn tool_error_result(err: &OrbitError) -> CallToolResult {
-    CallToolResult::structured_error(error_payload(err))
+    CallToolResult::structured_error(error_payload_for_surface(err, McpErrorSurface::default()))
 }
 
-/// Render recovery hints against the tools advertised by this session.
+/// Render recovery hints against the tools this session advertises and can execute.
 pub(crate) fn tool_error_result_for_surface(
     err: &OrbitError,
-    names: &std::collections::HashMap<String, String>,
+    surface: McpErrorSurface,
 ) -> CallToolResult {
-    let mut payload = error_payload(err);
+    let mut payload = error_payload_for_surface(err, surface);
     if let Some(message) = payload
         .get("message")
         .and_then(Value::as_str)
         .map(str::to_owned)
     {
         let mut message = message;
-        for (name, hint, fallback) in [
-            (
-                "orbit_task_show",
+        if !surface.task_show {
+            for hint in [
                 "`orbit_task_show` and `field: \"artifacts\"`",
-                "an operator to list available artifacts",
-            ),
-            (
-                "orbit_task_show",
                 "`orbit_task_show` with `field: \"artifacts\"`",
-                "an operator to list available artifacts",
-            ),
-        ] {
-            if !names.contains_key(name) {
-                message = message.replace(hint, fallback);
+            ] {
+                message = message.replace(hint, "an operator to list available artifacts");
             }
         }
-        if !names.contains_key("orbit_search")
+        if !surface.search
             && message.contains("; to read or list friction records, use `orbit_search`")
             && let Some((prefix, _)) = message.split_once("; to read or list friction records")
         {
@@ -48,12 +40,12 @@ pub(crate) fn tool_error_result_for_surface(
     CallToolResult::structured_error(payload)
 }
 
-fn error_payload(err: &OrbitError) -> Value {
+fn error_payload_for_surface(err: &OrbitError, surface: McpErrorSurface) -> Value {
     if let OrbitError::RemoteTool { payload, .. } = err {
         return payload.clone();
     }
     let stored = err
-        .mcp_error_message()
+        .mcp_error_message_for_surface(surface)
         .replace(
             "`orbit.task.show` with `fields: [\"artifacts\"]`",
             "`orbit_task_show` with `field: \"artifacts\"`",
