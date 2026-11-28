@@ -25,7 +25,7 @@ Record non-obvious decisions here by title. Task references carry provenance; su
 
 ### Context
 
-Editing a task's description or acceptance criteria after its pilot makes admission fail closed as `pilot_assessment_stale` until a new assessment completes — an `--approve-proposed` drain or scheduled discovery repilots it automatically when no live execution claim holds the task, or an operator requests one explicitly — ([design §6](2_design.md#6-pilot-eligibility-and-freshness)). When an operator has just settled the footprint and criteria themselves, as for a docs-only design task, that second pilot only adds delay. The `no-pilot` tag already existed but meant only "skip the first automatic pilot", and admission ignored it once a receipt existed.
+[Pilot before promote](../../principles/pilot-before-promote.md) states why a task is piloted before it enters the backlog; this entry records the operator's skip. Editing a task's description or acceptance criteria after its pilot makes admission fail closed as `pilot_assessment_stale` until a new assessment completes — an `--approve-proposed` drain or scheduled discovery repilots it automatically when no live execution claim holds the task, or an operator requests one explicitly — ([design §6](2_design.md#6-pilot-eligibility-and-freshness)). When an operator has just settled the footprint and criteria themselves, as for a docs-only design task, that second pilot only adds delay. The `no-pilot` tag already existed but meant only "skip the first automatic pilot", and admission ignored it once a receipt existed.
 
 ### Decision
 
