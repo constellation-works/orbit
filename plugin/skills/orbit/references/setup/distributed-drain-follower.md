@@ -100,8 +100,12 @@ returns.
     artifact of another task is refused for every activity.
   - Writes: `orbit.task.artifact` `put` on the claimed task, `orbit.friction`
     `add` for the claimed task, and `orbit.task.add` of a task `spawned_from`
-    the claimed task and related to nothing else. A finding from a claimed
-    review auto-task may also name its culprit as `regression_from`.
+    the claimed task and related to nothing else. A finding filed by eligible
+    claimed review or QA work may also name its culprit as `regression_from`:
+    scheduler-minted review/QA auto-tasks as well as coordinator-filed
+    review/QA area tasks (`no-diff-expected` with `full-code-review` or
+    `qa-full-sweep`). Each culprit must be a task in the claimed workspace,
+    and the `spawned_from` binding to the claimed task is still required.
   - Notices: `orbit.notice.post`, `orbit.notice.show` and `orbit.notice.close`,
     bound to the claimed task and run.
   Any other owner call is refused. The agent is denied `orbit.task.update` and
