@@ -1348,10 +1348,16 @@ plugin subprocess calls to `orbit attention`'s recompute loop:
   surfaces as one `decision_open` item carrying `refs.decision_id`, `detail.plugin`,
   `detail.subject` and `detail.apply_tool`, with `next` pointing to `orbit decision
   answer`.
-- **Severity:** a `plugin_request` surfaced as `decision_open` starts at `low` severity
-  and bumps under the existing fixed age / imminent-expiry rules so bulk holder-task
-  questions from one distribution do not crowd out `high`-severity `blocked` or
-  `pilot_hold` items in federated fleet reads.
+- **Severity:** a `plugin_request` surfaced as `decision_open` starts at `low`, so bulk
+  holder-task questions from one distribution do not crowd out `high`-severity `blocked`
+  or `pilot_hold` items in federated fleet reads. The fixed `authority` tier (§12.6) does
+  not raise it, because every plugin request carries that tier and it distinguishes
+  nothing. Precedence: base `low`, then the fixed age thresholds (one level at 24 and 72
+  hours), then one level when `expires_at` is within 6 hours, capped at `high`. The
+  owning rule is the `decision_open` row and the `plugin_request` precedence note in
+  [attention-item](../operator-attention/specs/attention-item.md#severity). Ordinary
+  `authority` requests of other gates stay `high` from age zero. A request folded into a
+  subject item leaves that item's severity unchanged.
 - **Read-only plugin attention kinds remain deferred:** [operator-attention 3_vision.md](../operator-attention/3_vision.md)
   Q5 (`plugin:<ns>/<kind>`) is separate and not needed here. Any plugin condition that
   waits on a human answer rides `plugin_request` → `decision_open` with zero per-poll
@@ -1425,15 +1431,19 @@ tool and a plugin raises a request.
    spec. `orbit-tools`: stamp the spawning caller's writer label into the callback
    session record. `orbit-core`: `orbit.decision.plugin_raise` (§12.3 checks, holder
    task, bounds, supersession, withdraw), digest and `--approve-proposed` drain
-   exclusion, `orbit attention` folding and `low` initial severity for unfolded
-   `plugin_request` items (§12.8), and listing/show of the new fields. Acceptance: a
+   exclusion, `orbit attention` folding and the `plugin_request` severity rule for
+   unfolded items (§12.8), and listing/show of the new fields. Acceptance: a
    fixture plugin raises in both task form and holder form; an agent session, another
    plugin's namespace, an `agent_callable: true` or `mcp_scope != none` tool are refused;
    re-raise dedupes or supersedes by revision; withdrawal targets the original form;
    an existing generic approval is superseded and its answer refused, while distinct
    plugin subjects stay open and answerable; the digest and pilot-warning triage raise no
    generic approval while one is open; digest and answer races honor the task lock; `orbit attention` folds task-form items and surfaces remaining requests and
-   holder-form items at `low` severity. Extend the existing decision-channel and raise
+   holder-form items with these observable severities (fixture clock at the request's
+   `raised_at` plus the age shown; the folded subject item's severity is unchanged):
+   fresh with distant expiry `low`; age 24 hours `medium`; age 72 hours `high`; fresh with
+   `expires_at` within 6 hours `medium`; age 24 hours with expiry within 6 hours `high`; and, as the
+   contrast, a fresh `resident_authority` request with distant expiry `high`. Extend the existing decision-channel and raise
    fixtures to cover these cases and the post-closure holder lifecycle.
 2. **Apply-tool allowlist.** `orbit-core` and `orbit-cli`: the host-local store
    (`apply-tools.json`), `orbit decision apply-tool allow|revoke|list`, sandbox mask
