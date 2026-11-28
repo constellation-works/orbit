@@ -133,6 +133,64 @@ fn exhausted_transient_required_check_reads_hold_for_forge_recovery() {
 }
 
 #[test]
+fn exhausted_transient_merge_capability_reads_hold_for_forge_recovery() {
+    let (_sandbox, forge, head, _) = forge_fixture(false, false);
+    forge.job(&head, passed(1, 11));
+    forge.with_state(|s| s.merge_capabilities_transients = 100);
+    let (result, waits) = counted_land(&forge, json!({"max_wait_seconds": 300}));
+    let error = result.expect_err("exhausted transient merge-capability reads hold the landing");
+    assert!(
+        matches!(
+            error,
+            OrbitError::DeliveryRefused {
+                refusal: DeliveryRefusal::ForgeObservationUnavailable,
+                ..
+            }
+        ),
+        "the held run records ForgeObservationUnavailable: {error}"
+    );
+    assert_eq!(waits, vec![20, 60]);
+    assert_eq!(forge.sent("pr.merge_capabilities").len(), 3);
+    assert_not_sent(
+        &forge,
+        &["ci.rerun_failed", "pr.update_branch", "pr.merge"],
+        "held before any write",
+    );
+    let LandingStopEvidence::OwnerRefusal(refusal) =
+        LandingStopEvidence::parse(&forge.last_evidence())
+    else {
+        panic!("the held landing must retain a typed refusal");
+    };
+    let gate = refusal
+        .waiting_gate
+        .expect("the owner sweep needs a typed waiting gate");
+    assert_eq!(gate, LandingWaitGate::ForgeObservationUnavailable);
+    assert!(
+        !orbit_engine::landing_wait_gate_cleared(&forge, &forge.context, gate).unwrap(),
+        "still-failing merge-capability observation keeps the waiting gate closed"
+    );
+    assert_not_sent(
+        &forge,
+        &["ci.rerun_failed", "pr.update_branch", "pr.merge"],
+        "waiting-gate probe must not mutate the forge before recovery",
+    );
+    forge.with_state(|s| s.merge_capabilities_transients = 0);
+    assert!(
+        orbit_engine::landing_wait_gate_cleared(&forge, &forge.context, gate).unwrap(),
+        "a recovered merge-capability read clears the waiting gate"
+    );
+    assert_not_sent(
+        &forge,
+        &["ci.rerun_failed", "pr.update_branch", "pr.merge"],
+        "waiting-gate probe must not mutate the forge after recovery",
+    );
+    let (resumed, resume_waits) = counted_land(&forge, json!({"max_wait_seconds": 300}));
+    assert_landed(resumed, "a readable forge lets the resumed landing merge");
+    assert!(resume_waits.is_empty());
+    assert_eq!(forge.sent("pr.merge").len(), 1);
+}
+
+#[test]
 fn non_transient_required_check_reads_keep_their_failure() {
     let (_sandbox, forge, head, _) = forge_fixture(false, false);
     forge.job(&head, passed(1, 11));
