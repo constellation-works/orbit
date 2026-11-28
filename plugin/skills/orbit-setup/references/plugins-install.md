@@ -223,15 +223,22 @@ call refuses with `plugin_disabled_in_workspace`.
 
 ## The dashboard's Plugins tab
 
-`orbit web serve` grows a Plugins tab listing what is installed here, each plugin's state
-and diagnostic, and the panels its manifest declares. A panel is one `read_only` tool's
-JSON drawn by a generic renderer — `kv` (label/value rows), `table` (an array of objects),
-`markdown` (sanitised) or `json` — plus plain link tiles to plugin-hosted UIs (`http://` or
-`https://` only).
+`orbit web serve` grows a Plugins tab listing the plugins installed on this host, each
+plugin's state and diagnostic, and the panels its manifest declares. The **Installed**
+view shows those plugin cards. A panel is one `read_only` tool's JSON drawn by a generic
+renderer — `kv` (label/value rows), `table` (an array of objects), `markdown` (sanitised)
+or `json`.
 
-No plugin ships JavaScript, and a manifest that declares a panel over a
-*mutating* tool is refused by `orbit plugin validate`, naming the panel. Installing, enabling and granting stay on the
-CLI: the dashboard reads.
+Plugins can also declare local pages. When a plugin is active, each declared page appears
+as a tab beside **Installed**; its page tile on the Installed card opens the same view.
+An active page loads from the installed plugin bundle in an iframe sandbox that allows
+scripts but does not grant same-origin access. These plugin-authored pages are separate
+from generic panels, which render tool data. Link tiles remain separate too: they open
+plugin-hosted UIs at `http://` or `https://` addresses.
+
+Panels do not execute plugin JavaScript. A manifest that declares a panel over a
+*mutating* tool is refused by `orbit plugin validate`, naming the panel. Installing,
+enabling and granting stay on the CLI: the dashboard reads.
 
 Panel reads are cached and single-flighted by the web server for 30 seconds by default, so
 several tabs produce one audited backend call in that window. A panel may set `refresh_ms`
