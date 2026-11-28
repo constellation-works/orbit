@@ -317,6 +317,94 @@ fn adoption_refuses_an_unstaged_git_link_move() {
     assert_eq!(git(&nested, &["rev-parse", "HEAD"]), nested_head);
 }
 
+/// Commits enough long-path files into the retained checkout's own history
+/// that `git ls-files --stage -z` exceeds the candidate status capture limit,
+/// while `HEAD` keeps its published identity (the commit is replaced, as the
+/// Git link fixture does) and the checkout stays clean. The retained edits of
+/// `incident` are discarded; callers restore the ones they need.
+fn track_a_large_index(checkout: &std::path::Path) {
+    // Mirrors the 256 KiB status capture limit the runtime reads under.
+    const STATUS_LIMIT: usize = 256 * 1024;
+    git(checkout, &["reset", "-q", "--hard", "HEAD"]);
+    git(checkout, &["clean", "-qfd"]);
+    let original_head = git(checkout, &["rev-parse", "HEAD"]);
+    let mut bulk = PathBuf::from("bulk");
+    for level in 0..7 {
+        bulk.push(format!("{level}{}", "d".repeat(199)));
+    }
+    std::fs::create_dir_all(checkout.join(&bulk)).unwrap();
+    for index in 0..240 {
+        std::fs::write(checkout.join(&bulk).join(format!("file-{index:03}")), "x\n").unwrap();
+    }
+    git(checkout, &["add", "bulk"]);
+    git(checkout, &["commit", "-qm", "track a large index"]);
+    let tree = git(checkout, &["rev-parse", "HEAD^{tree}"]);
+    let parent = git(checkout, &["rev-parse", &format!("{original_head}^")]);
+    let widened = git(
+        checkout,
+        &["commit-tree", &tree, "-p", &parent, "-m", "fixture"],
+    );
+    git(checkout, &["replace", &original_head, &widened]);
+    git(checkout, &["update-ref", "HEAD", &original_head]);
+    assert!(git(checkout, &["status", "--porcelain"]).is_empty());
+    let listing = git(checkout, &["ls-files", "--stage", "-z"]);
+    assert!(
+        listing.len() > STATUS_LIMIT,
+        "index listing is {} bytes",
+        listing.len()
+    );
+}
+
+/// An index listing longer than the status capture limit is not an incomplete
+/// listing: ordinary tracked edits are still adopted, untouched.
+fn adoption_reads_an_index_beyond_the_status_limit() {
+    let (f, checkout, edited) = incident();
+    track_a_large_index(&checkout);
+    std::fs::write(checkout.join(LINT_FIX), "final recovery lint fix\n").unwrap();
+    git(&checkout, &["add", LINT_FIX]);
+    let mut body = std::fs::read_to_string(checkout.join(&edited)).unwrap();
+    body.push_str("final recovery edit\n");
+    std::fs::write(checkout.join(&edited), body).unwrap();
+    let dirty = git(&checkout, &["status", "--porcelain"]);
+
+    let inspection = adopting_inspection(&f).unwrap();
+    let patch = inspection["retained_patch"].as_str().unwrap();
+    assert!(patch.contains(LINT_FIX) && patch.contains("final recovery edit"));
+    assert_eq!(
+        inspection["binding"]["retained_patch"]["paths"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    assert_eq!(git(&checkout, &["status", "--porcelain"]), dirty);
+}
+
+/// A Git link at the end of an index longer than the status capture limit is
+/// still found and refused, leaving the checkout as it was.
+fn adoption_refuses_a_git_link_beyond_the_status_limit() {
+    let (f, checkout, _) = incident();
+    track_a_large_index(&checkout);
+    let head = git(&checkout, &["rev-parse", "HEAD"]);
+    git(
+        &checkout,
+        &[
+            "update-index",
+            "--add",
+            "--cacheinfo",
+            &format!("160000,{head},zz-nested"),
+        ],
+    );
+    let dirty = git(&checkout, &["status", "--porcelain"]);
+
+    let mut request = f.request("inspect");
+    request["source_repair"]["adopt_retained_edits"] = json!(true);
+    let error = refused_without_effects(&f, request, "git link past the limit");
+    assert!(error.contains("zz-nested"), "{error}");
+    assert!(error.contains("Git link"), "{error}");
+    assert_eq!(git(&checkout, &["status", "--porcelain"]), dirty);
+}
+
 /// A binary retained edit conflicting with a newer integration version leaves
 /// both versions recoverable in the same-PR successor (without leaving
 /// unmerged index entries that would block `git_commit`), while the original
@@ -502,5 +590,7 @@ crate::scenario_table!(
     non_utf8_patch_is_reconstructable_from_the_inspection,
     adoption_refuses_a_clean_checkout,
     adoption_refuses_a_staged_git_link,
-    adoption_refuses_an_unstaged_git_link_move
+    adoption_refuses_an_unstaged_git_link_move,
+    adoption_reads_an_index_beyond_the_status_limit,
+    adoption_refuses_a_git_link_beyond_the_status_limit
 );
