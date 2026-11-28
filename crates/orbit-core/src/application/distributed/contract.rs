@@ -431,7 +431,7 @@ pub(crate) fn protocol_skew(report: &serde_json::Value) -> Option<OrbitError> {
     // That says nothing about build compatibility and must not end a drain.
     if let Some(field) = crate::runtime::tool_exec::corrupted_drain_identity(report) {
         return Some(OrbitError::OwnerNegotiation(format!(
-            "owner reply identity field `{field}` contains an environment redaction artefact; retry next pass"
+            "owner reply identity field `{field}` contains an environment redaction artefact"
         )));
     }
     let owner = report

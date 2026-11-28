@@ -2918,11 +2918,15 @@ first probes with legacy-compatible fields, checks that fingerprint and `protoco
 then declares `caller_fingerprint` on a second probe. A different or missing fingerprint,
 including a legacy owner, refuses with typed `protocol_skew` before any `orbit.task.pull`.
 A protocol identity containing `[REDACTED_ENV]` is a corrupted transport reply,
-not evidence of schema skew. The follower treats it as typed `OwnerNegotiation`,
-records a transient pass error and retries on the next pass. The owner also
-checks redacted drain replies, including nested fingerprints, commit/tree IDs
-and evidence hashes: read-only calls fail negotiation; mutating calls report
-`OutcomeUnknown` so the follower reconciles or replays the same request.
+not evidence of schema skew. The follower reports it as `OwnerNegotiation` and
+records the cause as a pass error. A windowless single-pass drain ends failed
+if its only admission pass encounters a negotiation or routing error before
+admitting work; it keeps the cause and has no later admission pass to retry. An
+active timed drain can retry on a later pass while its window remains open. The
+owner also checks redacted drain replies, including nested fingerprints,
+commit/tree IDs and evidence hashes: read-only calls fail negotiation;
+mutating calls report `OutcomeUnknown` so the follower reconciles or replays the
+same request.
 Credentials remain scrubbed even when they overlap an identity. Known
 `XDG_SESSION_*`, `DBUS_SESSION_BUS_ADDRESS`, `SESSION_MANAGER` and
 `TERM_SESSION_ID` metadata is excluded from session-name matching; credential
