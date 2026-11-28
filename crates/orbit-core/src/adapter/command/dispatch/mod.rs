@@ -29,5 +29,9 @@ pub use execute::{
     tool_suggestion_context,
 };
 
+fn is_notice_mutation(tool: &str) -> bool {
+    matches!(tool, "orbit.notice.post" | "orbit.notice.close")
+}
+
 #[cfg(test)]
 mod tests;

@@ -10,9 +10,10 @@ use std::path::Path;
 
 #[cfg(unix)]
 use managed_run::ambiguous_bundle_dispatch_drops_inherited_task_identity;
+#[cfg(unix)]
+use managed_run::managed_notice_writes_use_the_brokers_activity_task;
 use managed_run::{
     managed_notice_mutations_follow_the_host_attested_activity,
-    managed_pipeline_run_posts_and_closes_notices_as_agent,
     managed_run_notice_authority_preserves_fail_closed_rejections,
 };
 use orbit_core::adapter::command::ToolEntryPoint;
@@ -1389,16 +1390,9 @@ crate::scenario_table!(
     cross_workspace_linked_task_closes_on_read_and_in_the_closure_tick,
     attention_pages_home_notices,
     attention_lists_notices_under_a_registry_id_that_differs_from_the_store_id,
-    managed_pipeline_run_posts_and_closes_notices_as_agent,
     managed_run_notice_authority_preserves_fail_closed_rejections,
     managed_notice_mutations_follow_the_host_attested_activity,
 );
-
-#[cfg(unix)]
-#[test]
-fn bundled_activity_notice_uses_selected_task_and_refuses_ambiguity() {
-    managed_run::bundled_activity_notice_uses_selected_task_and_refuses_ambiguity();
-}
 
 // Mutates the process environment for the provider dispatch, so it runs only in
 // this table's re-executed child, never in the parallel libtest parent.
@@ -1406,4 +1400,11 @@ fn bundled_activity_notice_uses_selected_task_and_refuses_ambiguity() {
 crate::scenario_table!(
     ambiguous_bundle_dispatch,
     ambiguous_bundle_dispatch_drops_inherited_task_identity,
+);
+
+// Serves a real broker socket, so it runs in this table's re-executed child too.
+#[cfg(unix)]
+crate::scenario_table!(
+    broker_activity_writes,
+    managed_notice_writes_use_the_brokers_activity_task,
 );

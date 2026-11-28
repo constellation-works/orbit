@@ -219,8 +219,21 @@ pub(super) fn resolve_notice_poster(
     let scope_task_id = non_empty(caller.scope_task_id.as_deref());
     let scope_run_id = non_empty(caller.scope_run_id.as_deref());
     let has_managed_binding = caller.session.worker_invocation.is_some()
+        || caller.activity.is_some()
         || scope_run_id.is_some()
         || scope_task_id.is_some();
+    if caller.session.worker_invocation.is_none()
+        && caller.activity.is_none()
+        && (has_managed_binding
+            || rt.env().orbit_managed_run_context().is_some()
+            || rt.env().orbit_plugin_broker().is_some()
+            || crate::runtime::plugin::sandbox_mask::plugin_trees_masked(&rt.global_root()))
+    {
+        return Err(OrbitError::notice_refused(
+            NoticeRefusalCode::PosterUnidentified,
+            "managed notice writes require a host-attested activity binding",
+        ));
+    }
     if capabilities.contains(&McpCapability::Operator) && !has_managed_binding {
         return Ok(NoticePoster {
             class: AuthorClass::Operator,
@@ -233,6 +246,8 @@ pub(super) fn resolve_notice_poster(
         });
     }
     let resolve_managed_binding = |run_id: &str, scope_task_id: Option<&str>| {
+        let activity_task =
+            attested_activity_task(caller.activity.as_ref(), run_id, scope_task_id)?;
         let run = rt
             .stores()
             .jobs()
@@ -261,18 +276,10 @@ pub(super) fn resolve_notice_poster(
         } else {
             None
         };
-        let leaf_task = match resident_mandate {
-            Some(_) => scope_task_id.map(ToOwned::to_owned),
-            None => Some(attested_activity_task(
-                caller.activity.as_ref(),
-                run_id,
-                scope_task_id,
-            )?),
-        };
         resolve_managed_run_task_binding(
             &run,
             run_id,
-            leaf_task.as_deref(),
+            activity_task.as_deref(),
             resident_mandate.as_deref(),
         )
     };
@@ -311,6 +318,12 @@ pub(super) fn resolve_notice_poster(
                 return Err(OrbitError::notice_refused(
                     NoticeRefusalCode::PosterUnidentified,
                     "a managed agent run requires both a run and task binding",
+                ));
+            }
+            (None, None) if caller.activity.is_some() => {
+                return Err(OrbitError::notice_refused(
+                    NoticeRefusalCode::PosterUnidentified,
+                    "a managed agent run requires a run binding",
                 ));
             }
             (None, None) => None,
@@ -372,14 +385,12 @@ pub(super) fn resolve_notice_poster(
 
 /// The leaf task the dispatching host attested for `run_id`'s activity.
 ///
-/// A non-resident managed run is bound only by that attestation: one that is
-/// missing, names another run, names no single task (an ambiguous bundle) or
-/// disagrees with the call's task scope refuses.
+/// Only an attested resident run may resolve a mandate without a leaf task.
 fn attested_activity_task(
     activity: Option<&ActivityBinding>,
     run_id: &str,
     scope_task_id: Option<&str>,
-) -> Result<String, OrbitError> {
+) -> Result<Option<String>, OrbitError> {
     let unidentified = |detail: String| {
         Err(OrbitError::notice_refused(
             NoticeRefusalCode::PosterUnidentified,
@@ -391,12 +402,8 @@ fn attested_activity_task(
             "managed run `{run_id}` has no host-attested activity binding"
         ));
     };
-    let Some(task_id) = non_empty(activity.task_id.as_deref()) else {
-        return unidentified(format!(
-            "managed run `{run_id}` has no single attested activity task"
-        ));
-    };
-    if scope_task_id != Some(task_id.as_str()) {
+    let task_id = non_empty(activity.task_id.as_deref());
+    if scope_task_id != task_id.as_deref() {
         return unidentified(format!(
             "managed run `{run_id}` has no matching active activity task"
         ));

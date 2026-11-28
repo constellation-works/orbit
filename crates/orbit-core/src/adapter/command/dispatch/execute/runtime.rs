@@ -6,17 +6,17 @@ use crate::app::resident;
 use std::path::Path;
 
 use orbit_common::observability::audit_id::audit_execution_id;
-use orbit_common::{Env, OrbitError};
+use orbit_common::{Env, NoticeRefusalCode, OrbitError};
 use orbit_tools::{ToolContext, ToolExecutionKind};
 use orbit_types::tool::{ToolSessionContext, is_tool_family_operation, tool_family};
 use serde_json::Value;
 
 use crate::OrbitRuntime;
+use crate::adapter::command::dispatch::is_notice_mutation;
 use crate::runtime::tool_exec::{CapabilityEnforcement, populate_filesystem_policy_context};
 
 use super::super::audit::{
-    activity_binding_from_env, managed_run_context, reservation_owner_from_env,
-    resolve_agent_identity_for_entry_point,
+    managed_run_context, reservation_owner_from_env, resolve_agent_identity_for_entry_point,
 };
 use super::super::callback::{
     enforce_plugin_callback_allowlist, read_activity_tool_policy_from_env,
@@ -233,11 +233,15 @@ impl OrbitRuntime {
                 |_| Err(error),
             );
         }
-        // The broker audits dispatched plugin calls and host-credentialed
-        // reads. Listener refusals and unusable responses belong to this
-        // caller's audit boundary; never execute them locally as a fallback.
+        // The broker audits dispatched plugin calls, host-credentialed reads
+        // and managed notice mutations. Claimed notices use the owner route
+        // below. Broker refusals are never retried through local execution.
         #[cfg(unix)]
         let host_read = crate::runtime::plugin::broker::is_host_credentialed_read(name);
+        #[cfg(unix)]
+        let notice_write = is_notice_mutation(name)
+            && self.run().claim_owner().is_none()
+            && session_context.worker_invocation.is_none();
         // A resident cycle's ship is brokered for the same reason: the leaf's
         // worker must start beside the cycle's sandbox, not inside it. Its
         // decision raise is brokered because the raise's lock lies in the
@@ -260,7 +264,10 @@ impl OrbitRuntime {
         if let Some(socket) = env.orbit_plugin_broker()
             && session_context.application.is_none()
             && env.orbit_application_credential_fd().is_none()
-            && (host_read || resident_call || self.tool_registry().plugin_binding(name).is_some())
+            && (host_read
+                || notice_write
+                || resident_call
+                || self.tool_registry().plugin_binding(name).is_some())
         {
             let forwarded = input.clone();
             let cwd = std::env::current_dir()?;
@@ -397,6 +404,18 @@ impl OrbitRuntime {
                 if let Some(error) = claimed_owner_refusal {
                     return Err(error);
                 }
+                if is_notice_mutation(name)
+                    && (env.orbit_managed_run_context().is_some()
+                        || env.orbit_plugin_broker().is_some())
+                {
+                    self.bind_worker_session(&mut session_context)?;
+                    if session_context.worker_invocation.is_none() {
+                        return Err(OrbitError::notice_refused(
+                            NoticeRefusalCode::PosterUnidentified,
+                            "managed notice writes require a host-attested activity binding",
+                        ));
+                    }
+                }
                 #[cfg(unix)]
                 if host_read {
                     crate::runtime::plugin::broker::refuse_unbrokered_host_read(
@@ -452,7 +471,6 @@ impl OrbitRuntime {
                     proc_spawn_activity_scoped,
                     proc_spawn_budget,
                     reservation_owner: reservation_owner_from_env(env),
-                    activity_binding: activity_binding_from_env(env),
                     ..Default::default()
                 };
                 if proc_spawn_activity_scoped {

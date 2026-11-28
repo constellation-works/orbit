@@ -4,7 +4,7 @@
 use std::ffi::OsStr;
 
 use orbit_common::{Env, OrbitError};
-use orbit_tools::{ActivityBinding, ReservationOwnerContext};
+use orbit_tools::ReservationOwnerContext;
 use orbit_types::identity::{
     normalize_agent_family_for_model, normalize_optional_attribution_label,
 };
@@ -118,25 +118,6 @@ pub(super) fn reservation_owner_from_env(
             ..Default::default()
         }),
         owner_run_id,
-    })
-}
-
-/// The managed activity a nested `orbit tool run` / `orbit mcp serve` call
-/// serves, read from the run envelope the dispatching host stamped into the
-/// agent's environment — never from tool input. `None` outside a managed run.
-///
-/// The dispatcher stamps one leaf task as both `ORBIT_TASK_ID` and
-/// `ORBIT_ACTIVE_TASK_ID`. An envelope naming two different tasks attests
-/// none, so the binding carries no task and task-bound writes refuse.
-pub(super) fn activity_binding_from_env(env: &Env) -> Option<ActivityBinding> {
-    let job_run_id = managed_run_context_run_id_from_env(env)?;
-    let task_id = env_trimmed(env.orbit_task_id()).filter(|task_id| {
-        env_trimmed(env.var("ORBIT_ACTIVE_TASK_ID"))
-            .is_none_or(|active_task_id| active_task_id == *task_id)
-    });
-    Some(ActivityBinding {
-        job_run_id,
-        task_id,
     })
 }
 
