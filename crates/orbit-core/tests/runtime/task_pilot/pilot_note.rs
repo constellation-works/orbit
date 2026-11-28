@@ -4,8 +4,10 @@
 //! check is dropped with its reason and the rest of the assessment applies. A
 //! note is inert: it decides nothing and reaches no prompt.
 
+use orbit_core::adapter::command::ToolEntryPoint;
 use orbit_core::application::task::TaskUpdateParams;
 use orbit_engine::Dispatch;
+use orbit_types::tool::{McpCapability, ToolSessionContext};
 
 use super::*;
 
@@ -417,6 +419,30 @@ fn decisions(notes: Option<Value>) -> Value {
             "human:fixture".into(),
         )
         .unwrap();
+    let attention = workspace
+        .runtime
+        .execute_tool_command_dispatch_with_session_context(
+            "orbit.attention",
+            json!({"kind": ["pilot_warning", "pilot_hold"]}),
+            None,
+            None,
+            ToolEntryPoint::Mcp,
+            ToolSessionContext {
+                effective_capabilities: [McpCapability::Operator].into(),
+                ..Default::default()
+            },
+        )
+        .unwrap_or_else(|error| panic!("attention call failed: {error}"))
+        .value;
+    let attention = attention["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|item| {
+            item.pointer("/refs/task_id").and_then(Value::as_str) == Some(task.id.as_str())
+        })
+        .map(|item| item["kind"].clone())
+        .collect::<Vec<_>>();
     let readiness = workspace
         .runtime
         .workspace_auto_readiness(&[], None, 50, &[])
@@ -455,6 +481,7 @@ fn decisions(notes: Option<Value>) -> Value {
     json!({
         "proposed": proposed,
         "readiness": readiness["tasks"],
+        "attention": attention,
         "selected": selected["task_ids"],
         "fresh": fresh,
         "after_instruction_edit": after_edit,
