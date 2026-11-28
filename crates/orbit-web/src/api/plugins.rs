@@ -10,6 +10,9 @@
 //! * `GET /api/plugins/<ns>/pages/<page>/` — an active page as one document
 //!   under its frame policy, served only to same-origin dashboard iframe
 //!   navigations (plugin-pages design §2).
+//! * `GET /api/plugins/<ns>/pages/<page>/parts` — the same page's markup,
+//!   scripts, styles and kit version as JSON, from which another host's
+//!   dashboard writes the document itself (plugin-pages design §5).
 //! * `POST /api/plugins/<ns>/pages/<page>/call` — one call the page makes
 //!   to a `read_only` tool it declares (plugin-pages design §3).
 //! * `POST /api/plugins/<ns>/pages/<page>/actions/confirm` — check one
@@ -214,33 +217,75 @@ pub(super) async fn read_page(
     Path((namespace, page)): Path<(String, String)>,
 ) -> Response {
     if let Err(reason) = crate::plugin_page::require_dashboard_frame_navigation(&headers) {
-        let mut response =
-            page_refusal(StatusCode::FORBIDDEN, "frame_required", reason.to_string());
-        let response_headers = response.headers_mut();
-        response_headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
-        response_headers.insert(
-            header::CONTENT_SECURITY_POLICY,
-            HeaderValue::from_static("sandbox; default-src 'none'"),
-        );
-        return response;
+        return frame_required(reason);
     }
+    let source = match active_page(&workspace, namespace, page).await {
+        Ok(source) => source,
+        Err(response) => return *response,
+    };
+    page_document_response(&state.plugin_pages().document(&source))
+}
+
+/// `GET /api/plugins/<ns>/pages/<page>/parts`: the parts another host's
+/// dashboard writes this page's document from (plugin-pages design §5). It
+/// answers for exactly the pages the document route serves. The bytes are
+/// data here; only the dashboard that writes the document runs them, under
+/// its own policy.
+pub(super) async fn read_page_parts(
+    workspace: PluginPanelWs,
+    Path((namespace, page)): Path<(String, String)>,
+) -> Response {
+    let source = match active_page(&workspace, namespace, page).await {
+        Ok(source) => source,
+        Err(response) => return *response,
+    };
+    let mut response = Json(crate::plugin_page::parts_json(&source)).into_response();
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
+}
+
+/// The active page `page` of `namespace`, or the response that says why it
+/// is not served: a malformed id, or a 404 for an unknown page or a plugin
+/// that is inactive or disabled in this workspace.
+async fn active_page(
+    workspace: &PluginPanelWs,
+    namespace: String,
+    page: String,
+) -> Result<orbit_core::app::plugin::PageSource, Box<Response>> {
     for (label, value) in [("plugin", &namespace), ("page", &page)] {
         if let Err(message) = validate_id(value) {
-            return super::bad_request(format!("{label} {message}"));
+            return Err(Box::new(super::bad_request(format!("{label} {message}"))));
         }
     }
     let core = workspace.core.clone();
-    let source = match tokio::task::spawn_blocking(move || {
-        exec(&core, Command::ReadPage { namespace, page })
-    })
-    .await
+    match tokio::task::spawn_blocking(move || exec(&core, Command::ReadPage { namespace, page }))
+        .await
     {
-        Ok(Ok(Outcome::Page(source))) => source,
+        Ok(Ok(Outcome::Page(source))) => Ok(*source),
         Ok(Ok(_)) => unreachable!("read plugin page returned an unrelated outcome"),
-        Ok(Err(error)) => return page_error(&error),
-        Err(error) => return page_panicked(error),
-    };
-    let document = state.plugin_pages().document(&source);
+        Ok(Err(error)) => Err(Box::new(page_error(&error))),
+        Err(error) => Err(Box::new(page_panicked(error))),
+    }
+}
+
+/// The 403 a page document request gets without Fetch Metadata proving a
+/// same-origin dashboard iframe navigation.
+pub(super) fn frame_required(reason: &str) -> Response {
+    let mut response = page_refusal(StatusCode::FORBIDDEN, "frame_required", reason.to_string());
+    let response_headers = response.headers_mut();
+    response_headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response_headers.insert(
+        header::CONTENT_SECURITY_POLICY,
+        HeaderValue::from_static("sandbox; default-src 'none'"),
+    );
+    response
+}
+
+/// A written page document with its frame policy, for a local page and for
+/// one this dashboard wrote from another host's parts.
+pub(super) fn page_document_response(document: &crate::plugin_page::PageDocument) -> Response {
     let mut response = document.body.clone().into_response();
     let headers = response.headers_mut();
     headers.insert(

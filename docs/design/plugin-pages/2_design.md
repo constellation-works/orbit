@@ -8,10 +8,10 @@ status: Accepted
 feature: plugin-pages
 doc_role: design
 type: design
-summary: "Approved design; phase 1 (manifest, serving, bridge relay, kit and Plugins sub-tabs) and phase 3 (actions behind consent and a dashboard-drawn confirmation) are built, with pages on other hosts to follow"
+summary: "Approved design; phase 1 (manifest, serving, bridge relay, kit and Plugins sub-tabs), phase 2 (pages on other hosts, written here from their parts) and phase 3 (actions behind consent and a dashboard-drawn confirmation) are built"
 tags: [plugin-pages, plugins, dashboard, orbit-web]
 related_features: [plugins, user-interface, remote-access]
-related_artifacts: [ORB-29504, ORB-29539]
+related_artifacts: [ORB-29504, ORB-29538, ORB-29539]
 ---
 
 # Plugin Pages — Design
@@ -20,8 +20,9 @@ The operator approved this design on 2026-11-27 ([ORB-29504]). The page contract
 and 2 was revised after it was measured in two browser engines ([ORB-29532]), and the operator
 approved the revision the same day ([ORB-29573]).
 Section 1 (the manifest), section 2 (serving), section 3 (the bridge, kit and actions) and
-section 4 (Plugins sub-tabs, frame strip and diagnostics) are built ([ORB-29534],
-[ORB-29536], [ORB-29537], [ORB-29539]). The rest describes what later phases make true.
+section 4 (Plugins sub-tabs, frame strip and diagnostics) and section 5 (other hosts) are built
+([ORB-29534], [ORB-29536], [ORB-29537], [ORB-29538], [ORB-29539]). The rest describes what later
+phases make true.
 The problem, the goal and the build tasks are in the [overview](./1_overview.md). The plugin
 manifest, grants and tool dispatch it builds on are the
 [plugin standard](../plugins/2_design.md)'s.
@@ -100,6 +101,7 @@ bytes served are the bytes that were hashed.
 | Route | Does |
 |---|---|
 | `GET /api/plugins/<ns>/pages/<page>/` | The page, as one document |
+| `GET /api/plugins/<ns>/pages/<page>/parts` | The same page's parts as JSON, for another host's dashboard to write ([Other hosts](#5-other-hosts)) |
 | `POST /api/plugins/<ns>/pages/<page>/call` | Runs one tool the page declares, with input |
 | `POST /api/plugins/<ns>/pages/<page>/actions/confirm` | Checks one action and issues its one-time confirmation; runs nothing |
 | `POST /api/plugins/<ns>/pages/<page>/actions/run` | Spends the confirmation and runs the action once |
@@ -270,6 +272,26 @@ vouch for script hashes it did not compute. So the remote host gives the page's 
 scripts, styles) as data, and this dashboard writes the document and its policy itself, with
 its own kit. A remote page gets the same frame as a local one and no more.
 
+- **The parts route.** Every host answers `GET /api/plugins/<ns>/pages/<page>/parts` with
+  `{encoding: "base64", kit, markup, scripts: [{name, content}], styles: [{name, content}]}`:
+  the bytes of `index.html` and of each listed script and style in manifest order, and the
+  page's `kit` version. It answers for exactly the pages the document route serves, with the
+  same 404s, and needs no Fetch Metadata because nothing renders it. Through the forwarder it
+  is ordinary relayed data under the forwarder's policy.
+- **The forwarder writes the document.** For `GET /api/on/<host>/plugins/<ns>/pages/<page>/`
+  it applies the document route's Fetch Metadata gate, reads the remote's parts route
+  instead, and writes the document with the code a local page uses: this dashboard's kit,
+  policy and hashes. The remote's headers are ignored. A refusal from the remote, such as a
+  404 for a disabled page, is relayed as any other response.
+- **The parts are not trusted.** Before writing, the forwarder applies the refusals a local
+  page's files get at load ([The manifest](#1-the-manifest)): `<script` or `<link` in the
+  markup, `</script` or `<!--` in a script, `</style` in a style, a script name not ending in
+  `.js` or `.mjs`, a style name not ending in `.css`, the size bound, and a `kit` version this
+  dashboard does not know. A page that fails gets a `502` `page_refused` diagnostic naming the
+  host and the reason, under `sandbox; default-src 'none'`, in its place and no document.
+- **Every other forwarded response keeps the forwarder's policy.** The dashboard builds a
+  remote page's frame and call URLs under `/api/on/<host>/…`.
+
 ## 6. Why no server per plugin
 
 The first sketch had Orbit start a Node server for each plugin's page and show it in the tab.
@@ -299,9 +321,9 @@ whose manifest has pages lists them in the report of the consent it records; the
    probe for this phase was completed in Chromium, WebKit and Firefox
    ([browser evidence](#10-concerns--honest-limitations)). The plugin standard's dashboard
    section and its non-goal are amended in the same change.
-2. **Pages on other hosts.** The route that gives a page's parts, the forwarder writing the
-   document from them, and the decision on a read-only call from a dashboard without the
-   operator session.
+2. **Pages on other hosts** (built, [ORB-29538]). The route that gives a page's parts, the
+   forwarder writing the document from them, and the call-route rule for a dashboard without
+   the operator session ([§10](#10-concerns--honest-limitations)).
 3. **Actions** (built, [ORB-29539]). A page may name mutating tools under a separate
    `actions` list. Each call needs the operator session and a confirmation the dashboard
    draws outside the frame, naming the plugin, the tool and the input, and is audited with
@@ -391,10 +413,13 @@ whose manifest has pages lists them in the report of the consent it records; the
 - **A confirmation proves what the dashboard showed, not what the operator read.** The
   dialog names the tool and the input the server checked; a page can still describe an
   action misleadingly inside its frame before asking. The arm delay stops a click timed by
-  the page, not a hurried operator. An action from another host's page is phase 2's.
-- **Another host's page needs an operator dashboard at first.** The forwarder refuses a `POST`
-  without the operator session, and the call route is a `POST`. Phase 2 decides whether a
-  read-only call is exempt.
+  the page, not a hurried operator. An action from another host's page is a `POST` through
+  the forwarder like any other, and phase 2 adds nothing for it.
+- **Another host's page needs an operator dashboard for its calls.** The forwarder refuses a
+  `POST` without the operator session, and the call route is a `POST`; the call route has no
+  exemption. On a dashboard without the operator session a remote page loads, its calls are
+  refused, and the strip says a page on another host needs an operator dashboard. If that
+  proves limiting, it goes to the operator as a decision; the forwarder is not widened for it.
 - **Version skew.** A page written for bridge version 1 is served by whichever dashboard frames
   it. The manifest's `kit` number and the message's `v` are the contract, and a host that does
   not know a version refuses the page with a diagnostic.
@@ -406,6 +431,7 @@ whose manifest has pages lists them in the report of the consent it records; the
 - [ORB-29534] — built the manifest key, validation, the bundle digest and the listings.
 - [ORB-29536] — built the document and call routes and the kit.
 - [ORB-29537] — built the Plugins sub-tabs, the sandboxed page frame, the strip and the bridge relay.
+- [ORB-29538] — built the parts route and the forwarder writing another host's page from it.
 - [ORB-29539] — built page actions behind consent and a dashboard-drawn confirmation.
 - [ORB-29532] — measured the initial frame policy in Chromium and WebKit, then validated the one-document policy in Chromium, WebKit and Firefox.
 - [ORB-29573] — revised the page contract to one document after that measurement.

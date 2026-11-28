@@ -6,7 +6,7 @@ updated_date: 2026-11-28
 last_validated: 2026-11-28
 status: Accepted
 stage: building
-next: "Show another host's pages through the forwarder [ORB-29538]"
+next: "First pages: a Formation page and a Scribe page, each designed in its own repository"
 feature: plugin-pages
 doc_role: overview
 type: design
@@ -30,6 +30,8 @@ and runs the read-only tool calls it declares ([ORB-29536]), and the dashboard r
 pages as sub-tabs under Plugins inside the sandboxed frame with its bridge relay ([ORB-29537]).
 A page runs one of its plugin's mutating tools only as an action the operator consented to
 at enable and confirms in a dialog the dashboard draws outside the frame ([ORB-29539]).
+With another host selected, this dashboard writes that host's page from the parts its parts
+route returns, under its own policy ([ORB-29538]).
 
 ## 1. Motivation
 
@@ -82,7 +84,7 @@ rest of the plugin standard are unchanged, and plugins still add no top-level de
 ## 3. At a Glance
 
 The table maps each concern to the design section that owns it and the phase that delivers
-it. Phase 1 (the first four rows) and phase 3 are built.
+it. Phases 1, 2 and 3 are built.
 
 | Concern | Design section | Phase |
 |---|---|---|
@@ -128,7 +130,7 @@ approved its replacement on 2026-11-27 ([ORB-29573]), recorded as a third decisi
 - [ORB-29534] — adds `spec.web.pages`, validation, the bundle digest and the listings.
 - [ORB-29536] — serves a page under the frame policy and runs its tool calls.
 - [ORB-29537] — adds the Plugins sub-tabs, the page frame and the bridge relay.
-- [ORB-29538] — shows another host's pages through the forwarder.
+- [ORB-29538] — showed another host's pages through the forwarder, written here from their parts.
 - [ORB-29539] — added actions behind consent and a dashboard-drawn confirmation.
 - [ORB-29573] — revised the page contract to one document after the engine measurement.
 

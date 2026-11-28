@@ -1256,8 +1256,10 @@ Typed definition hashes retain their existing struct field order.
 - `GET /api/plugins/<ns>/pages/<page>/` returns an active page as one HTML document under
   its frame policy, and `POST /api/plugins/<ns>/pages/<page>/call` runs one `read_only`
   tool the page declares, with schema-checked input, through the same audited dispatch.
-  Both sit behind the unchanged origin guard; the [plugin-pages design](../plugin-pages/2_design.md)
-  §2–§3 holds the contract.
+  `GET /api/plugins/<ns>/pages/<page>/parts` returns the same page's markup, scripts,
+  styles and kit version as JSON, from which another host's dashboard writes the document
+  under its own policy. All sit behind the unchanged origin guard; the
+  [plugin-pages design](../plugin-pages/2_design.md) §2–§3 and §5 hold the contract.
 - A page's `actions` name mutating tools of its own plugin; `validate_structure` refuses
   any other name, a `read_only` tool there and a mutating tool under `tools`. An enabling
   CLI command records consent to each page's list in the host-owned grant witness (§4.1),
@@ -1464,6 +1466,7 @@ after these four phases. Neither is pending phase-5 provider work.
 - [ORB-25955] — denied plugin children read access to the broker's GitHub run-log cache (`state/github-run-logs/`).
 - [ORB-29536] — served plugin pages and their read-only tool calls.
 - [ORB-29537] — drew plugin pages as sub-tabs under Plugins.
+- [ORB-29538] — added the page parts route and wrote another host's page from it.
 - [ORB-29539] — added page actions behind consent and a dashboard-drawn confirmation.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

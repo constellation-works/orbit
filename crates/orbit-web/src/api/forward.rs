@@ -9,6 +9,11 @@
 //! (`host.forward`), refuses multi-hop and host-file paths, and resolves the
 //! host from the serving host's own host file. The serving host's own name is
 //! answered by the local router, with no tunnel.
+//!
+//! One request is not relayed: a plugin page's document. This side reads the
+//! page's parts from the remote's parts route, checks them as a local page's
+//! files are checked, and writes the document with its own kit and policy
+//! (plugin-pages design §5). Every other response gets the sandbox policy.
 
 use std::future::Future;
 use std::net::Ipv4Addr;
@@ -238,6 +243,15 @@ pub(super) async fn forward(
         Ok(Addressed::Remote(target)) => target,
         Err(error) => return failure(&host, &error.code, error.message),
     };
+    // A page document is never relayed: the remote gives its parts as data
+    // and this dashboard writes the document (plugin-pages design §5).
+    let page = page_document_route(request.method(), &rest);
+    if page.is_some()
+        && let Err(reason) =
+            crate::plugin_page::require_dashboard_frame_navigation(request.headers())
+    {
+        return super::plugins::frame_required(reason);
+    }
     let tunnels = std::sync::Arc::clone(state.host_tunnels());
     let operator = operator.is_ok();
     let leased = {
@@ -257,6 +271,13 @@ pub(super) async fn forward(
     };
     let remote_port = state.host_tunnels().remote_port();
     let forwarded_caller = state.operator_session_id().map(ToOwned::to_owned);
+    let (request, raw_rest) = match &page {
+        Some((namespace, page)) => (
+            parts_request(),
+            format!("plugins/{namespace}/pages/{page}/parts"),
+        ),
+        None => (request, raw_rest),
+    };
     let upstream = match upstream_request(
         request,
         &raw_rest,
@@ -292,7 +313,113 @@ pub(super) async fn forward(
         };
     let deadline = started + UPSTREAM_TIMEOUT;
     let closing = state.host_tunnels().closing();
+    if let Some((namespace, page)) = page
+        && response.status() == axum::http::StatusCode::OK
+    {
+        return remote_page_document(response, deadline, &target.name, &namespace, &page).await;
+    }
     forwarded_response(response, lease, deadline, closing)
+}
+
+/// `(namespace, page)` when a forwarded request is a page's document,
+/// `GET plugins/<ns>/pages/<page>/`, with both ids well formed. Any other
+/// request, including a malformed id, is forwarded as it is.
+fn page_document_route(method: &Method, rest: &str) -> Option<(String, String)> {
+    if method != Method::GET {
+        return None;
+    }
+    let mut segments = rest.split('/');
+    let (Some("plugins"), Some(namespace), Some("pages"), Some(page), Some(""), None) = (
+        segments.next(),
+        segments.next(),
+        segments.next(),
+        segments.next(),
+        segments.next(),
+        segments.next(),
+    ) else {
+        return None;
+    };
+    (super::validate_id(namespace).is_ok() && super::validate_id(page).is_ok())
+        .then(|| (namespace.to_string(), page.to_string()))
+}
+
+/// The remote parts read that stands in for a page document request; none
+/// of the browser's navigation headers travel.
+fn parts_request() -> Request {
+    let mut request = Request::new(Body::empty());
+    request
+        .headers_mut()
+        .insert(header::ACCEPT, HeaderValue::from_static("application/json"));
+    request
+}
+
+/// Write a remote page's document from the parts its host returned, with
+/// this dashboard's kit, policy and hashes; the remote's headers are
+/// ignored. Parts that fail a refusal a local page's files get are answered
+/// with a diagnostic and no document.
+async fn remote_page_document(
+    response: axum::http::Response<hyper::body::Incoming>,
+    deadline: tokio::time::Instant,
+    host: &str,
+    namespace: &str,
+    page: &str,
+) -> Response {
+    let limit = crate::plugin_page::REMOTE_PARTS_LIMIT_BYTES;
+    let body = match tokio::time::timeout_at(
+        deadline,
+        axum::body::to_bytes(Body::new(response.into_body()), limit),
+    )
+    .await
+    {
+        Ok(Ok(body)) => body,
+        Ok(Err(error)) => {
+            return page_refused(
+                host,
+                namespace,
+                page,
+                &format!("its page parts could not be read whole within {limit} bytes: {error}"),
+            );
+        }
+        Err(_) => {
+            return failure(
+                host,
+                "process_timeout",
+                format!(
+                    "host '{host}' did not finish sending its page parts within {}s",
+                    UPSTREAM_TIMEOUT.as_secs()
+                ),
+            );
+        }
+    };
+    match crate::plugin_page::check_remote_parts(&body) {
+        Ok(parts) => super::plugins::page_document_response(&crate::plugin_page::write_document(
+            &parts.parts(),
+        )),
+        Err(reason) => page_refused(host, namespace, page, &reason),
+    }
+}
+
+/// The diagnostic a remote page gets in its place when its parts are
+/// refused: JSON under the forwarder's own sandbox policy, never a document.
+fn page_refused(host: &str, namespace: &str, page: &str, reason: &str) -> Response {
+    let mut response = (
+        axum::http::StatusCode::BAD_GATEWAY,
+        Json(json!({
+            "code": "page_refused",
+            "error": format!(
+                "page '{page}' of plugin '{namespace}' on host '{host}' was not shown: {reason}"
+            ),
+            "host": host,
+        })),
+    )
+        .into_response();
+    let headers = response.headers_mut();
+    headers.insert(
+        header::CONTENT_SECURITY_POLICY,
+        HeaderValue::from_static(FORWARDED_CSP),
+    );
+    headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
 }
 
 /// `GET /api/hosts/:host/connection`: the selected host's tunnel, opened on

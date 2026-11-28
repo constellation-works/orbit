@@ -1607,3 +1607,297 @@ fn forwarded_active_content_is_isolated_by_the_serving_dashboard() {
         },
     );
 }
+
+/// A remote dashboard that answers `/healthz`, `/api/hosts` with `identity`
+/// and each path in `routes` with its `(status, headers, body)`; anything
+/// else is a 404. Returns its port.
+fn serve_routes(identity: String, routes: Vec<(String, (u16, String, String))>) -> u16 {
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { continue };
+            if stream
+                .set_read_timeout(Some(Duration::from_secs(10)))
+                .is_err()
+            {
+                continue;
+            }
+            let Ok(clone) = stream.try_clone() else {
+                continue;
+            };
+            let mut reader = BufReader::new(clone);
+            let mut first = String::new();
+            if !matches!(reader.read_line(&mut first), Ok(1..)) {
+                continue;
+            }
+            loop {
+                let mut line = String::new();
+                match reader.read_line(&mut line) {
+                    Ok(0) | Err(_) => break,
+                    Ok(_) => {}
+                }
+                if line == "\r\n" || line.is_empty() {
+                    break;
+                }
+            }
+            let path = first.split_whitespace().nth(1).unwrap_or_default();
+            let path = path.split('?').next().unwrap_or_default();
+            let (status, headers, body) = match path {
+                "/healthz" => (200, String::new(), String::new()),
+                "/api/hosts" => (
+                    200,
+                    "Content-Type: application/json\r\n".to_string(),
+                    identity.clone(),
+                ),
+                _ => routes
+                    .iter()
+                    .find(|(route, _)| route == path)
+                    .map(|(_, answer)| answer.clone())
+                    .unwrap_or((404, String::new(), String::new())),
+            };
+            let _ = write!(
+                stream,
+                "HTTP/1.1 {status} X\r\n{headers}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+        }
+    });
+    port
+}
+
+fn b64(bytes: &[u8]) -> String {
+    use base64::Engine as _;
+    base64::engine::general_purpose::STANDARD.encode(bytes)
+}
+
+/// Parts JSON as a remote's parts route returns it.
+fn remote_parts(
+    kit: Value,
+    markup: &[u8],
+    scripts: &[(&str, &[u8])],
+    styles: &[(&str, &[u8])],
+) -> String {
+    let files = |files: &[(&str, &[u8])]| -> Vec<Value> {
+        files
+            .iter()
+            .map(|(name, bytes)| json!({"name": name, "content": b64(bytes)}))
+            .collect()
+    };
+    json!({
+        "encoding": "base64",
+        "kit": kit,
+        "markup": b64(markup),
+        "scripts": files(scripts),
+        "styles": files(styles),
+    })
+    .to_string()
+}
+
+fn get_frame(server: &super::support::Server, path: &str) -> Response {
+    server
+        .request("GET", path)
+        .header("sec-fetch-site", "same-origin")
+        .header("sec-fetch-dest", "iframe")
+        .header("sec-fetch-mode", "navigate")
+        .send()
+        .unwrap()
+}
+
+/// Every `script` element's content, in document order.
+fn script_elements(body: &str) -> Vec<&str> {
+    let mut contents = Vec::new();
+    let mut rest = body;
+    while let Some(start) = rest.find("<script") {
+        let open_end = start + rest[start..].find('>').unwrap() + 1;
+        let close = open_end + rest[open_end..].find("</script>").unwrap();
+        contents.push(&rest[open_end..close]);
+        rest = &rest[close + "</script>".len()..];
+    }
+    contents
+}
+
+/// Another host's page is written by this dashboard from the parts that
+/// host returns, with this dashboard's kit, policy and per-script hashes; a
+/// remote's own policy is ignored, and parts that fail a refusal a local
+/// page's files get return a diagnostic and no document (plugin-pages
+/// design §5). Coverage admitted by the owner's exception in
+/// `docs/design/plugin-pages/4_decisions.md`.
+#[test]
+fn a_remote_page_is_written_here_from_its_checked_parts() {
+    isolated(
+        "host_forward::a_remote_page_is_written_here_from_its_checked_parts",
+        || {
+            use sha2::{Digest, Sha256};
+            const MARKUP: &[u8] = b"<main id=\"remote\">Remote &amp; page</main>";
+            const APP_JS: &[u8] = b"window.remoteApp = 1;";
+            const MOD_MJS: &[u8] = b"export const remoteModule = 1;";
+            const APP_CSS: &[u8] = b"main { color: red; }";
+            let json_headers =
+                "Content-Type: application/json\r\nContent-Security-Policy: default-src *\r\n"
+                    .to_string();
+            let big = vec![b'a'; 2 * 1024 * 1024 + 1];
+            let cases: Vec<(&str, String, &str)> = vec![
+                (
+                    "markup-script",
+                    remote_parts(json!(null), b"<main><SCRIPT>x()</SCRIPT></main>", &[], &[]),
+                    "`<script` element",
+                ),
+                (
+                    "markup-link",
+                    remote_parts(json!(null), b"<link rel=stylesheet href=x>", &[], &[]),
+                    "`<link` element",
+                ),
+                (
+                    "script-end",
+                    remote_parts(json!(null), MARKUP, &[("a.js", b"x='</Script>'")], &[]),
+                    "contains `</script`",
+                ),
+                (
+                    "script-comment",
+                    remote_parts(json!(null), MARKUP, &[("a.js", b"x='<!--'")], &[]),
+                    "contains `<!--`",
+                ),
+                (
+                    "style-end",
+                    remote_parts(json!(null), MARKUP, &[], &[("a.css", b"x{}</style>")]),
+                    "contains `</style`",
+                ),
+                (
+                    "script-name",
+                    remote_parts(json!(null), MARKUP, &[("a.txt", APP_JS)], &[]),
+                    "script 'a.txt' does not end in `.js` or `.mjs`",
+                ),
+                (
+                    "style-name",
+                    remote_parts(json!(null), MARKUP, &[], &[("a.scss", APP_CSS)]),
+                    "style 'a.scss' does not end in `.css`",
+                ),
+                (
+                    "too-large",
+                    remote_parts(json!(null), &big, &[], &[]),
+                    "at most 2097152 bytes",
+                ),
+                (
+                    "unknown-kit",
+                    remote_parts(json!(2), MARKUP, &[], &[]),
+                    "kit version 2, which this dashboard does not know",
+                ),
+            ];
+            let b = Fixture::host("hostb", "HB");
+            let b_server = b.server(false);
+            let identity = json_ok(b_server.get("/api/hosts?probe=false")).to_string();
+            let mut routes = vec![(
+                "/api/plugins/remote/pages/overview/parts".to_string(),
+                (
+                    200,
+                    json_headers.clone(),
+                    remote_parts(
+                        json!(1),
+                        MARKUP,
+                        &[("app.js", APP_JS), ("mod.mjs", MOD_MJS)],
+                        &[("app.css", APP_CSS)],
+                    ),
+                ),
+            )];
+            for (page, parts, _) in &cases {
+                routes.push((
+                    format!("/api/plugins/remote/pages/{page}/parts"),
+                    (200, json_headers.clone(), parts.clone()),
+                ));
+            }
+            let remote_port = serve_routes(identity, routes);
+            let a = Fixture::new();
+            write_hosts(&a, &[("hostb", &b.machine_id(), "hostb-ssh", "HB")]);
+            let stub = StubSsh::new(json!({"hostb-ssh": {"attach": remote_port, "spawn": null}}));
+            let a_server = a.server_with_path(false, stub.bin());
+            let page = |id: &str| format!("/api/on/hostb/plugins/remote/pages/{id}/{WS}");
+
+            let response = get_frame(&a_server, &page("overview"));
+            assert_eq!(response.status(), 200);
+            let headers = response.headers().clone();
+            assert_eq!(headers["content-type"], "text/html; charset=utf-8");
+            assert_eq!(headers["x-content-type-options"], "nosniff");
+            assert_eq!(headers["cache-control"], "no-store");
+            assert_eq!(headers.get_all("content-security-policy").iter().count(), 1);
+            let policy = headers["content-security-policy"]
+                .to_str()
+                .unwrap()
+                .to_string();
+            let body = response.text().unwrap();
+            let scripts = script_elements(&body);
+            assert_eq!(
+                scripts.len(),
+                3,
+                "this dashboard's kit, then the remote's scripts: {body}"
+            );
+            assert!(scripts[0].contains("Orbit plugin-page kit, bridge version 1"));
+            assert_eq!(scripts[1].as_bytes(), APP_JS);
+            assert_eq!(scripts[2].as_bytes(), MOD_MJS);
+            assert!(body.contains("<script type=\"module\">export const remoteModule"));
+            assert!(body.contains("<style>main { color: red; }</style>"));
+            assert!(body.contains(std::str::from_utf8(MARKUP).unwrap()));
+            let hashes: Vec<String> = scripts
+                .iter()
+                .map(|script| format!("'sha256-{}'", b64(&Sha256::digest(script.as_bytes()))))
+                .collect();
+            assert_eq!(
+                policy,
+                format!(
+                    "sandbox allow-scripts; default-src 'none'; script-src {}; style-src \
+                     'unsafe-inline'; img-src data: blob:; font-src data:; connect-src 'none'; \
+                     frame-src 'none'; object-src 'none'; form-action 'none'; base-uri 'none'; \
+                     frame-ancestors 'self'",
+                    hashes.join(" ")
+                ),
+                "this dashboard's policy, never the remote's `default-src *`"
+            );
+
+            // The document gate applies here before anything is forwarded.
+            let response = a_server.get(&page("overview"));
+            assert_eq!(response.status(), 403);
+            assert_eq!(
+                response.headers()["content-security-policy"],
+                "sandbox; default-src 'none'"
+            );
+            assert_eq!(response.json::<Value>().unwrap()["code"], "frame_required");
+
+            // The parts route itself is ordinary relayed data.
+            let response = a_server.get(&format!(
+                "/api/on/hostb/plugins/remote/pages/overview/parts{WS}"
+            ));
+            assert_eq!(response.status(), 200);
+            assert_eq!(response.headers()["content-type"], "application/json");
+            assert_eq!(
+                response.headers()["content-security-policy"],
+                "sandbox; default-src 'none'"
+            );
+
+            // A remote refusal (here an unknown page) is relayed as it is.
+            let response = get_frame(&a_server, &page("unknown"));
+            assert_eq!(response.status(), 404);
+            assert_eq!(
+                response.headers()["content-security-policy"],
+                "sandbox; default-src 'none'"
+            );
+
+            for (id, _, reason) in &cases {
+                let response = get_frame(&a_server, &page(id));
+                assert_eq!(response.status(), 502, "{id}");
+                let headers = response.headers().clone();
+                assert_eq!(headers["content-type"], "application/json", "{id}");
+                assert_eq!(
+                    headers["content-security-policy"], "sandbox; default-src 'none'",
+                    "{id}"
+                );
+                let text = response.text().unwrap();
+                assert!(!text.contains("<!doctype"), "{id}: no document: {text}");
+                let payload: Value = serde_json::from_str(&text).unwrap();
+                assert_eq!(payload["code"], "page_refused", "{id}");
+                let message = payload["error"].as_str().unwrap();
+                assert!(message.contains(reason), "{id}: {message}");
+                assert!(message.contains("on host 'hostb'"), "{id}: {message}");
+            }
+        },
+    );
+}

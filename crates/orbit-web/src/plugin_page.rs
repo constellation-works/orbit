@@ -1,6 +1,9 @@
 //! Plugin pages served by this dashboard (plugin-pages design
 //! `docs/design/plugin-pages/2_design.md` §2–§3): the one document a page's
 //! frame loads, its frame policy, and the bounds on the tool calls it makes.
+//! Another host's page is written here too, from the parts its host's
+//! parts route returns, once they pass the same refusals a local page's
+//! files get (§5).
 //!
 //! The page is untrusted code. Its document is written from the bytes the
 //! plugin load hashed, with nothing in a page file parsed, escaped or
@@ -19,7 +22,12 @@ use axum::http::HeaderMap;
 use base64::Engine as _;
 use orbit_common::OrbitError;
 use orbit_core::app::plugin::{PageCall, PageSource};
-use serde_json::Value;
+use orbit_types::plugin::{
+    KNOWN_PAGE_KITS, MAX_PAGE_BYTES, PAGE_MARKUP_REFUSED, PAGE_SCRIPT_EXTENSIONS,
+    PAGE_SCRIPT_REFUSED, PAGE_STYLE_EXTENSION, PAGE_STYLE_REFUSED, find_page_refused,
+};
+use serde::Deserialize;
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 /// Orbit's bridge script, version 1: compiled into the binary and written
@@ -40,6 +48,11 @@ pub(crate) const ACTION_CONFIRMATION_TTL: Duration = Duration::from_secs(300);
 /// Unused confirmations this server holds at once; a request over it is
 /// refused with `busy` until one is used or expires.
 pub(crate) const ACTION_CONFIRMATION_LIMIT: usize = 32;
+
+/// The most bytes of a remote parts response this dashboard reads: the page
+/// bound in base64, plus room for names and the JSON around them.
+pub(crate) const REMOTE_PARTS_LIMIT_BYTES: usize =
+    (MAX_PAGE_BYTES as usize).div_ceil(3) * 4 + 256 * 1024;
 
 /// The frame policy of design §2 before its `script-src` hashes.
 const POLICY_HEAD: &str = "sandbox allow-scripts; default-src 'none'; script-src";
@@ -155,7 +168,7 @@ impl PageServing {
         {
             return Arc::clone(document);
         }
-        let document = Arc::new(write_document(source));
+        let document = Arc::new(write_document(&PageParts::of(source)));
         documents.insert(key, (stamp, Arc::clone(&document)));
         document
     }
@@ -292,6 +305,64 @@ impl PageServing {
     }
 }
 
+/// A page's parts as the document writer reads them: from a local page's
+/// load, or from another host's parts route after [`check_remote_parts`].
+pub(crate) struct PageParts<'a> {
+    kit: Option<u32>,
+    markup: &'a [u8],
+    scripts: Vec<(&'a str, &'a [u8])>,
+    styles: Vec<(&'a str, &'a [u8])>,
+}
+
+impl<'a> PageParts<'a> {
+    /// The parts of an active local page, as its plugin load hashed them.
+    pub(crate) fn of(source: &'a PageSource) -> Self {
+        Self {
+            kit: source.kit(),
+            markup: source.markup(),
+            scripts: source.scripts().collect(),
+            styles: source.styles().collect(),
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct WireParts {
+    encoding: String,
+    kit: Option<u32>,
+    markup: String,
+    #[serde(default)]
+    scripts: Vec<WireFile>,
+    #[serde(default)]
+    styles: Vec<WireFile>,
+}
+
+#[derive(Deserialize)]
+struct WireFile {
+    name: String,
+    content: String,
+}
+
+/// Another host's page parts, decoded and checked; nothing here is trusted
+/// beyond what [`check_remote_parts`] verified.
+pub(crate) struct RemoteParts {
+    kit: Option<u32>,
+    markup: Vec<u8>,
+    scripts: Vec<(String, Vec<u8>)>,
+    styles: Vec<(String, Vec<u8>)>,
+}
+
+impl RemoteParts {
+    pub(crate) fn parts(&self) -> PageParts<'_> {
+        PageParts {
+            kit: self.kit,
+            markup: &self.markup,
+            scripts: borrow_files(&self.scripts),
+            styles: borrow_files(&self.styles),
+        }
+    }
+}
+
 /// The kit a page's manifest names, as `(stylesheet, script)`. Validation
 /// refuses a version this Orbit does not know, so an unknown one here writes
 /// no kit rather than guessing.
@@ -302,17 +373,134 @@ fn kit(version: Option<u32>) -> Option<(&'static str, &'static str)> {
     }
 }
 
+/// `GET /api/plugins/<ns>/pages/<page>/parts`: an active page's parts as
+/// JSON, each file's bytes base64-encoded, scripts and styles in manifest
+/// order (plugin-pages design §2, §5).
+pub(crate) fn parts_json(source: &PageSource) -> Value {
+    let encode = |bytes: &[u8]| base64::engine::general_purpose::STANDARD.encode(bytes);
+    let files = |files: &mut dyn Iterator<Item = (&str, &[u8])>| {
+        files
+            .map(|(name, bytes)| json!({"name": name, "content": encode(bytes)}))
+            .collect::<Vec<_>>()
+    };
+    json!({
+        "encoding": "base64",
+        "kit": source.kit(),
+        "markup": encode(source.markup()),
+        "scripts": files(&mut source.scripts()),
+        "styles": files(&mut source.styles()),
+    })
+}
+
+fn borrow_files(files: &[(String, Vec<u8>)]) -> Vec<(&str, &[u8])> {
+    files
+        .iter()
+        .map(|(name, bytes)| (name.as_str(), bytes.as_slice()))
+        .collect()
+}
+
+/// Decode another host's parts response and apply the refusals a local
+/// page's files get at load (plugin-pages design §1): a kit version this
+/// dashboard does not know, `<script` or `<link` in the markup, `</script`
+/// or `<!--` in a script, `</style` in a style, a script name not ending in
+/// `.js` or `.mjs`, a style name not ending in `.css`, and a page over the
+/// size bound. `Err` is the diagnostic shown in the page's place.
+pub(crate) fn check_remote_parts(body: &[u8]) -> Result<RemoteParts, String> {
+    let wire: WireParts = serde_json::from_slice(body)
+        .map_err(|error| format!("its page parts are not valid JSON: {error}"))?;
+    if wire.encoding != "base64" {
+        return Err(format!(
+            "its page parts use encoding '{}'; this dashboard reads only base64",
+            wire.encoding
+        ));
+    }
+    if let Some(kit) = wire.kit
+        && !KNOWN_PAGE_KITS.contains(&kit)
+    {
+        return Err(format!(
+            "the page names kit version {kit}, which this dashboard does not know"
+        ));
+    }
+    let decode = |label: &str, content: &str| {
+        base64::engine::general_purpose::STANDARD
+            .decode(content)
+            .map_err(|error| format!("{label} is not valid base64: {error}"))
+    };
+    let markup = decode("index.html", &wire.markup)?;
+    let mut total = markup.len() as u64;
+    if let Some(element) = find_page_refused(&markup, PAGE_MARKUP_REFUSED) {
+        return Err(format!(
+            "index.html holds a `{element}` element; a page's scripts and styles are written \
+             by the dashboard"
+        ));
+    }
+    let mut scripts = Vec::with_capacity(wire.scripts.len());
+    for file in wire.scripts {
+        if !PAGE_SCRIPT_EXTENSIONS
+            .iter()
+            .any(|extension| file.name.ends_with(extension))
+        {
+            return Err(format!(
+                "script '{}' does not end in `.js` or `.mjs`",
+                file.name
+            ));
+        }
+        let bytes = decode(&format!("script '{}'", file.name), &file.content)?;
+        if let Some(found) = find_page_refused(&bytes, PAGE_SCRIPT_REFUSED) {
+            return Err(format!(
+                "script '{}' contains `{found}`, which would end its `script` element early",
+                file.name
+            ));
+        }
+        total = total.saturating_add(bytes.len() as u64);
+        scripts.push((file.name, bytes));
+    }
+    let mut styles = Vec::with_capacity(wire.styles.len());
+    for file in wire.styles {
+        if !file.name.ends_with(PAGE_STYLE_EXTENSION) {
+            return Err(format!("style '{}' does not end in `.css`", file.name));
+        }
+        let bytes = decode(&format!("style '{}'", file.name), &file.content)?;
+        if let Some(found) = find_page_refused(&bytes, PAGE_STYLE_REFUSED) {
+            return Err(format!(
+                "style '{}' contains `{found}`, which would end its `style` element early",
+                file.name
+            ));
+        }
+        total = total.saturating_add(bytes.len() as u64);
+        styles.push((file.name, bytes));
+    }
+    if total > MAX_PAGE_BYTES {
+        return Err(format!(
+            "the page holds {total} bytes; a page may hold at most {MAX_PAGE_BYTES} bytes \
+             (2 MiB) across index.html and its listed files"
+        ));
+    }
+    Ok(RemoteParts {
+        kit: wire.kit,
+        markup,
+        scripts,
+        styles,
+    })
+}
+
 /// Write one page as a document: the kit's stylesheet and each listed style
 /// in `style` elements, the bytes of `index.html`, then the kit's script and
 /// each listed script in `script` elements. A script named `*.mjs` is a
-/// module script.
-pub(crate) fn write_document(source: &PageSource) -> PageDocument {
-    let kit = kit(source.kit());
+/// module script. A local page and another host's page are written by this
+/// one function, with this dashboard's kit and policy.
+pub(crate) fn write_document(source: &PageParts<'_>) -> PageDocument {
+    let kit = kit(source.kit);
     let mut body: Vec<u8> = Vec::with_capacity(
-        source.markup().len()
-            + source.styles().map(|(_, bytes)| bytes.len()).sum::<usize>()
+        source.markup.len()
             + source
-                .scripts()
+                .styles
+                .iter()
+                .map(|(_, bytes)| bytes.len())
+                .sum::<usize>()
+            + source
+                .scripts
+                .iter()
                 .map(|(_, bytes)| bytes.len())
                 .sum::<usize>()
             + kit.map_or(0, |(style, script)| style.len() + script.len())
@@ -322,20 +510,20 @@ pub(crate) fn write_document(source: &PageSource) -> PageDocument {
     let styles = kit
         .map(|(style, _)| style.as_bytes())
         .into_iter()
-        .chain(source.styles().map(|(_, bytes)| bytes));
+        .chain(source.styles.iter().map(|(_, bytes)| *bytes));
     for style in styles {
         body.extend_from_slice(b"<style>");
         body.extend_from_slice(style);
         body.extend_from_slice(b"</style>\n");
     }
-    body.extend_from_slice(source.markup());
+    body.extend_from_slice(source.markup);
     body.push(b'\n');
 
     let mut hashes = Vec::new();
     let scripts = kit
         .map(|(_, script)| ("kit.js", script.as_bytes()))
         .into_iter()
-        .chain(source.scripts());
+        .chain(source.scripts.iter().copied());
     for (name, script) in scripts {
         body.extend_from_slice(if name.ends_with(".mjs") {
             b"<script type=\"module\">".as_slice()
