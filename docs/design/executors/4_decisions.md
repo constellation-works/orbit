@@ -74,10 +74,14 @@ shell step an injection surface.
   `fsProfile` alongside step input. `config` was previously reachable only by
   core actions, and the profile only by the CLI runner.
 - The shipped `local-shell` definition declares no sandbox, so shell steps run
-  bare under the process supervisor and are confined by `cwd` containment plus
-  whatever sandbox already contains the Orbit process. Each step reports the
-  backend it actually ran under. Operators who want kernel confinement add a
-  `sandbox:` to the definition and an `fsProfile` to the activity.
+  bare under the process supervisor. `cwd` is checked once at launch: it must
+  resolve under the workspace root and is applied as the child's initial working
+  directory. That check does not confine later filesystem access, which is
+  limited only by an effective OS sandbox or by restrictions the Orbit process
+  inherited. Each step reports the backend it actually ran under. Operators who
+  want kernel confinement add a `sandbox:` to the definition and an `fsProfile`
+  to the activity. The current filesystem authority contract is in
+  [specs/local-shell.md](./specs/local-shell.md#filesystem-authority).
 - `orbit-exec` gains `supervise_child`, the public seam for supervising a child
   built through a sandbox wrapper. Without it the sandboxed path would have had
   to reimplement draining, deadlines, and process-group cleanup.
