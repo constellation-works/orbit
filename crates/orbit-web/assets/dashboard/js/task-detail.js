@@ -773,27 +773,59 @@ function buildDetailTabs(task, detail, tabs, context) {
     if (strip.isConnected) syncTabLayout();
     else if (typeof requestAnimationFrame === "function") requestAnimationFrame(syncTabLayout);
   };
+  let pointerInsideOverflow = false;
+  let pointerResetTimer = null;
+  const clearPointerInside = () => {
+    clearTimeout(pointerResetTimer);
+    pointerResetTimer = null;
+    pointerInsideOverflow = false;
+  };
+  const schedulePointerReset = () => {
+    clearTimeout(pointerResetTimer);
+    pointerResetTimer = setTimeout(() => {
+      pointerResetTimer = null;
+      pointerInsideOverflow = false;
+      if (!menu.hidden && typeof document !== "undefined" && !overflow.contains(document.activeElement)) {
+        closeMenu();
+      }
+    }, 0);
+  };
+  overflow.addEventListener("pointerdown", () => {
+    clearTimeout(pointerResetTimer);
+    pointerInsideOverflow = true;
+  });
+  overflow.addEventListener("mousedown", (event) => {
+    clearTimeout(pointerResetTimer);
+    pointerInsideOverflow = true;
+    // Keep focus from dropping to null on non-mouse-focusable <button> elements
+    // (WebKit/macOS Firefox) or menu padding before click runs.
+    if (event.button === 0) event.preventDefault();
+  });
   more.addEventListener("click", (event) => {
     event.stopPropagation();
+    clearPointerInside();
     if (menu.hidden) {
       menu.hidden = false;
       more.setAttribute("aria-expanded", "true");
       menu.querySelector(".detail-tabs-menu-item:not([hidden])")?.focus();
     } else {
       closeMenu();
+      more.focus();
     }
   });
   overflow.addEventListener("focusout", (event) => {
+    if (pointerInsideOverflow && !event.relatedTarget) return;
     if (!overflow.contains(event.relatedTarget)) closeMenu();
+  });
+  overflow.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape" || menu.hidden || event.altKey || event.ctrlKey || event.metaKey) return;
+    event.preventDefault();
+    event.stopPropagation();
+    closeMenu();
+    more.focus();
   });
   menu.addEventListener("keydown", (event) => {
     const items = [...menu.querySelectorAll(".detail-tabs-menu-item:not([hidden])")];
-    if (event.key === "Escape") {
-      event.preventDefault();
-      closeMenu();
-      more.focus();
-      return;
-    }
     if (!items.length) return;
     const at = items.indexOf(document.activeElement);
     let next = null;
@@ -808,7 +840,12 @@ function buildDetailTabs(task, detail, tabs, context) {
   const onDocumentPointerDown = (event) => {
     if (!overflow.contains(event.target)) closeMenu();
   };
-  if (typeof document !== "undefined") document.addEventListener("pointerdown", onDocumentPointerDown);
+  if (typeof document !== "undefined") {
+    document.addEventListener("pointerdown", onDocumentPointerDown);
+    document.addEventListener("pointerup", schedulePointerReset);
+    document.addEventListener("pointercancel", schedulePointerReset);
+    document.addEventListener("mouseup", schedulePointerReset);
+  }
   let layoutObserver = null;
   if (typeof ResizeObserver !== "undefined") {
     layoutObserver = new ResizeObserver(syncTabLayout);
@@ -818,9 +855,15 @@ function buildDetailTabs(task, detail, tabs, context) {
   }
   const originalTeardown = detail.teardown;
   detail.teardown = () => {
+    clearPointerInside();
     layoutObserver?.disconnect();
     if (typeof window !== "undefined") window.removeEventListener("resize", syncTabLayout);
-    if (typeof document !== "undefined") document.removeEventListener("pointerdown", onDocumentPointerDown);
+    if (typeof document !== "undefined") {
+      document.removeEventListener("pointerdown", onDocumentPointerDown);
+      document.removeEventListener("pointerup", schedulePointerReset);
+      document.removeEventListener("pointercancel", schedulePointerReset);
+      document.removeEventListener("mouseup", schedulePointerReset);
+    }
     originalTeardown?.();
   };
   // A remembered tab that is not in the strip yet (Delivery before its read
@@ -875,6 +918,7 @@ function buildDetailTabs(task, detail, tabs, context) {
     item.hidden = true;
     item.addEventListener("click", (event) => {
       event.stopPropagation();
+      clearPointerInside();
       closeMenu();
       activate(tab.name, { focus: true });
     });
