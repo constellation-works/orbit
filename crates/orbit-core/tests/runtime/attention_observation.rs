@@ -21,6 +21,38 @@ const ATTENTION_HOST: &str = "attention-host";
 const CONFIG: &str =
     "[workflow]\ndefault_crew = \"sol\"\n\n[crews.sol]\nprovider = \"codex\"\nmodel = \"test\"\n";
 
+struct SetupRun<'a> {
+    job_id: &'a str,
+    input: Value,
+    run_started_at: chrono::DateTime<Utc>,
+    setup_started_at: chrono::DateTime<Utc>,
+    setup_finished_at: chrono::DateTime<Utc>,
+    run_finished_at: chrono::DateTime<Utc>,
+    state: JobRunState,
+    error: Option<String>,
+}
+
+impl<'a> SetupRun<'a> {
+    fn at(
+        job_id: &'a str,
+        input: Value,
+        at: chrono::DateTime<Utc>,
+        state: JobRunState,
+        error: Option<String>,
+    ) -> Self {
+        Self {
+            job_id,
+            input,
+            run_started_at: at,
+            setup_started_at: at,
+            setup_finished_at: at,
+            run_finished_at: at,
+            state,
+            error,
+        }
+    }
+}
+
 fn session(capability: McpCapability) -> ToolSessionContext {
     ToolSessionContext {
         effective_capabilities: [capability].into(),
@@ -1133,76 +1165,107 @@ crate::scenario_table!(
     follower_run_failed_settled_local_pull_is_not_a_held_claim,
 );
 
+fn run_git(repo: &std::path::Path, args: &[&str]) -> String {
+    let output = std::process::Command::new("git")
+        .current_dir(repo)
+        .args(args)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "git {args:?}: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout).unwrap().trim().to_owned()
+}
+
+fn setup_diverged_owner_base(repo: &std::path::Path) -> (String, String, String) {
+    run_git(repo, &["init", "-b", "agent-main"]);
+    run_git(repo, &["config", "user.email", "test@example.com"]);
+    run_git(repo, &["config", "user.name", "Test"]);
+    std::fs::write(repo.join("tracked.txt"), "base").unwrap();
+    run_git(repo, &["add", "tracked.txt"]);
+    run_git(repo, &["commit", "-m", "base"]);
+    let base = run_git(repo, &["rev-parse", "HEAD"]);
+    run_git(
+        repo,
+        &["commit", "--allow-empty", "-m", "local delivery [ORB-123]"],
+    );
+    let local = run_git(repo, &["rev-parse", "HEAD"]);
+    run_git(repo, &["checkout", "--detach", &base]);
+    run_git(repo, &["commit", "--allow-empty", "-m", "remote change"]);
+    let remote = run_git(repo, &["rev-parse", "HEAD"]);
+    run_git(
+        repo,
+        &["update-ref", "refs/remotes/origin/agent-main", &remote],
+    );
+    run_git(repo, &["checkout", "agent-main"]);
+    (base, local, remote)
+}
+
+fn record_setup_run(runtime: &OrbitRuntime, spec: SetupRun<'_>) {
+    let jobs = runtime.stores().jobs();
+    let run = jobs
+        .insert_job_run(spec.job_id, 1, spec.run_started_at, Some(spec.input), None)
+        .unwrap();
+    jobs.mark_job_run_running(&run.run_id, spec.run_started_at, std::process::id())
+        .unwrap();
+    jobs.complete_job_run_step(
+        &run.run_id,
+        &JobRunStepParams {
+            lock_wait_ms: None,
+            step_index: 0,
+            target_type: JobTargetType::Activity,
+            target_id: "worktree_setup".into(),
+            started_at: spec.setup_started_at,
+            finished_at: spec.setup_finished_at,
+            duration_ms: Some(1),
+            exit_code: None,
+            agent_response_json: None,
+            state: spec.state,
+            error_code: spec
+                .error
+                .as_ref()
+                .map(|_| "delivery_stale_branch".to_string()),
+            error_message: spec.error,
+        },
+    )
+    .unwrap();
+    jobs.finalize_job_run(&run.run_id, spec.state, spec.run_finished_at, None)
+        .unwrap();
+}
+
+fn diverged_hold_message(
+    repo: &std::path::Path,
+    branch: &str,
+    local: &str,
+    remote: &str,
+) -> String {
+    format!(
+        "worktree setup refusing stale base: owner checkout '{}' holds '{branch}' at {local}, and origin/{branch} is at {remote}; the checkout has diverged",
+        repo.display()
+    )
+}
+
 #[test]
 fn stale_owner_base_attention_deduplicates_and_clears() {
-    use std::process::Command;
     let (root, runtime) = attention_runtime();
     let repo = root.path().join("repo");
-    let git = |args: &[&str]| {
-        let output = Command::new("git")
-            .current_dir(&repo)
-            .args(args)
-            .output()
-            .unwrap();
-        assert!(
-            output.status.success(),
-            "git {args:?}: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        String::from_utf8(output.stdout).unwrap().trim().to_owned()
-    };
-    git(&["init", "-b", "agent-main"]);
-    git(&["config", "user.email", "test@example.com"]);
-    git(&["config", "user.name", "Test"]);
-    std::fs::write(repo.join("tracked.txt"), "base").unwrap();
-    git(&["add", "tracked.txt"]);
-    git(&["commit", "-m", "base"]);
-    let base = git(&["rev-parse", "HEAD"]);
-    git(&["commit", "--allow-empty", "-m", "local delivery [ORB-123]"]);
-    let local = git(&["rev-parse", "HEAD"]);
-    git(&["checkout", "--detach", &base]);
-    git(&["commit", "--allow-empty", "-m", "remote change"]);
-    let remote = git(&["rev-parse", "HEAD"]);
-    git(&["update-ref", "refs/remotes/origin/agent-main", &remote]);
-    git(&["checkout", "agent-main"]);
-    let jobs = runtime.stores().jobs();
+    let (base, local, remote) = setup_diverged_owner_base(&repo);
     let now = Utc::now() - Duration::minutes(1);
     let record = |at, state, error: Option<String>| {
-        let run = jobs
-            .insert_job_run(
+        record_setup_run(
+            &runtime,
+            SetupRun::at(
                 "task_local_pipeline",
-                1,
+                json!({"base_branch": "agent-main", "base_sync": "local"}),
                 at,
-                Some(json!({"base_branch": "agent-main"})),
-                None,
-            )
-            .unwrap();
-        jobs.mark_job_run_running(&run.run_id, at, std::process::id())
-            .unwrap();
-        jobs.complete_job_run_step(
-            &run.run_id,
-            &JobRunStepParams {
-                lock_wait_ms: None,
-                step_index: 0,
-                target_type: JobTargetType::Activity,
-                target_id: "worktree_setup".into(),
-                started_at: at,
-                finished_at: at,
-                duration_ms: Some(1),
-                exit_code: None,
-                agent_response_json: None,
                 state,
-                error_code: Some("delivery_stale_branch".into()),
-                error_message: error,
-            },
-        )
-        .unwrap();
-        jobs.finalize_job_run(&run.run_id, state, at, None).unwrap();
+                error,
+            ),
+        );
     };
-    let message = format!(
-        "worktree setup refusing stale base: owner checkout '{}' holds 'agent-main' at {local}, and origin/agent-main is at {remote}; the checkout has diverged",
-        repo.display()
-    );
+    let message = diverged_hold_message(&repo, "agent-main", &local, &remote);
     record(now, JobRunState::Held, Some(message.clone()));
     record(now + Duration::seconds(1), JobRunState::Held, Some(message));
     let operator = session(McpCapability::Operator);
@@ -1219,15 +1282,15 @@ fn stale_owner_base_attention_deduplicates_and_clears() {
     let id = items[0]["id"].clone();
     let again = call(&runtime, json!({"kind": "delivery_stale_base"}), &operator);
     assert_eq!(again["items"][0]["id"], id);
-    git(&["reset", "--hard", &base]);
+    run_git(&repo, &["reset", "--hard", &base]);
     std::fs::write(repo.join("tracked.txt"), "dirty").unwrap();
     let dirty = call(&runtime, json!({"kind": "delivery_stale_base"}), &operator);
     assert_eq!(dirty["items"][0]["detail"]["ahead"], 0, "{dirty}");
     assert_eq!(dirty["items"][0]["detail"]["tracked_changes"], true);
-    git(&["reset", "--hard", &base]);
+    run_git(&repo, &["reset", "--hard", &base]);
     let clean = call(&runtime, json!({"kind": "delivery_stale_base"}), &operator);
     assert!(clean["items"].as_array().unwrap().is_empty(), "{clean}");
-    git(&["reset", "--hard", &local]);
+    run_git(&repo, &["reset", "--hard", &local]);
     record(now + Duration::seconds(2), JobRunState::Success, None);
     let cleared = call(&runtime, json!({"kind": "delivery_stale_base"}), &operator);
     assert!(cleared["items"].as_array().unwrap().is_empty(), "{cleared}");
@@ -1235,74 +1298,21 @@ fn stale_owner_base_attention_deduplicates_and_clears() {
 
 #[test]
 fn stale_owner_base_attention_continues_after_unavailable_newer_base() {
-    use std::process::Command;
     let (root, runtime) = attention_runtime();
     let repo = root.path().join("repo");
-    let git = |args: &[&str]| {
-        let output = Command::new("git")
-            .current_dir(&repo)
-            .args(args)
-            .output()
-            .unwrap();
-        assert!(
-            output.status.success(),
-            "git {args:?}: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        String::from_utf8(output.stdout).unwrap().trim().to_owned()
-    };
-    git(&["init", "-b", "agent-main"]);
-    git(&["config", "user.email", "test@example.com"]);
-    git(&["config", "user.name", "Test"]);
-    std::fs::write(repo.join("tracked.txt"), "base").unwrap();
-    git(&["add", "tracked.txt"]);
-    git(&["commit", "-m", "base"]);
-    let base = git(&["rev-parse", "HEAD"]);
-    git(&["commit", "--allow-empty", "-m", "local delivery"]);
-    let local = git(&["rev-parse", "HEAD"]);
-    git(&["checkout", "--detach", &base]);
-    git(&["commit", "--allow-empty", "-m", "remote change"]);
-    let remote = git(&["rev-parse", "HEAD"]);
-    git(&["update-ref", "refs/remotes/origin/agent-main", &remote]);
-    git(&["checkout", "agent-main"]);
-
-    let jobs = runtime.stores().jobs();
+    let (_, local, remote) = setup_diverged_owner_base(&repo);
     let now = Utc::now() - Duration::minutes(1);
     let record = |at, branch: &str| {
-        let run = jobs
-            .insert_job_run(
+        record_setup_run(
+            &runtime,
+            SetupRun::at(
                 "task_local_pipeline",
-                1,
+                json!({"base_branch": branch, "base_sync": "local"}),
                 at,
-                Some(json!({"base_branch": branch})),
-                None,
-            )
-            .unwrap();
-        jobs.mark_job_run_running(&run.run_id, at, std::process::id())
-            .unwrap();
-        jobs.complete_job_run_step(
-            &run.run_id,
-            &JobRunStepParams {
-                lock_wait_ms: None,
-                step_index: 0,
-                target_type: JobTargetType::Activity,
-                target_id: "worktree_setup".into(),
-                started_at: at,
-                finished_at: at,
-                duration_ms: Some(1),
-                exit_code: None,
-                agent_response_json: None,
-                state: JobRunState::Held,
-                error_code: Some("delivery_stale_branch".into()),
-                error_message: Some(format!(
-                    "worktree setup refusing stale base: owner checkout '{}' holds '{branch}' at {local}, and origin/{branch} is at {remote}; the checkout has diverged",
-                    repo.display()
-                )),
-            },
-        )
-        .unwrap();
-        jobs.finalize_job_run(&run.run_id, JobRunState::Held, at, None)
-            .unwrap();
+                JobRunState::Held,
+                Some(diverged_hold_message(&repo, branch, &local, &remote)),
+            ),
+        );
     };
     record(now, "agent-main");
     record(now + Duration::seconds(1), "missing-base");
@@ -1323,4 +1333,174 @@ fn stale_owner_base_attention_continues_after_unavailable_newer_base() {
     let message = degraded[0]["message"].as_str().unwrap();
     assert!(message.contains("missing-base"), "{response}");
     assert!(message.contains("refs/heads/missing-base"), "{response}");
+}
+
+#[test]
+fn stale_owner_base_attention_ignores_earlier_admitted_overlapping_run_finishing_later() {
+    let (root, runtime) = attention_runtime();
+    let repo = root.path().join("repo");
+    let (_, local, remote) = setup_diverged_owner_base(&repo);
+    let now = Utc::now() - Duration::minutes(2);
+    let operator = session(McpCapability::Operator);
+    let hold_message = diverged_hold_message(&repo, "agent-main", &local, &remote);
+
+    // Run 1 passed worktree_setup at t0 before the hold at t2, and finished
+    // implementation/validation later at t3 > t2.
+    record_setup_run(
+        &runtime,
+        SetupRun {
+            job_id: "task_local_pipeline",
+            input: json!({"base_branch": "agent-main", "base_sync": "local"}),
+            run_started_at: now,
+            setup_started_at: now,
+            setup_finished_at: now + Duration::seconds(1),
+            run_finished_at: now + Duration::seconds(10),
+            state: JobRunState::Success,
+            error: None,
+        },
+    );
+    // Overlapping setup that started before the hold at t2 and finished after it.
+    record_setup_run(
+        &runtime,
+        SetupRun {
+            job_id: "task_local_pipeline",
+            input: json!({"base_branch": "agent-main", "base_sync": "local"}),
+            run_started_at: now,
+            setup_started_at: now + Duration::seconds(1),
+            setup_finished_at: now + Duration::seconds(6),
+            run_finished_at: now + Duration::seconds(12),
+            state: JobRunState::Success,
+            error: None,
+        },
+    );
+    record_setup_run(
+        &runtime,
+        SetupRun::at(
+            "task_local_pipeline",
+            json!({"base_branch": "agent-main", "base_sync": "local"}),
+            now + Duration::seconds(5),
+            JobRunState::Held,
+            Some(hold_message),
+        ),
+    );
+
+    let response = call(&runtime, json!({"kind": "delivery_stale_base"}), &operator);
+    let items = response["items"].as_array().unwrap();
+    assert_eq!(items.len(), 1, "{response}");
+    assert_eq!(items[0]["detail"]["base"], "agent-main", "{response}");
+
+    // A genuinely newer local-base admission whose worktree_setup started and
+    // succeeded after the hold clears the item.
+    record_setup_run(
+        &runtime,
+        SetupRun {
+            job_id: "task_local_pipeline",
+            input: json!({"base_branch": "agent-main", "base_sync": "local"}),
+            run_started_at: now + Duration::seconds(20),
+            setup_started_at: now + Duration::seconds(20),
+            setup_finished_at: now + Duration::seconds(21),
+            run_finished_at: now + Duration::seconds(25),
+            state: JobRunState::Success,
+            error: None,
+        },
+    );
+    let cleared = call(&runtime, json!({"kind": "delivery_stale_base"}), &operator);
+    assert!(cleared["items"].as_array().unwrap().is_empty(), "{cleared}");
+}
+
+#[test]
+fn stale_owner_base_attention_ignores_later_remote_sync_runs() {
+    let (root, runtime) = attention_runtime();
+    let repo = root.path().join("repo");
+    let (_, local, remote) = setup_diverged_owner_base(&repo);
+    let now = Utc::now() - Duration::minutes(2);
+    let operator = session(McpCapability::Operator);
+    let hold_message = diverged_hold_message(&repo, "agent-main", &local, &remote);
+
+    record_setup_run(
+        &runtime,
+        SetupRun::at(
+            "task_local_pipeline",
+            json!({"base_branch": "agent-main", "base_sync": "local"}),
+            now,
+            JobRunState::Held,
+            Some(hold_message.clone()),
+        ),
+    );
+
+    for (offset, (job_id, input)) in [
+        (
+            "task_pr_pipeline",
+            json!({"base_branch": "agent-main", "base_sync": "remote"}),
+        ),
+        (
+            "task_claimed_pr_pipeline",
+            json!({"base_branch": "agent-main", "base_sync": "remote"}),
+        ),
+        (
+            "task_local_pipeline",
+            json!({"base_branch": "agent-main", "base_sync": "remote"}),
+        ),
+        ("task_local_pipeline", json!({"base_branch": "agent-main"})),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let at = now + Duration::seconds((offset + 1) as i64);
+        record_setup_run(
+            &runtime,
+            SetupRun::at(job_id, input, at, JobRunState::Success, None),
+        );
+    }
+
+    let still_held = call(&runtime, json!({"kind": "delivery_stale_base"}), &operator);
+    let items = still_held["items"].as_array().unwrap();
+    assert_eq!(items.len(), 1, "{still_held}");
+    assert_eq!(items[0]["detail"]["base"], "agent-main", "{still_held}");
+
+    let local_at = now + Duration::seconds(10);
+    record_setup_run(
+        &runtime,
+        SetupRun::at(
+            "task_local_pipeline",
+            json!({"base_branch": "agent-main", "base_sync": "local"}),
+            local_at,
+            JobRunState::Success,
+            None,
+        ),
+    );
+    let cleared = call(&runtime, json!({"kind": "delivery_stale_base"}), &operator);
+    assert!(cleared["items"].as_array().unwrap().is_empty(), "{cleared}");
+
+    // A claimed local leaf (defaulting base_sync to local) also clears a newer hold.
+    let newer_hold_at = now + Duration::seconds(20);
+    record_setup_run(
+        &runtime,
+        SetupRun::at(
+            "task_claimed_local_pipeline",
+            json!({"base_branch": "agent-main"}),
+            newer_hold_at,
+            JobRunState::Held,
+            Some(hold_message),
+        ),
+    );
+    let reheld = call(&runtime, json!({"kind": "delivery_stale_base"}), &operator);
+    assert_eq!(reheld["items"].as_array().unwrap().len(), 1, "{reheld}");
+
+    let claimed_local_at = now + Duration::seconds(21);
+    record_setup_run(
+        &runtime,
+        SetupRun::at(
+            "task_claimed_local_pipeline",
+            json!({"base_branch": "agent-main"}),
+            claimed_local_at,
+            JobRunState::Success,
+            None,
+        ),
+    );
+    let cleared_by_claimed = call(&runtime, json!({"kind": "delivery_stale_base"}), &operator);
+    assert!(
+        cleared_by_claimed["items"].as_array().unwrap().is_empty(),
+        "{cleared_by_claimed}"
+    );
 }
