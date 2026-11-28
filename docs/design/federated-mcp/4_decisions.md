@@ -2,13 +2,13 @@
 title: Federated MCP — Decisions
 owner: grok
 created_date: 2026-08-23
-updated_date: 2026-11-14
+updated_date: 2026-11-27
 last_validated: 2026-11-05
 status: Draft
 feature: federated-mcp
 doc_role: decisions
 type: design
-summary: Standing rules for the federated MCP mux: destinations are configured, selectors use machine_id, routing fails closed, and a client's `--operator` propagates into every destination it opens.
+summary: "Standing rules for the federated MCP mux: destinations are configured, selectors use machine_id, routing fails closed, and a client's `--operator` propagates into every destination it opens."
 tags: [federated-mcp, mcp, host-registry, multi-host]
 paths: ["crates/orbit-mcp/**", "crates/orbit-registry/**", "crates/orbit-core/**"]
 related_features: [federated-mcp, host-registry, mcp-bridge, remote-access]
