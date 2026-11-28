@@ -11,7 +11,7 @@ use crate::task::{TaskDecision, TaskHistoryEntry};
 pub const MAX_FLAKY_TESTS: usize = 3;
 /// Task history event whose decision is a [`FlakyValidation`] record.
 pub const FLAKY_VALIDATION_EVENT: &str = "flaky_validation";
-const MARKER: &str = "[flaky_validation]";
+pub(super) const MARKER: &str = "[flaky_validation]";
 
 /// Tests that failed a required command, passed on its base, then passed an
 /// isolated replay on the same candidate. Outputs are bounded by the runner.
