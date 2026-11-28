@@ -221,6 +221,7 @@ Two kinds of rule apply. The generator gate is mechanical. Everything else is re
 - a `1_overview.md` that Git sees (tracked, or untracked and not ignored) has a `stage` that is missing or not one of `idea`, `designing`, `building`, `shipped` or `parked` (STD-06 §R5). This overview stage check is separate from the discovery rule above. It runs only on overviews Git sees, so Git-ignored overviews skip it.
 - an `_archived/` folder has no top-level Markdown file.
 - `docs/design/FEATURES.md` or `docs/INDEX.md` is stale against what the generator renders (STD-06 §R9).
+- `git ls-files` fails under `docs/`, so Git's view of the docs tree is unknown. The generator then exits before it renders or writes either file, in write mode and in `--check` mode alike.
 
 The generator checks nothing else about feature folders. A missing `next` or `owner` renders as `—` on the board, and a missing `2_design.md` or `4_decisions.md` is not reported.
 
