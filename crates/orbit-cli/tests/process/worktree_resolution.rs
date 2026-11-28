@@ -1161,6 +1161,81 @@ fn doctor_graph_cleanup_uses_split_roots_and_keeps_json_stdout_clean() {
     fixture.json(&linked_worktree, &["doctor", "--remove-graph", "--json"]);
 }
 
+#[test]
+fn remove_guides_repair_when_checkout_parent_is_missing() {
+    isolated!("worktree_resolution::remove_guides_repair_when_checkout_parent_is_missing");
+    let fixture = Fixture::new("live");
+    write_machine_identity(&fixture.home);
+    Fixture::seed_repo(&fixture.repo);
+    fixture.init(&fixture.repo);
+    let missing_parent = fixture.temp.path().join("removed-mount");
+    let checkout = missing_parent.join("project");
+    Fixture::seed_repo(&checkout);
+    fixture.success(
+        &checkout,
+        &["workspace", "init", "--name", "removed-project"],
+    );
+    fixture.success(
+        &checkout,
+        &[
+            "task",
+            "add",
+            "--title",
+            "preserved task",
+            "--description",
+            "seed a bundle",
+            "--complexity",
+            "low",
+        ],
+    );
+    let partitions = fixture.home.join(".orbit/tasks/workspaces");
+    let before = task_store_partitions(&partitions);
+    assert!(before.values().any(|bundles| !bundles.is_empty()));
+    fs::remove_dir_all(&missing_parent).expect("remove checkout and parent");
+    let output = fixture
+        .command(&fixture.repo, &["workspace", "remove", "removed-project"])
+        .env("ORBIT_OPERATOR", "1")
+        .output()
+        .expect("remove workspace");
+    assert!(output.status.success(), "{}", stderr_of(&output));
+    let guidance = stdout_of(&output);
+    contains(
+        &guidance,
+        "populated, readable immediate parent",
+        "repair requires positive absence evidence",
+    );
+    contains(
+        &guidance,
+        "unreachable",
+        "missing parent preserves the partition",
+    );
+    contains(
+        &guidance,
+        "--fix-orphan-task-stores --confirm",
+        "confirmed repair is named",
+    );
+    // Doctor's aggregate exit status also reflects unrelated host checks.
+    let repaired = fixture.output(
+        &fixture.repo,
+        &["doctor", "--fix-orphan-task-stores", "--confirm", "--json"],
+    );
+    let report: Value = serde_json::from_slice(&repaired.stdout).expect("doctor JSON report");
+    assert!(
+        json_rows(&report)
+            .iter()
+            .any(|row| row["check"] == "fix-orphan-task-stores" && row["status"] == "ok"),
+        "confirmed repair must succeed: {report}"
+    );
+    let after = task_store_partitions(&partitions);
+    for (partition, bundles) in before {
+        assert_eq!(
+            after.get(&partition),
+            Some(&bundles),
+            "unreachable bundles survive repair"
+        );
+    }
+}
+
 /// [ORB-12131, ORB-12143, ORB-14516, ORB-29342] `--fix-orphan-task-stores`
 /// deletes task data. It refuses without `--confirm`. Once confirmed it
 /// removes only an empty partition and a populated one whose checkout is

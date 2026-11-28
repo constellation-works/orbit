@@ -350,7 +350,7 @@ retires the stale registry rows — as it does for every empty unclaimed partiti
 
 **Recovery ordering for a deleted checkout.** Doctor can already classify the partition as stale
 while the workspace is still in the catalog (the catalog checkout's `repo_root` is the evidence).
-You may then either run the repair immediately, or first deregister the dead workspace:
+When absence is confirmed, you may either run the repair immediately, or first deregister the dead workspace:
 
 ```sh
 ORBIT_OPERATOR=1 orbit workspace remove <workspace-name-or-id-or-absolute-checkout-path>
@@ -358,17 +358,19 @@ ORBIT_OPERATOR=1 orbit workspace remove <workspace-name-or-id-or-absolute-checko
 
 `workspace remove` changes only the catalog; it does not delete `.orbit` or task bundles. It
 **retains** the task-registry workspace binding and copies the catalog checkout into that
-registry so the leftover partition stays stale rather than flipping back to a claimed imported
-archive. A populated leftover is reported with its path, bundle count, and the reclaim command
-below. After removal, `orbit doctor` still warns on that partition; it must not report `ok`.
+registry so the leftover partition remains classifiable rather than flipping back to a claimed
+imported archive. A populated leftover is reported with its path, bundle count, and conditional
+repair guidance. After removal, `orbit doctor` still warns on that partition; it must not report `ok`.
 
 ```sh
 orbit doctor --fix-orphan-task-stores --confirm
 ```
 
-Either order works: repair while the catalog still lists the checkout, or `workspace remove`
-then the same repair. Skipping the repair after `workspace remove` leaves the bundles on disk
-and unreachable through workspace selectors.
+For a confirmed-stale binding, either order works: repair while the catalog still lists the
+checkout, or `workspace remove` then the same repair. If absence cannot be confirmed, including
+when the immediate parent is empty or missing, the partition and binding remain unreachable and
+the repair preserves them. Skipping the repair after `workspace remove` leaves the bundles on
+disk and unreachable through workspace selectors.
 
 Do not use that repair for an unknown or unreachable populated partition; reindex or restore it
 first. Empty and removed mount points are preserved, along with unreadable and dangling parents,
