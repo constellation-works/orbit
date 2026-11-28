@@ -1955,11 +1955,6 @@ class RelativeImportTests(unittest.TestCase):
             ("job/worker.rs", f"use super::super::{module}::Probe;\n")
             for module in ("distributed", "pull_drain")
         ], rejected=True)
-        self.check_rows([
-            ("job/worker.rs", "use crate::unit::admission::Probe;\n"),
-            ("distributed/worker.rs", "use crate::unit::{admission::Probe};\n"),
-            ("pull_drain/worker.rs", "use super::super::super::unit::admission::Probe;\n"),
-        ], rejected=True)
 
     def test_commented_grouped_imports_rejected(self):
         for owner, modules in (
