@@ -16,6 +16,8 @@ tags: [cloud, dispatch, claude, copilot, routines, pr, polling]
 
 # Cloud Dispatch — Overview
 
+Cloud dispatch is a proposed delivery mode that ships a task through a Claude Code cloud session instead of a local agent subprocess, so throughput is no longer bounded by the host. Orbit creates the session headlessly, polls GitHub until its PR is ready and adopts that PR into the normal review path.
+
 The [Copilot existing-PR recovery companion](specs/copilot-pr-recovery.md)
 extends this design area with a separate, unimplemented repair scope. It reuses
 remote intent/observation principles, but retains the existing PR and Orbit's
@@ -25,6 +27,9 @@ in [2_design.md](./2_design.md), imply that either proposal is built, or authori
 
 Status: proposal, not started. Phase 0 is a manual spike with no code, against `orbit` first.
 Open questions resolved 2026-09-23 (see [Resolved questions](./2_design.md#resolved-questions-2026-09-23)).
+
+## 1. Motivation
+
 Bearing: the workspace gate rule reads durable artifacts and task state, never the execution
 summary as an oracle (`crates/orbit-core/assets/activities/agent_implement.yaml`); this design
 applies the same rule to the agent's final message. The cloud session is untrusted remote
@@ -33,7 +38,7 @@ Precedents: the distributed-drain split where a follower opens the PR and the ow
 everything from GitHub (`task_claimed_pr_pipeline`, `task_landing_pipeline`, `vcs/landing/`);
 `pr_complete`'s blocking GitHub poll (`vcs/pr/complete/`).
 
-## Problem
+### The gap
 
 Every Orbit delivery runs an agent as a local subprocess in a local worktree
 (`crates/orbit-engine/src/activity_job/cli_runner/orchestrator/dispatch/preparation.rs`,
@@ -52,7 +57,7 @@ does work, but only with a TTY (§1). The 2026-09-23 spike did not find a docume
 API for sessions created by this CLI path; status APIs for other Claude products are outside
 that finding.
 
-## Goal
+### Intended outcome
 
 A task whose workspace opts in can be shipped with `mode: cloud`. Orbit:
 
@@ -63,7 +68,7 @@ A task whose workspace opts in can be shipped with `mode: cloud`. Orbit:
 
 The host spends one sleeping poll per in-flight cloud task, not one agent.
 
-### Non-goals for v1
+#### Out of scope for v1
 
 - Orbit MCP inside the cloud session. The sandbox cannot reach the box, and exposing Orbit's
   MCP on the public internet is not worth it. The session gets everything it needs in the
@@ -78,6 +83,26 @@ The host spends one sleeping poll per in-flight cloud task, not one agent.
   never reads the session's transcript or its final message.
 
 The mechanisms are in [2_design.md](./2_design.md); decisions that qualify are kept in [4_decisions.md](./4_decisions.md).
+
+## 2. Core Concepts
+
+- **Cloud session.** A Claude Code session that runs in an Anthropic-managed VM and keeps running when the host sleeps; the untrusted remote execution this design dispatches to.
+- **`mode: cloud`.** The delivery mode a task opts into when its workspace enables cloud dispatch; the host spends one sleeping poll per in-flight cloud task, not one agent.
+- **Dispatch payload.** The task's contract, carried in the dispatch command, which is everything the session gets; it reports back only through git and the PR.
+- **GitHub as the record.** The only evidence Orbit believes: it adopts the session's PR from GitHub, never from the session's transcript or final message.
+- **Adoption.** Stamping the `github-pr` external ref and filling `execution_summary` from the PR, then moving the task to `review` as `pr_promote` does today.
+
+## 3. At a Glance
+
+| Concern | File | Task |
+|---------|------|------|
+| Dispatch mechanism | [2_design.md](./2_design.md#1-dispatch-mechanism) | — |
+| Configuration and the delivery payload | [2_design.md](./2_design.md#3-delivery-contract-the-payload) | — |
+| Pipeline, idempotent dispatch and polling | [2_design.md](./2_design.md#4-pipeline) | — |
+| Adoption, review and merge | [2_design.md](./2_design.md#5-adoption-and-verification) | — |
+| Self-hosted adapter (later, plan-gated) | [2_design.md](./2_design.md#6-self-hosted-adapter-later-plan-gated) | — |
+| Copilot existing-PR recovery companion | [specs/copilot-pr-recovery.md](./specs/copilot-pr-recovery.md) | — |
+| Standing rules | [4_decisions.md](./4_decisions.md) | — |
 
 ## Task References
 

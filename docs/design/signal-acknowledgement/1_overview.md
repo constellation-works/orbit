@@ -16,6 +16,10 @@ tags: [signal-acknowledgement, operator-attention]
 
 # Signal Acknowledgement — Overview
 
+Signal acknowledgement lets an operator record once that a signal is expected, with a reason and an expiry, so every Orbit surface that would raise it shows it as acknowledged and leaves it out of its counts. A critical signal is never hidden.
+
+## 1. Motivation
+
 Bearing: [`orbit attention`](../operator-attention/1_overview.md) derives every item from
 existing state and has no acknowledgement table
 ([decision](../operator-attention/4_decisions.md#attention-is-derived-on-read-not-persisted-as-an-inbox));
@@ -27,7 +31,7 @@ offline --reason … [--until …]` lists a deliberately offline host once under
 envelope's `acknowledged` field instead of as `host_unhealthy` (ORB-27669). Doctor rows have
 a stable `check_name`; drain and ship warnings are named fields of `SubmissionNotices`.
 
-## Problem
+### The gap
 
 Agents keep raising the same expected signal, and Daniel answers it again each time. On
 2026-11-23 he named two: dk-server-1 being down and the Claude API key warning in drains. Each
@@ -36,7 +40,7 @@ item that is known and accepted looks exactly like a new one. No surface says "t
 has seen this, here is why it is fine, until when". The formation trial keeps these answers as
 scribe entries outside Orbit, so other providers and sessions never see them.
 
-## Goal
+### Intended outcome
 
 An operator records once that a signal is expected, with a reason and an expiry. Every Orbit
 surface that would raise it shows it as acknowledged (reason, by, until), inline and without
@@ -45,7 +49,7 @@ reading that host or workspace. A critical signal is never hidden. Sources, seve
 `next` actions stay as they are; an acknowledgement changes only how a signal is shown and
 counted.
 
-## Non-goals
+### Out of scope
 
 - **Hiding critical signals.** Excluded by rule, not by setting.
 - **Kind-wide or pattern acknowledgements.** A kind-wide acknowledgement such as "ignore all
@@ -56,7 +60,7 @@ counted.
 - **Changing behaviour.** An acknowledged warning still has its effect: a drain still excludes
   a crew without credentials.
 
-## Acceptance (feature level)
+### Acceptance (feature level)
 
 - Given an active acknowledgement of a non-critical attention item, `orbit attention` lists it
   only under `acknowledged_items` with reason, by and until, and leaves it out of every count.
@@ -70,8 +74,28 @@ counted.
 
 The mechanisms are in [2_design.md](./2_design.md); decisions that qualify are kept in [4_decisions.md](./4_decisions.md).
 
+## 2. Core Concepts
+
+- **Acknowledgement.** A shared record that a named signal is expected, carrying a reason, who recorded it and an expiry; it changes only how the signal is shown and counted.
+- **Signal.** An attention item, doctor row or drain warning that an acknowledgement can match by its signature.
+- **Lapse.** The end of an acknowledgement: it expires, its fix task closes or its fingerprint changes, and the signal returns to the normal lists.
+- **Critical signal.** A `critical` item or a doctor `error` row; it stays in its list, count and exit status, annotated, even when it matches.
+- **Operator-only write.** `orbit.ack.add` is refused for an agent or resident session; an acknowledgement is shared state, not one caller's memory.
+
+## 3. At a Glance
+
+| Concern | File | Task |
+|---------|------|------|
+| Signature, scope and authority | [2_design.md](./2_design.md#signature-question-1) | [ORB-27754] |
+| Lapse | [2_design.md](./2_design.md#lapse-question-3) | [ORB-27754] |
+| Where an acknowledgement shows | [2_design.md](./2_design.md#where-it-shows-question-4) | [ORB-27754] |
+| Relation to notices, switches and the sentry | [2_design.md](./2_design.md#relation-to-notices-switches-and-the-sentry-question-5) | [ORB-27669] |
+| Record and surfaces | [2_design.md](./2_design.md#record-and-surfaces) | [ORB-27754] |
+| Standing rules | [4_decisions.md](./4_decisions.md) | — |
+
 ## Task References
 
-- ORB-27669 — added the deliberate host-offline mark that attention lists as acknowledged
+- [ORB-27669] — added the deliberate host-offline mark that attention lists as acknowledged
+- [ORB-27754] — implements phase 1; parked in `someday` after this scope's approval
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

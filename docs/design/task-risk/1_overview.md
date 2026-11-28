@@ -16,7 +16,11 @@ tags: [task-risk, backlog-forecast, agent-scorecards]
 
 # Task Risk — Overview
 
+Task risk is a draft design for estimating three operational outcomes of a task, conditional on its demands and execution configuration, with size kept as evidence and every estimate advisory only: it cannot silently alter admission, crew selection, review policy or scorecard weights.
+
 Status: Draft; design only. No scoring, routing or implementation change is approved.
+
+## 1. Motivation
 
 Bearing: The [backlog forecast](../backlog-forecast/2_design.md#per-task-riskiness-estimator)
 consumes the task riskiness estimator; [agent scorecards](../agent-scorecards/2_design.md)
@@ -25,7 +29,7 @@ already distinguish execution provenance and role attribution. The
 in lists and details. This scope extends those mechanisms, without changing their
 current contracts. [ORB-20095] requests this design.
 
-## Problem
+### The gap
 
 A single size curve cannot answer whether a task's reasoning demands exceed a
 particular model's reliable capability. Building a compiler from scratch can add
@@ -81,7 +85,7 @@ inside a supported reporting interval. At this draft date a stable period starti
 with the October 8 repair cannot yet provide 30-day mature outcomes: shorten only
 in a separately labelled exploratory analysis, or wait, never silently redefine H.
 
-## Goal
+### Intended outcome
 
 Estimate three distinct operational outcomes conditional on task demands and
 execution configuration, while retaining size as evidence. Make prediction time,
@@ -89,7 +93,7 @@ population, uncertainty and unsupported cases explicit. Keep core generic across
 models and projects, and keep risk advisory: a new estimate cannot silently alter
 admission, crew selection, review policy or scorecard weights.
 
-## Non-goals
+### Out of scope
 
 - **Production changes.** This task writes a design and index only; it dispatches
   no implementation and does not alter scoring, routing, admission or models.
@@ -99,7 +103,7 @@ admission, crew selection, review policy or scorecard weights.
   reporting or reliable extrapolation beyond the evidence.
 - **Unrelated permissions.** Office permission repair is independent of this work.
 
-## Acceptance (feature level)
+### Acceptance (feature level)
 
 - Every prediction names its stage, population, horizon/budget and units;
   failed/unreviewed/immature cases cannot silently become clean observations.
@@ -113,6 +117,31 @@ admission, crew selection, review policy or scorecard weights.
   integrations; performance, rollback and unchanged admission are demonstrated.
 
 The estimands, protocol, evidence and open questions are in [2_design.md](./2_design.md); decisions that qualify are kept in [4_decisions.md](./4_decisions.md).
+
+## 2. Core Concepts
+
+- **Task riskiness estimator.** The shipped size-only estimator (v3) that fits regression probability from declared paths or diff lines; this design extends it without changing its contract.
+- **Operational outcome.** One of the three outcomes the design estimates, each with a named stage, population, horizon or budget and units.
+- **Estimand.** The precise quantity a prediction claims, so failed, unreviewed or immature cases cannot silently become clean observations.
+- **Execution provenance.** The recorded model and configuration that actually ran, so estimates are reproducible from model-blind snapshots.
+- **Unsupported case.** A request the evidence cannot support; it returns reasons and advisory next steps instead of an invented percentage.
+- **Shadow comparison.** A replayable temporal or mature comparison, with matched size baselines and explicit gate outcomes, run before any versioned integration.
+
+## 3. At a Glance
+
+| Concern | File | Task |
+|---------|------|------|
+| Outcomes and denominators | [2_design.md](./2_design.md#outcomes-and-denominators) | [ORB-20095] |
+| Assignment-time complexity and provenance | [2_design.md](./2_design.md#assignment-time-complexity-and-provenance) | [ORB-20095] |
+| Hierarchical responses and identification | [2_design.md](./2_design.md#hierarchical-responses-and-identification) | [ORB-20095] |
+| Exploratory evidence from October 29, 2026 | [2_design.md](./2_design.md#exploratory-evidence-from-october-29-2026) | [ORB-20094], [ORB-20107] |
+| Dated evidence report | [references/2026-10-29-risk-backtest.md](./references/2026-10-29-risk-backtest.md) | [ORB-20094] |
+| Uncertainty and unsupported cases | [2_design.md](./2_design.md#uncertainty-and-unsupported-cases) | [ORB-20095] |
+| Temporal and shadow protocol | [2_design.md](./2_design.md#reproducible-temporal-and-shadow-protocol) | [ORB-20095] |
+| Current size-only estimator | [risk.rs](../../../crates/orbit-core/src/app/codebase/risk.rs) | [ORB-19361] |
+| Display-only size curves | [2_design.md](./2_design.md#surfaces-compatibility-and-performance) | [ORB-20380] |
+| Symbol-risk backtests it cites | [symbol-risk-index](../symbol-risk-index/1_overview.md) | [ORB-19358] |
+| Standing rules | [4_decisions.md](./4_decisions.md) | — |
 
 ## Task References
 
