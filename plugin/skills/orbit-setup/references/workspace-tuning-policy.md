@@ -74,7 +74,9 @@ base synchronization and before push or merge. The first failure stops the
 list and goes to step recovery; a missing tool blocks the task as
 `validation_environment`; a failure the base shares is held, not blamed on the
 candidate. Implementers receive the list as `task.final_validation_commands`
-and leave those commands to the pipeline.
+and leave those commands to the pipeline, except any the workspace guide names
+as a pre-handoff check for a diff (such as `make ci-guards`), which they still
+run before handoff.
 
 **Decide whether you need it.** An empty list is a valid policy: the hosted
 required checks gate merges and red integration-branch CI is repaired by
@@ -117,7 +119,9 @@ would have caught argues for that command.
   Cargo) so host validation never shares output with worker builds.
 - **Align the agent guide.** If `AGENTS.md` tells implementers to run the
   same gates, say there that the pipeline runs them when they appear in
-  `final_validation_commands`, or implementers spend the time twice.
+  `final_validation_commands`, except a pre-handoff check the guide names for a
+  diff (such as `make ci-guards`), which implementers still run before handoff;
+  otherwise implementers spend the time twice.
 
 Run every command once on the owner, from a clean checkout of the base branch,
 before you configure it. A command that fails on the base today sends every
