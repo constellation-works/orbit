@@ -37,6 +37,26 @@ pub(super) fn merge_conflict_recovery_scenarios(sandbox: &Path) {
     assert_eq!(host.status(TASK_ID), TaskStatus::Review);
     test_env::record_scenario_pass("merge-conflict-real-conflict");
 
+    // Without completion's recovery checkpoint no repair is authorized: the
+    // conflict holds the run, leaving the task in review, instead of failing it.
+    let (fx, host) = fx_host(sandbox);
+    open_for_completion(&fx, &host);
+    fx.commit_on_base(FEATURE, "base change\n");
+    fx.script_checks(&["dirty"]);
+    let mut input = completion_with_step(&fx);
+    input.as_object_mut().unwrap().remove("completion");
+    let held = action_err(&host, "pr_complete", &input);
+    assert!(
+        matches!(&held, OrbitError::DeliveryRefused { refusal, message }
+            if *refusal == orbit_types::workflow::DeliveryRefusal::CompletionConflict
+                && message.contains("merge conflicts")),
+        "an unrepairable conflict is a typed hold: {held:?}"
+    );
+    assert!(fx.merge_requests().is_empty(), "no merge is requested");
+    assert_eq!(fx.remote_tip(BRANCH), fx.candidate, "nothing pushed");
+    assert_eq!(host.status(TASK_ID), TaskStatus::Review);
+    test_env::record_scenario_pass("merge-conflict-unrepairable-hold");
+
     // A reviewed head the pipeline re-reviews after a rebase, for each
     // exact form of the refusal.
     for outcome in [

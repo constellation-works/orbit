@@ -21,6 +21,10 @@ pub enum DeliveryRefusal {
     TaskNotPromotable,
     /// Owner landing requires a freshly validated conflict repair.
     LandingConflict,
+    /// Completion found the pull request's branch in merge conflict and no
+    /// authorized repair is admitted: the run has no recovery checkpoint, or
+    /// its one conflict refresh already ran. The task stays in review.
+    CompletionConflict,
     /// Required reviews or checks remain unsatisfied, without a red check.
     RequirementsUnsatisfied,
     /// Failed checks require the base's own result before candidate recovery.
@@ -95,6 +99,7 @@ impl DeliveryRefusal {
             Self::PullRequestClosed => "delivery_pr_closed",
             Self::TaskNotPromotable => "delivery_task_not_promotable",
             Self::LandingConflict => "delivery_landing_conflict",
+            Self::CompletionConflict => "delivery_completion_conflict",
             Self::RequirementsUnsatisfied => "delivery_requirements_unsatisfied",
             Self::BaseChecksPending => "delivery_base_checks_pending",
             Self::CompletionBudgetExpired => "delivery_completion_budget_expired",
@@ -125,6 +130,7 @@ impl DeliveryRefusal {
             "delivery_pr_closed" => Some(Self::PullRequestClosed),
             "delivery_task_not_promotable" => Some(Self::TaskNotPromotable),
             "delivery_landing_conflict" => Some(Self::LandingConflict),
+            "delivery_completion_conflict" => Some(Self::CompletionConflict),
             "delivery_requirements_unsatisfied" => Some(Self::RequirementsUnsatisfied),
             "delivery_base_checks_pending" => Some(Self::BaseChecksPending),
             "delivery_completion_budget_expired" => Some(Self::CompletionBudgetExpired),
@@ -171,6 +177,13 @@ impl DeliveryRefusal {
             }
             Self::LandingConflict => {
                 "Repair the conflict, revalidate, and hand off again.".into()
+            }
+            Self::CompletionConflict => {
+                concat!(
+                    "Repair the conflict on the pull request's branch, or rebase it onto its ",
+                    "base and push, then start a new delivery attempt. The task stays in review."
+                )
+                .into()
             }
             Self::RequirementsUnsatisfied => {
                 "Satisfy the named gate. A stopped authorized owner landing with typed waiting_gate evidence resumes automatically after a fresh observation confirms the gate cleared, for at most three retries with 60/120/240-second minimum backoffs; explicit retries count toward that ceiling. Use Retry landing or orbit task retry-handoff for other stops and after the automatic retry budget is exhausted. Other deliveries need a new attempt.".into()

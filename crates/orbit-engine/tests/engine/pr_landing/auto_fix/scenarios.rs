@@ -4424,8 +4424,8 @@ fn base_check_holds_never_dispatch_candidate_recovery() {
                     case,
                 );
                 assert!(
-                    scripted_ran(&host, "unexpected_failure"),
-                    "{case}: the ordinary failure handler receives a conflict that is not a base hold"
+                    !scripted_ran(&host, "unexpected_failure"),
+                    "{case}: an unrepairable conflict is a delivery hold, not a failure for the handler"
                 );
                 assert!(
                     !host
