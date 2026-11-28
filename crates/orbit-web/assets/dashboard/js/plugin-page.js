@@ -50,10 +50,12 @@ let activeRoute = null;
 let viewVisible = false;
 
 // Currently mounted `<iframe sandbox="allow-scripts">` and its captured scope.
-// Cleared on unmount, navigation away, reload or workspace/host change so a
-// previous or foreign window can never drive the relay.
+// Cleared on unmount, navigation away, reload, blocked frame navigation or
+// workspace/host change so a previous or foreign window can never drive the
+// relay.
 let activeFrame = null;
 let activeFrameMeta = null;
+let blockedNavigation = null;
 
 // Latest `/api/plugins` catalog for the current workspace visit.
 let latestPlugins = null;
@@ -91,13 +93,14 @@ function sessionOperator(plugin) {
   return plugin?.capabilities?.enable?.authorized === true && !hostWriteRefusal();
 }
 
-/// Wire the single window-level message relay once.
+/// Wire the single window-level message relay and parent CSP navigation guard once.
 export function initPluginPage({ onRefresh = () => {}, onQueryReplaced: onQuery = () => {} } = {}) {
   onRefreshRequested = typeof onRefresh === "function" ? onRefresh : () => {};
   onQueryReplaced = typeof onQuery === "function" ? onQuery : () => {};
   if (bridgeWired || typeof window === "undefined") return;
   bridgeWired = true;
   window.addEventListener("message", handleBridgeMessage);
+  window.addEventListener("securitypolicyviolation", handleFramePolicyViolation);
 }
 
 /// The active or remembered plugin page `{ namespace, page, query }`, or null.
@@ -111,6 +114,7 @@ export function setPluginPageRoute(route, { forceReload = false } = {}) {
   if (!route) {
     activeRoute = null;
     enableError = null;
+    blockedNavigation = null;
     unmountFrame();
     return;
   }
@@ -124,7 +128,10 @@ export function setPluginPageRoute(route, { forceReload = false } = {}) {
     || activeRoute.page !== next.page
     || activeRoute.query !== next.query;
   activeRoute = next;
-  if (changed) enableError = null;
+  if (changed || forceReload) {
+    enableError = null;
+    blockedNavigation = null;
+  }
   syncPluginPageView({ forceReload: changed || forceReload });
 }
 
@@ -150,7 +157,8 @@ export function updatePluginPageCatalog(plugins, { revision = getWorkspaceRevisi
 /// Reload the mounted frame, or re-read `/api/plugins` when showing a diagnostic.
 export function reloadActivePluginPage() {
   if (!viewVisible || !activeRoute) return;
-  if (activeFrame) {
+  if (activeFrame || blockedNavigation) {
+    blockedNavigation = null;
     syncPluginPageView({ forceReload: true });
     return;
   }
@@ -356,19 +364,33 @@ function mountFrame(visit, plugin, pageSummary) {
   // Sandbox contract (design §2): unique opaque origin, script-only, no
   // same-origin, popups, forms, downloads or top navigation.
   frame.setAttribute("sandbox", "allow-scripts");
+  frame.setAttribute("referrerpolicy", "no-referrer");
   frame.title = `${pageSummary.title || pageId} (${namespace})`;
 
   const meta = {
     namespace,
     page: pageId,
+    pageTitle: pageSummary.title || pageId,
+    plugin,
     visit,
     operator: sessionOperator(plugin),
+    loaded: false,
   };
   activeFrame = frame;
   activeFrameMeta = meta;
 
   frame.addEventListener("load", () => {
     if (frame !== activeFrame || !frame.isConnected || !frame.contentWindow) return;
+    // Dashboard-owned reloads always create a fresh iframe in `mountFrame`. A
+    // second `load` on the same element means the frame navigated itself.
+    if (meta.loaded) {
+      blockFrameNavigation(
+        meta,
+        "Blocked a frame navigation from inside this plugin page. Plugin pages stay on the single document loaded by the dashboard.",
+      );
+      return;
+    }
+    meta.loaded = true;
     frame.contentWindow.postMessage({
       v: BRIDGE_VERSION,
       init: {
@@ -381,9 +403,41 @@ function mountFrame(visit, plugin, pageSummary) {
     }, "*");
   });
 
+  // Set `src` before attaching the iframe so the browser navigates straight to
+  // the host-owned document instead of firing an extra initial `about:blank`
+  // `load` event first.
+  frame.src = src;
   body.classList.add("is-framed");
   body.replaceChildren(frame);
-  frame.src = src;
+}
+
+function blockFrameNavigation(meta, reason) {
+  blockedNavigation = {
+    revision: meta.visit.revision,
+    namespace: meta.namespace,
+    page: meta.page,
+    reason,
+  };
+  unmountFrame();
+  if (!viewVisible || !activeRoute) return;
+  if (activeRoute.namespace !== meta.namespace || activeRoute.page !== meta.page) return;
+  renderDiagnosticCard({
+    title: meta.pageTitle,
+    status: "inactive",
+    plugin: meta.plugin,
+    diagnostic: reason,
+    fixStep: "Use Reload above to open a fresh dashboard-owned frame, or return to Installed.",
+  });
+}
+
+function handleFramePolicyViolation(event) {
+  if (!activeFrame || !activeFrame.isConnected || !activeFrameMeta) return;
+  const directive = String(event?.effectiveDirective || event?.violatedDirective || "").toLowerCase();
+  if (!directive.startsWith("frame-src") && !directive.startsWith("child-src")) return;
+  blockFrameNavigation(
+    activeFrameMeta,
+    "Blocked an external frame navigation from this plugin page under the dashboard's frame policy.",
+  );
 }
 
 function syncPluginPageView({ forceReload = false } = {}) {
@@ -507,6 +561,24 @@ function syncPluginPageView({ forceReload = false } = {}) {
   }
 
   const visit = captureWorkspaceVisit();
+  if (
+    !forceReload
+    && blockedNavigation
+    && blockedNavigation.revision === visit.revision
+    && blockedNavigation.namespace === namespace
+    && blockedNavigation.page === page
+  ) {
+    unmountFrame();
+    renderDiagnosticCard({
+      title: pageTitle,
+      status: "inactive",
+      plugin,
+      diagnostic: blockedNavigation.reason,
+      fixStep: "Use Reload above to open a fresh dashboard-owned frame, or return to Installed.",
+    });
+    return;
+  }
+  blockedNavigation = null;
   if (!forceReload && sameMountedPage(visit, namespace, page)) {
     activeFrameMeta.operator = sessionOperator(plugin);
     return;
@@ -517,6 +589,7 @@ function syncPluginPageView({ forceReload = false } = {}) {
 function handleBridgeMessage(event) {
   if (!activeFrame || !activeFrame.isConnected || !activeFrame.contentWindow) return;
   if (event.source !== activeFrame.contentWindow) return;
+  if (event.origin !== "null") return;
   const message = event.data;
   if (!message || typeof message !== "object" || message.v !== BRIDGE_VERSION) return;
   const meta = activeFrameMeta;
@@ -734,6 +807,7 @@ onWorkspaceChange(() => {
   latestPluginsError = null;
   latestAggregate = false;
   enableError = null;
+  blockedNavigation = null;
   unmountFrame();
   if (!viewVisible) {
     activeRoute = null;
