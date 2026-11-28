@@ -584,6 +584,35 @@ fn foreign_prerequisite_warning_hold_releases_after_completion() {
             .map(|done| done.status),
         Some(TaskStatus::Done)
     );
+    let row = workspace.runtime.get_task_row(&task.id).unwrap();
+    assert!(
+        workspace
+            .runtime
+            .escalation_triage_eligibility_json(&row)
+            .unwrap()
+            .is_none()
+    );
+    let submitted = workspace.runtime.submit_explicit_escalation_triage(
+        &task.id,
+        Some("operator"),
+        JobRunTrigger::cli(),
+    );
+    assert!(
+        matches!(submitted, Err(orbit_core::application::job::EscalationTriageSubmitError::Refused(
+        orbit_core::application::job::EscalationTriageRefusal::NotEligible { ref reason, .. }
+    )) if reason == "not_held"),
+        "{submitted:?}"
+    );
+    for held_task in [&missing, &still_held] {
+        let row = workspace.runtime.get_task_row(&held_task.id).unwrap();
+        let eligibility = workspace
+            .runtime
+            .escalation_triage_eligibility_json(&row)
+            .unwrap()
+            .unwrap();
+        assert_eq!(eligibility["available"], true, "{eligibility}");
+        assert_eq!(eligibility["reason"], "qualifies", "{eligibility}");
+    }
     let shown = workspace
         .runtime
         .run_tool("orbit.task.show", json!({"id": task.id}))

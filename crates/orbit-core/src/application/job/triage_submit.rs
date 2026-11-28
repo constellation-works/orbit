@@ -303,12 +303,7 @@ impl OrbitRuntime {
                     &comments,
                     &row.history,
                     &dependencies,
-                    &|id: &str| {
-                        matches!(
-                            self.get_task(id),
-                            Ok(found) if found.status == TaskStatus::Done
-                        )
-                    },
+                    &|id: &str| self.warning_prerequisite_is_done(id),
                 );
                 match candidacy {
                     PilotWarningCandidacy::NotHeld => Ok(None),
