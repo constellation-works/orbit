@@ -144,6 +144,7 @@ design_entry_doc() {
 
 render_guide_rows() {
   local directory="$1"
+  local excluded="${2:-}"
   local file
   local title
   local summary
@@ -166,7 +167,33 @@ render_guide_rows() {
       "$(markdown_escape "$title")" \
       "$relative" \
       "$(markdown_escape "$summary")"
-  done < <(find "$directory" -maxdepth 1 -type f -name '*.md' ! -path "$docs_dir/INDEX.md" | sort)
+  done < <(find "$directory" -maxdepth 1 -type f -name '*.md' ! -path "$docs_dir/INDEX.md" ! -name "${excluded:-.}" | sort)
+}
+
+# The root of docs/ holds the index and the two maps of old headings; every other page
+# belongs in a folder that answers one question. See docs/design/doc-layout/1_scope.md.
+check_docs_root() {
+  local file
+  local name
+  local allowed
+  local ok
+  local failed=0
+
+  while IFS= read -r file; do
+    name="$(basename "$file")"
+    ok=0
+    for allowed in INDEX.md CONFIG.md DEVELOPMENT.md; do
+      if [[ "$name" == "$allowed" ]]; then
+        ok=1
+      fi
+    done
+    if [[ "$ok" -eq 0 ]]; then
+      echo "error: docs/$name sits at the docs root; the root holds only INDEX.md, CONFIG.md and DEVELOPMENT.md, so move it into a folder" >&2
+      failed=1
+    fi
+  done < <(find "$docs_dir" -maxdepth 1 -type f -name '*.md' | sort)
+
+  return "$failed"
 }
 
 # Audience mapping and the default for new runbooks are documented in
@@ -360,6 +387,12 @@ render_index() {
     printf '| Guide | Purpose |\n'
     printf '| --- | --- |\n'
     render_guide_rows "$docs_dir"
+    printf '\n### Principles\n\n'
+    printf 'Stances Orbit holds across features, with the reason and the cost, one page each under\n'
+    printf '`docs/principles/`. Admission and page shape: [principle conventions](./principles/CONVENTIONS.md).\n\n'
+    printf '| Principle | Summary |\n'
+    printf '| --- | --- |\n'
+    render_guide_rows "$docs_dir/principles" CONVENTIONS.md
     printf '\n### Lessons\n\n'
     printf 'Lessons learned while building Orbit, one file each under `docs/lessons/`. They may not\n'
     printf 'apply to everyone or in every case, but they shaped some of the decisions we made.\n\n'
@@ -456,6 +489,8 @@ write_or_check() {
   cp "$generated" "$target"
   echo "updated $display"
 }
+
+check_docs_root || exit 1
 
 tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/orbit-doc-indexes.XXXXXX")"
 trap 'rm -rf "$tmp_dir"' EXIT

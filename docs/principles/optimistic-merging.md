@@ -25,7 +25,7 @@ With after-landing review, the required checks pass before merge, then the footp
 - **Required PR checks gate merges.** PRs to the integration branch (`agent-main` in this repository) require `Check / Clippy / Test` and `Test shard 1/3`, `Test shard 2/3`, and `Test shard 3/3` to pass. The release branch `main` is separate.
 - **Post-landing CI and QA findings feed the queue.** The `ci-failure-sweep` routine files deduplicated proposed findings for CI failures, pilots them, and admits only current warning-free repairs. The `qa-sweep` auto-task exercises recent changes through user-facing paths and files tasks for non-duplicate issues it finds.
 - **Review is independent and can run after landing.** When enabled, the `delivery-code-review` auto-task reviews landed changes in batches; the shipped after-landing auto-task is disabled by default. Crew selection prefers a crew that did not implement the reviewed work, falling back when the available pool has no alternative. It records confirmed findings as follow-up bug tasks and does not change an already-landed delivery. After-landing review does not grant or withhold permission to merge.
-- **No re-review of an identical tree.** A change that lands with exactly the code tree that was already reviewed is covered and is not reviewed again ([review gate, delivery coverage](design/review-gate/2_design.md#7-delivery-coverage)).
+- **No re-review of an identical tree.** A change that lands with exactly the code tree that was already reviewed is covered and is not reviewed again ([review gate, delivery coverage](../design/review-gate/2_design.md#7-delivery-coverage)).
 
 ## Where the operator stays in control
 
@@ -36,15 +36,15 @@ Optimistic merging moves control earlier, to admission, rather than removing it.
 
 ## What fast delivery does not give up
 
-From [Orbit Positioning](POSITIONING.md):
+From [Orbit Positioning](positioning.md):
 
 - Every managed change starts as a task, and its `task_id` is in the commit message, so intent stays traceable.
-- Inspectable audit records cover commands, workflow runs, and captured provider/tool activity; the [auditability design](design/auditability/1_overview.md) describes coverage limits. When auditability conflicts with speed, ergonomics or features, auditability wins.
+- Inspectable audit records cover commands, workflow runs, and captured provider/tool activity; the [auditability design](../design/auditability/1_overview.md) describes coverage limits. When auditability conflicts with speed, ergonomics or features, auditability wins.
 - Execution is sandboxed by default on supported platforms, uses the operator's own credentials, and reports token and wall-clock cost.
 
 ## Other review modes
 
-Optimistic merging is the preferred default, not the only option. Operators who want a gate can enable one review layer before landing (`review.timing` selects one; see [CONFIG.md](CONFIG.md)):
+Optimistic merging is the preferred default, not the only option. Operators who want a gate can enable one review layer before landing (`review.timing` selects one; see [CONFIG.md](../CONFIG.md)):
 
 | Mode | Config | Behaviour |
 | --- | --- | --- |

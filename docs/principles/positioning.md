@@ -12,7 +12,7 @@ This document names what Orbit is for, who it's for, and what it deliberately is
 
 **Applying engineering rigor to AI-assisted coding.**
 
-Coding agents are fast enough that the disciplines that keep code maintainable — planning before edits, decision records for load-bearing choices, audit trails, conflict-aware parallel execution — become tempting to skip. Orbit makes those disciplines cheaper for managed work: tasks record delivery intent, durable documentation can capture load-bearing decisions, audit records cover commands, workflow runs, and provider/tool activity, and isolated worktrees reserve declared file footprints. The [auditability design](design/auditability/1_overview.md) documents the current record types and their limits.
+Coding agents are fast enough that the disciplines that keep code maintainable — planning before edits, decision records for load-bearing choices, audit trails, conflict-aware parallel execution — become tempting to skip. Orbit makes those disciplines cheaper for managed work: tasks record delivery intent, durable documentation can capture load-bearing decisions, audit records cover commands, workflow runs, and provider/tool activity, and isolated worktrees reserve declared file footprints. The [auditability design](../design/auditability/1_overview.md) documents the current record types and their limits.
 
 The audience is the individual engineer driving multiple coding agents against real code and unwilling to trade engineering rigor for raw throughput. Agent vendors solve in-session execution; Orbit is the layer above that turns individual agent sessions into a coherent, traceable body of work.
 
@@ -22,7 +22,7 @@ Orbit's own repository uses feature-scoped design docs for load-bearing decision
 
 ## Who Orbit is for
 
-The AI-native engineer running multiple provider CLIs — such as Claude Code, Codex, Antigravity, Grok, Copilot, or Muse Code — heavily, who has outgrown the in-session model and wants engineering discipline around their AI-assisted work — tasks, decision records, audit, sandboxing, and parallel dispatch. Gemini CLI remains available as a legacy executor. See the [current provider and executor list](../website/src/content/docs/concepts/agents.md) (the Cursor, Pi, and OpenCode lanes were [retired](../website/src/content/docs/concepts/agents.md#retired-providers)).
+The AI-native engineer running multiple provider CLIs — such as Claude Code, Codex, Antigravity, Grok, Copilot, or Muse Code — heavily, who has outgrown the in-session model and wants engineering discipline around their AI-assisted work — tasks, decision records, audit, sandboxing, and parallel dispatch. Gemini CLI remains available as a legacy executor. See the [current provider and executor list](../../website/src/content/docs/concepts/agents.md) (the Cursor, Pi, and OpenCode lanes were [retired](../../website/src/content/docs/concepts/agents.md#retired-providers)).
 
 Staff and principal engineers, tech leads, and founding engineers fit the same profile. If they bring Orbit into their team's workflow, that's a natural extension — but the project is not positioned for team conversion. Orbit optimizes for the individual engineer who refuses to vibe-code their way through agent-driven development.
 
@@ -53,7 +53,7 @@ When auditability conflicts with performance, ergonomics, or feature surface, au
 
 - **Self-hostable under permissive license.** Single binary, no mandatory cloud dependency. MIT.
 - **Bring-your-own-credentials.** API keys belong to the operator; Orbit is pass-through.
-- **Provider CLI execution.** Managed agent activities and agent job steps run through authenticated provider CLIs as supervised subprocesses; the CLI owns communication with the model. See the [agent execution model](../website/src/content/docs/concepts/agents.md), [provider runtime code](../crates/orbit-agent/src/lib.rs), and [provider README](../crates/orbit-agent/README.md).
+- **Provider CLI execution.** Managed agent activities and agent job steps run through authenticated provider CLIs as supervised subprocesses; the CLI owns communication with the model. See the [agent execution model](../../website/src/content/docs/concepts/agents.md), [provider runtime code](../../crates/orbit-agent/src/lib.rs), and [provider README](../../crates/orbit-agent/README.md).
 - **Audit trail for everything that touches code.** See above.
 - **Intent attribution at the codebase level.** `task_id` in commit messages, queryable, durable across rewrites.
 - **Reproducibility where possible, recorded non-determinism where not.**
@@ -73,7 +73,7 @@ When auditability conflicts with performance, ergonomics, or feature surface, au
 
 - **Required PR checks gate merges on `agent-main`.** The required checks are `Check / Clippy / Test` and `Test shard 1/3`, `Test shard 2/3`, and `Test shard 3/3`. The release branch `main` has a separate role.
 - **Post-landing CI and QA findings become follow-up work.** Required PR checks block a merge until they pass. After landing, the `ci-failure-sweep` routine files and pilots CI findings, while the `qa-sweep` auto-task exercises recent changes and files tasks for non-duplicate QA issues.
-- **Review is independent; after-landing is the preferred mode when enabled.** An implementer reviewing its own work is not review. The `delivery-code-review` auto-task reviews landed deliveries in batches, records confirmed findings as follow-up bug tasks, and does not change an already-landed delivery. It is disabled by default. `review.timing` selects an optional review layer before landing, `before_pr` or `before_landing`, and defaults to `off`; before-landing review must approve the settled head before the pipeline merges it. A landing that reproduces an already-reviewed tree is not reviewed twice. See the [review gate](design/review-gate/1_overview.md).
+- **Review is independent; after-landing is the preferred mode when enabled.** An implementer reviewing its own work is not review. The `delivery-code-review` auto-task reviews landed deliveries in batches, records confirmed findings as follow-up bug tasks, and does not change an already-landed delivery. It is disabled by default. `review.timing` selects an optional review layer before landing, `before_pr` or `before_landing`, and defaults to `off`; before-landing review must approve the settled head before the pipeline merges it. A landing that reproduces an already-reviewed tree is not reviewed twice. See the [review gate](../design/review-gate/1_overview.md).
 - **Humans control admission; required checks and configured review govern landing.** Filing a task is not dispatch: new tasks land in `proposed`, and promotion to the backlog is a separate approval. Tasks should carry a file footprint into the backlog. Orbit still admits selector-free backlog tasks in some paths, but an empty context holds no file lock; declared footprints let parallel runs use isolated worktrees without overlapping edits.
 
 The trade is deliberate: required checks catch build and test failures before merge, while after-landing review and QA handle other findings without holding declared file footprints through review.

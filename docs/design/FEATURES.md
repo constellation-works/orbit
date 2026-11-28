@@ -6,7 +6,7 @@ Where each feature in `docs/design/` stands, from the `stage` and `next` fields 
 entry doc. Stages run idea, designing, building, shipped, with parked for work on hold.
 Live task progress is in Orbit; this board records what the feature lead last set.
 
-### Building (11)
+### Building (12)
 
 | Feature | Next | Lead |
 | --- | --- | --- |
@@ -15,6 +15,7 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Backlog Forecast](./backlog-forecast/1_scope.md) | Residual rules (review phases, shadow resource-fit, follower capacity, richer calibration) are not filed | claude |
 | [Claude Code Mod](./claude-code-mod/1_scope.md) | Trial peer-message links in Claude Code [ORB-28918] | claude |
 | [Condition Triggers](./condition-triggers/1_scope.md) | File phase 3: host scope and notifications | claude |
+| [Doc Layout](./doc-layout/1_scope.md) | Phase 2: the four principle pages [ORB-29312, ORB-29313, ORB-29314, ORB-29315] | claude |
 | [Experiments](./experiments/1_scope.md) | The horizon decision-channel step remains unfiled | claude |
 | [Model Ranking](./model-ranking/1_overview.md) | R4 has no open task (ORB-23305 rejected): file the freeze and 4-week shadow run | claude |
 | [Operations as Data](./operations-as-data/1_overview.md) | Restore ORB-15934 after 2026-11-12 to refuse unknown fields | claude |
@@ -22,13 +23,12 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Script Steps](./script-steps/1_scope.md) | File the explicit script_grant raise surface for orbit-office proposals (phase 4 part; unfiled) | claude |
 | [Standing Drain](./standing-drain/1_scope.md) | Phases 1 (intent and surfaces) and 2 (the opt-in keeper) are built; enabling the keeper is Daniel's; next is the deploy hold, ORB-25992 | claude |
 
-### Designing (10)
+### Designing (9)
 
 | Feature | Next | Lead |
 | --- | --- | --- |
 | [Cloud Dispatch](./cloud-dispatch/1_scope.md) | Review the Copilot existing-PR recovery companion; the Claude phase 0 spike remains pending | claude |
 | [Context Index](./context-index/1_overview.md) | Decide from the [ORB-24866] measurement whether to file 2_design.md §13 tasks 1–5 in ws_orbit-graph | claude |
-| [Doc Layout](./doc-layout/1_scope.md) | Phase 1: create docs/principles/ and move the three pages [ORB-29310] | claude |
 | [Eval Harness](./eval-harness/1_overview.md) | Daniel accepted every recommendation in 2_design.md §14; file build-order tasks 1 to 5 once he names the Q7 spend cap and confirms the Q2 box | claude |
 | [Owner Failover](./owner-failover/1_overview.md) | Daniel reviews the proposal and answers its open questions | claude |
 | [Pilot Notes](./pilot-notes/1_overview.md) | Add the config table and the pilot's prompt section [ORB-29586] | claude |

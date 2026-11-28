@@ -5,8 +5,8 @@ created_date: 2026-11-27
 updated_date: 2026-11-27
 last_validated: 2026-11-27
 status: Accepted
-stage: designing
-next: "Phase 1: create docs/principles/ and move the three pages [ORB-29310]"
+stage: building
+next: "Phase 2: the four principle pages [ORB-29312, ORB-29313, ORB-29314, ORB-29315]"
 feature: doc-layout
 doc_role: scope
 type: design
@@ -17,7 +17,7 @@ tags: [doc-layout, docs, principles, index]
 # Scope: docs layout and principle pages
 
 Status: the operator approved this scope on 2026-11-27, with the three recommendations under
-Settled questions. Nothing is built yet; the phases below are filed as tasks.
+Settled questions. Phase 1 is built; the later phases below are filed as tasks.
 Bearing: the feature board is leaving the generated index ([ORB-29261]), `docs/dev/` is being
 folded into `docs/agents/records/` and `docs/development/examples/` ([ORB-29290]), and the two
 large references are being split into `docs/development/` ([ORB-29291]) and `docs/config/`
@@ -31,9 +31,9 @@ Three pages sit at the root of `docs/` because no folder fits them:
 
 | Page | Bytes | Linked from |
 |---|---|---|
-| `docs/OPTIMISTIC_MERGING.md` | 5,982 | `README.md`, the generated index |
-| `docs/POSITIONING.md` | 9,962 | `README.md`, the index, the optimistic-merging page, three design docs |
-| `docs/DATA_HANDLING.md` | 15,302 | the index only |
+| the optimistic-merging page, formerly at the `docs/` root | 5,982 | `README.md`, the generated index |
+| the positioning page, formerly at the `docs/` root | 9,962 | `README.md`, the index, the optimistic-merging page, three design docs |
+| the data-handling page, formerly at the `docs/` root | 15,302 | the index only |
 
 Once the four chained tasks land, these three and two maps of old headings are all that is left
 at the root, and the next page with no obvious home will join them.
@@ -76,9 +76,9 @@ docs/
 ├── DEVELOPMENT.md        map of old headings to docs/development/   [ORB-29291]
 ├── principles/           new
 │   ├── CONVENTIONS.md        admission test and page shape
-│   ├── positioning.md        moved from POSITIONING.md
-│   ├── optimistic-merging.md moved from OPTIMISTIC_MERGING.md
-│   ├── data-handling.md      moved from DATA_HANDLING.md
+│   ├── positioning.md        moved from the root positioning page
+│   ├── optimistic-merging.md moved from the root optimistic-merging page
+│   ├── data-handling.md      moved from the root data-handling page
 │   ├── declared-footprints.md    new
 │   ├── operator-admission.md     new
 │   ├── pilot-before-promote.md   new
@@ -229,11 +229,11 @@ change faster than Orbit does.
 
 ## Concerns and honest limitations
 
-- **Old links break.** A link from outside the repository to `docs/POSITIONING.md` or
-  `docs/OPTIMISTIC_MERGING.md` stops resolving, because a renamed file is not redirected. Settled
+- **Old links break.** A link from outside the repository to the old root positioning or
+  optimistic-merging page stops resolving, because a renamed file is not redirected. Settled
   question 2 accepts this.
 - **The standards cite two of the pages by path.** The vendored STD-05 exemplars name
-  `docs/POSITIONING.md` and `docs/DATA_HANDLING.md` for §R15 and §R20. The vendored copy cannot
+  the old root positioning and data-handling paths for §R15 and §R20. The vendored copy cannot
   be edited here, so it names the old paths until the shared canon is corrected and synced.
 - **Phrase counts measure scatter, not importance.** They show that a rule is restated in many
   places. The admission test, not the count, decides whether it gets a page.

@@ -21,10 +21,18 @@ operational and contributor procedures, feature designs, and incident reviews.
 | Guide | Purpose |
 | --- | --- |
 | [Orbit Configuration](./CONFIG.md) | Orbit Configuration |
-| [Orbit Data Handling](./DATA_HANDLING.md) | Orbit Data Handling — what stays on your machine, what leaves it, and to whom |
 | [Development Reference](./DEVELOPMENT.md) | Orbit development reference: validation, tests, docs index, MSRV, supply chain, vendored JS |
-| [Optimistic Merging](./OPTIMISTIC_MERGING.md) | Optimistic Merging: Orbit's preferred delivery mode. Merge fast, review after landing, keep the queue draining |
-| [Orbit Positioning](./POSITIONING.md) | Orbit Positioning |
+
+### Principles
+
+Stances Orbit holds across features, with the reason and the cost, one page each under
+`docs/principles/`. Admission and page shape: [principle conventions](./principles/CONVENTIONS.md).
+
+| Principle | Summary |
+| --- | --- |
+| [Orbit Data Handling](./principles/data-handling.md) | Orbit Data Handling — what stays on your machine, what leaves it, and to whom |
+| [Optimistic Merging](./principles/optimistic-merging.md) | Optimistic Merging: Orbit's preferred delivery mode. Merge fast, review after landing, keep the queue draining |
+| [Orbit Positioning](./principles/positioning.md) | Orbit Positioning |
 
 ### Lessons
 
