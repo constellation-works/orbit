@@ -2,6 +2,7 @@
 
 use super::*;
 use orbit_core::application::job::JobRunCancelOutcome;
+use orbit_core::test_support::{deliver_recorded_pull_settlements, pending_pull_settlements};
 use orbit_engine::HostEnvironment;
 
 /// A dead owner cannot authorize releasing a live provider's ownership.
@@ -507,7 +508,7 @@ fn a_graceful_drain_cancel_releases_unlaunched_claims_and_waits_for_running_leav
         "the leaf's own success is delivered: {settles:?}"
     );
     assert_eq!(pair.run_state(&drain), JobRunState::Cancelled);
-    assert_eq!(pair.follower.pending_pull_settlements().unwrap().count, 0);
+    assert_eq!(pending_pull_settlements(&pair.follower).unwrap().count, 0);
     let state = pair
         .follower
         .read_run_state(&drain)
@@ -549,7 +550,7 @@ fn a_forced_drain_cancel_refuses_an_unconfirmed_drain_owner() {
     }
     assert_eq!(pair.owner_claims(), claims_before);
     assert!(pair.wire.calls("orbit.drain.claim.settle").is_empty());
-    assert_eq!(pair.follower.pending_pull_settlements().unwrap().count, 0);
+    assert_eq!(pending_pull_settlements(&pair.follower).unwrap().count, 0);
 }
 
 /// An owner that already exited still permits forced leaf cancellation and
@@ -594,7 +595,7 @@ fn a_forced_drain_cancel_accepts_an_already_exited_drain_owner() {
             .iter()
             .all(|settle| settle["settlement"].get("Release").is_some())
     );
-    assert_eq!(pair.follower.pending_pull_settlements().unwrap().count, 0);
+    assert_eq!(pending_pull_settlements(&pair.follower).unwrap().count, 0);
 }
 
 /// [ORB-13892] `force` stops a running leaf instead of waiting for it: its
@@ -651,7 +652,7 @@ fn a_forced_drain_cancel_stops_running_leaves_and_returns_their_tasks_to_backlog
             .all(|settle| settle["settlement"].get("Release").is_some()),
         "nothing is failed: {settles:?}"
     );
-    assert_eq!(pair.follower.pending_pull_settlements().unwrap().count, 0);
+    assert_eq!(pending_pull_settlements(&pair.follower).unwrap().count, 0);
 }
 
 /// [ORB-13892] `force` stops only what the cancelled drain carries: a leaf
@@ -719,7 +720,7 @@ fn a_forced_drain_cancel_keeps_the_claim_of_a_leaf_it_cannot_confirm_stopped() {
     assert!(pair.wire.calls("orbit.drain.claim.settle").is_empty());
 
     pair.leaf_hands_off(&leaf);
-    pair.follower.deliver_recorded_pull_settlements();
+    deliver_recorded_pull_settlements(&pair.follower);
     let settles = pair.wire.calls("orbit.drain.claim.settle");
     assert_eq!(settles.len(), 1, "{settles:?}");
     assert!(

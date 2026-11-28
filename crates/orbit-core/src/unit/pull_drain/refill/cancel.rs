@@ -10,7 +10,8 @@ use serde_json::{Value, json};
 use crate::OrbitRuntime;
 use crate::application::contracts::DrainClaimedLeaf;
 use crate::application::distributed::{OwnerAnswer, PullPassRecord};
-use crate::application::pull_drain::drain::PullDrain;
+use crate::unit::pull_drain::drain::PullDrain;
+use crate::unit::pull_drain::settle::reclaim_settled_leaf_build_output;
 
 /// One pass of a gracefully cancelled drain: release what never launched,
 /// settle what ended, wait for live leaves, and end the drain `cancelled`
@@ -46,7 +47,7 @@ pub(super) fn cancelling_pass(
     if let Err(failure) = drain.release_pending(&carries, &cause) {
         error.get_or_insert(failure.to_string());
     }
-    let reclaimed_build_bytes = runtime.reclaim_settled_leaf_build_output(&settled_before_pass);
+    let reclaimed_build_bytes = reclaim_settled_leaf_build_output(runtime, &settled_before_pass);
     let unsettled = match runtime.pull_drain_admissions(run_id) {
         Ok(records) => Some(records.len()),
         Err(failure) => {

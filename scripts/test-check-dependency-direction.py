@@ -516,7 +516,7 @@ class RelativeImportTests(unittest.TestCase):
     def test_inherent_calls_from_task_into_upper_modules_rejected(self):
         # Each owner defines its own name, so a row's call is reported only when
         # the guard derives that owner's inherent names.
-        owners = ("automation", "job", "review", "distributed", "pull_drain")
+        owners = ("automation", "job", "review", "distributed")
         self.check_rows(
             [("task/worker.rs",
               "impl OrbitRuntime {\n    pub(crate) fn drive_task(&self) {\n"
@@ -658,7 +658,7 @@ class RelativeImportTests(unittest.TestCase):
 
     def test_lower_modules_cannot_reach_workspace_auto(self):
         lowers = ("contracts", "task", "job", "automation", "review", "distributed",
-                  "pull_drain", "../unit/admission")
+                  "../unit/pull_drain", "../unit/admission")
         self.check_rows([
             row for lower in lowers for row in (
                 (f"{lower}/probe.rs", "use crate::unit::workspace_auto::Probe;\n"),
@@ -673,7 +673,7 @@ class RelativeImportTests(unittest.TestCase):
 
     def test_lower_modules_cannot_reach_the_forecast(self):
         lowers = ("contracts", "task", "job", "automation", "review", "distributed",
-                  "pull_drain", "../unit/admission", "../unit/workspace_auto")
+                  "../unit/pull_drain", "../unit/admission", "../unit/workspace_auto")
         self.check_rows([
             row for lower in lowers for row in (
                 (f"{lower}/probe.rs", "use crate::unit::backlog_forecast::Probe;\n"),
@@ -1370,13 +1370,13 @@ class RelativeImportTests(unittest.TestCase):
         }, rejected=False)
 
     def test_grouped_relative_imports_rejected(self):
-        for module in ("distributed", "pull_drain"):
+        for climb, module in (("", "distributed"), ("super::", "unit::pull_drain")):
             self.check_rows([(relative, f"use {tree};\n") for relative, tree in (
-                ("job/worker.rs", f"super::super::{{{module}::Probe}}"),
-                ("job/worker.rs", f"super::super::{{\n    RunOwnerLiveness,\n    {module}::{{Probe}},\n}}"),
-                ("job/mod.rs", f"super::{{{module}::Probe}}"),
-                ("job/pr_repair/adoption.rs", f"super::super::super::{{{module}::Probe}}"),
-                ("job/worker.rs", f"super::{{super::{{{module}::Probe}}}}"),
+                ("job/worker.rs", f"{climb}super::super::{{{module}::Probe}}"),
+                ("job/worker.rs", f"{climb}super::super::{{\n    RunOwnerLiveness,\n    {module}::{{Probe}},\n}}"),
+                ("job/mod.rs", f"{climb}super::{{{module}::Probe}}"),
+                ("job/pr_repair/adoption.rs", f"{climb}super::super::super::{{{module}::Probe}}"),
+                ("job/worker.rs", f"super::{{super::{{{climb}{module}::Probe}}}}"),
             )], rejected=True)
 
     def test_crate_grouped_application_imports_rejected(self):
@@ -1473,7 +1473,6 @@ class RelativeImportTests(unittest.TestCase):
         ("application/automation/probe.rs", 3, "app::auto_task"),
         ("application/automation/probe.rs", 2, "review"),
         ("application/distributed/probe.rs", 3, "app::experiment"),
-        ("application/distributed/probe.rs", 2, "pull_drain"),
         ("app/agent/probe.rs", 2, "experiment"),
         ("application/task/probe.rs", 3, "app::agent"),
         ("application/review/probe.rs", 3, "app::codebase"),
@@ -1499,6 +1498,7 @@ class RelativeImportTests(unittest.TestCase):
     INLINE_DEPTH_CORE_CALLERS = (
         ("app/resident/probe.rs", 3, "app::routine"),
         ("application/review/probe.rs", 3, "unit::landing"),
+        ("application/distributed/probe.rs", 3, "unit::pull_drain"),
     )
     INLINE_DEPTH_STORE_CALLERS = (
         ("contract/probe.rs", 2, "repository"),
@@ -1538,7 +1538,7 @@ class RelativeImportTests(unittest.TestCase):
             # The plain path is caught by a text pattern first; the grouped
             # tree reaches the scanner.
             ("task/grouped.rs", "mod inner {\n    use super::super::super::{automation::Probe};\n}\n"),
-            ("job/grouped.rs", "mod inner {\n    use super::{super::super::{pull_drain::Probe}};\n}\n"),
+            ("job/grouped.rs", "mod inner {\n    use super::{super::super::super::{unit::pull_drain::Probe}};\n}\n"),
         ], rejected=True)
         # Single-file callers are scanned by exact path; one run covers them.
         exact = {
@@ -1572,7 +1572,7 @@ class RelativeImportTests(unittest.TestCase):
              "        use super::super::super::job::Probe;\n    }\n}\n"),
             ("task/body.rs", "mod inner {\n    fn probe() {\n"
              "        super::super::job::step();\n    }\n}\n"),
-            ("job/grouped.rs", "mod inner {\n    use super::{super::{pull_drain::Probe}};\n}\n"),
+            ("job/grouped.rs", "mod inner {\n    use super::{super::super::{unit::pull_drain::Probe}};\n}\n"),
         ], rejected=False)
         self.check_files({
             f"{dependency_guard_fixture.CORE_APPLICATION}/tag_instructions.rs":
@@ -1948,17 +1948,17 @@ class RelativeImportTests(unittest.TestCase):
     def test_existing_direct_imports_rejected(self):
         # One batch per detector, as in the forecast shim rows above.
         self.check_rows([
-            ("job/worker.rs", f"use crate::application::{module}::Probe;\n")
-            for module in ("distributed", "pull_drain")
+            ("job/worker.rs", f"use crate::{module}::Probe;\n")
+            for module in ("application::distributed", "unit::pull_drain")
         ], rejected=True)
         self.check_rows([
             ("job/worker.rs", f"use super::super::{module}::Probe;\n")
-            for module in ("distributed", "pull_drain")
+            for module in ("distributed", "super::unit::pull_drain")
         ], rejected=True)
 
     def test_commented_grouped_imports_rejected(self):
         for owner, modules in (
-            ("job", ("distributed", "pull_drain", "review")),
+            ("job", ("distributed", "super::unit::pull_drain", "review")),
             ("task", ("job", "review", "distributed")),
         ):
             self.check_rows([
@@ -1994,14 +1994,15 @@ class RelativeImportTests(unittest.TestCase):
         self.check_rows([
             (relative, f"use {tree};\n") for relative, tree in (
                 ("job/pr_repair/adoption.rs", "super::super::{RunOwnerLiveness, run_owner_liveness}"),
-                ("job/worker.rs", "super::{distributed::Probe, pull_drain::Other}"),
+                ("job/worker.rs", "super::{distributed::Probe, super::unit::pull_drain::Other}"),
                 ("job/pr_repair/adoption.rs", "super::super::{distributed::Probe}"),
             )
         ], rejected=False)
 
     def test_test_fixtures_accepted(self):
         self.check_files({
-            relative: "use super::super::{distributed::Probe, pull_drain::Other};\n"
+            relative: "use super::super::{distributed::Probe};\n"
+                      "use crate::unit::pull_drain::Other;\n"
                       "fn probe() { let _: Option<Probe> = None; }\n"
             for relative in ("job/tests/worker.rs", "job/tests.rs")
         }, rejected=False)

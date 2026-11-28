@@ -30,7 +30,7 @@ impl RunRead {
         match self {
             Self::Reconcile => {
                 let run = runtime.show_job_run(run_id)?;
-                runtime.settle_orphaned_pulls();
+                crate::unit::pull_drain::settle_orphaned_pulls(runtime);
                 Ok(run)
             }
             Self::Observe => runtime.show_job_run_observed(run_id),
@@ -45,7 +45,7 @@ impl RunRead {
         match self {
             Self::Reconcile => {
                 let runs = runtime.list_job_runs(params)?;
-                runtime.settle_orphaned_pulls();
+                crate::unit::pull_drain::settle_orphaned_pulls(runtime);
                 Ok(runs)
             }
             Self::Observe => runtime.list_job_runs_observed(params),

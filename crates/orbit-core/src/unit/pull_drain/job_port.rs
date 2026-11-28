@@ -4,17 +4,20 @@ use orbit_common::OrbitError;
 use orbit_store::contract::LocalPullAdmission;
 use orbit_types::workflow::JobRun;
 
+use super::settle;
 use crate::OrbitRuntime;
 use crate::application::contracts::PullSettlementEntry;
 use crate::application::job::JobPullSettlementPort;
 
-impl JobPullSettlementPort for OrbitRuntime {
+pub(crate) struct JobPort<'a>(pub(crate) &'a OrbitRuntime);
+
+impl JobPullSettlementPort for JobPort<'_> {
     fn settle_orphaned_admissions(&self) -> Vec<PullSettlementEntry> {
-        self.settle_orphaned_pulls()
+        settle::settle_orphaned_pulls(self.0)
     }
 
     fn settle_workspace_pulls(&self) -> Vec<PullSettlementEntry> {
-        self.settle_pending_pulls()
+        settle::settle_pending_pulls(self.0)
     }
 
     fn settle_carried_pulls(
@@ -22,19 +25,19 @@ impl JobPullSettlementPort for OrbitRuntime {
         records: Vec<LocalPullAdmission>,
         cause: &str,
     ) -> Vec<PullSettlementEntry> {
-        self.carry_settlements_for(records, cause)
+        settle::carry_settlements_for(self.0, records, cause)
     }
 
     fn deliver_leaf_settlement(&self, run_id: &str) -> Option<PullSettlementEntry> {
-        self.deliver_claimed_leaf_settlement(run_id)
+        settle::deliver_claimed_leaf_settlement(self.0, run_id)
     }
 
     fn settle_terminalized_leaf(&self, run_id: &str, diagnostic: Option<(&str, &str)>) {
-        self.best_effort_settle_terminal_claimed_leaf(run_id, diagnostic);
+        settle::best_effort_settle_terminal_claimed_leaf(self.0, run_id, diagnostic);
     }
 
     fn retry_leaf_settlement(&self, run_id: &str) {
-        self.retry_own_claimed_leaf_settlement(run_id);
+        settle::retry_own_claimed_leaf_settlement(self.0, run_id);
     }
 
     fn record_stopped_leaf_release(
@@ -43,6 +46,6 @@ impl JobPullSettlementPort for OrbitRuntime {
         leaf: &JobRun,
         why: &str,
     ) -> Result<LocalPullAdmission, OrbitError> {
-        self.record_forced_leaf_release(record, leaf, why)
+        settle::record_forced_leaf_release(self.0, record, leaf, why)
     }
 }

@@ -12,6 +12,7 @@ use orbit_types::workflow::{
 use super::super::drain::{PullDrain, PullLauncher, PullPeer, RefusedDelivery, no_claimed_review};
 use crate::application::job::pipeline::WorkerLaunchError;
 use crate::application::test_support::runtime_with_workspace_layout;
+use crate::unit::pull_drain::settle::record_claimed_leaf_settlement;
 
 #[derive(Default)]
 struct Peer {
@@ -231,7 +232,7 @@ impl PullLauncher for Launcher {
 #[test]
 fn a_post_spawn_error_keeps_launch_intent_and_never_releases_pending_work() {
     if isolated_pull_test(
-        "application::pull_drain::tests::drain::a_post_spawn_error_keeps_launch_intent_and_never_releases_pending_work",
+        "unit::pull_drain::tests::drain::a_post_spawn_error_keeps_launch_intent_and_never_releases_pending_work",
     ) {
         return;
     }
@@ -276,7 +277,7 @@ fn a_post_spawn_error_keeps_launch_intent_and_never_releases_pending_work() {
 #[test]
 fn a_launch_failure_adopts_a_concurrent_settlement_and_retries_queued_cancellation() {
     if isolated_pull_test(
-        "application::pull_drain::tests::drain::a_launch_failure_adopts_a_concurrent_settlement_and_retries_queued_cancellation",
+        "unit::pull_drain::tests::drain::a_launch_failure_adopts_a_concurrent_settlement_and_retries_queued_cancellation",
     ) {
         return;
     }
@@ -408,7 +409,7 @@ fn request(jobs: &JobRuns) -> (PullDestination, AdmissionRequest) {
 #[test]
 fn pull_lost_request_and_binding_responses_recover_the_same_leaf() {
     if isolated_pull_test(
-        "application::pull_drain::tests::drain::pull_lost_request_and_binding_responses_recover_the_same_leaf",
+        "unit::pull_drain::tests::drain::pull_lost_request_and_binding_responses_recover_the_same_leaf",
     ) {
         return;
     }
@@ -448,7 +449,7 @@ fn pull_lost_request_and_binding_responses_recover_the_same_leaf() {
 #[test]
 fn pull_admission_stop_mid_pass_ends_it_before_the_next_request() {
     if isolated_pull_test(
-        "application::pull_drain::tests::drain::pull_admission_stop_mid_pass_ends_it_before_the_next_request",
+        "unit::pull_drain::tests::drain::pull_admission_stop_mid_pass_ends_it_before_the_next_request",
     ) {
         return;
     }
@@ -495,7 +496,7 @@ fn pull_admission_stop_mid_pass_ends_it_before_the_next_request() {
 #[test]
 fn pull_claimed_local_leaf_resumes_and_keeps_its_committed_candidate() {
     if isolated_pull_test(
-        "application::pull_drain::tests::drain::pull_claimed_local_leaf_resumes_and_keeps_its_committed_candidate",
+        "unit::pull_drain::tests::drain::pull_claimed_local_leaf_resumes_and_keeps_its_committed_candidate",
     ) {
         return;
     }
@@ -606,7 +607,7 @@ fn pull_claimed_local_leaf_resumes_and_keeps_its_committed_candidate() {
 #[test]
 fn claimed_leaf_settlement_carries_its_review_ledger() {
     if isolated_pull_test(
-        "application::pull_drain::tests::drain::claimed_leaf_settlement_carries_its_review_ledger",
+        "unit::pull_drain::tests::drain::claimed_leaf_settlement_carries_its_review_ledger",
     ) {
         return;
     }
@@ -682,8 +683,7 @@ fn claimed_leaf_settlement_carries_its_review_ledger() {
         )
         .expect("leaf failed");
     }
-    let settled = runtime
-        .record_claimed_leaf_settlement(&run_id, None)
+    let settled = record_claimed_leaf_settlement(&runtime, &run_id, None)
         .expect("record")
         .expect("the leaf had a pull");
     let ClaimMutation::Fail(evidence) = settled.settlement.as_ref().expect("a failure settlement")
@@ -711,7 +711,7 @@ fn claimed_leaf_settlement_carries_its_review_ledger() {
 #[test]
 fn claimed_review_import_keeps_an_operator_decision() {
     if isolated_pull_test(
-        "application::pull_drain::tests::drain::claimed_review_import_keeps_an_operator_decision",
+        "unit::pull_drain::tests::drain::claimed_review_import_keeps_an_operator_decision",
     ) {
         return;
     }

@@ -158,9 +158,12 @@ impl OrbitRuntime {
             .flatten()
             .is_some_and(|run| run.job_id == crate::application::contracts::PULL_DRAIN_JOB);
         if is_pull_drain {
-            return self.settle_workspace_pulls();
+            return crate::app::port::JobPullSettlement(self).settle_workspace_pulls();
         }
-        self.deliver_leaf_settlement(run_id).into_iter().collect()
+        crate::app::port::JobPullSettlement(self)
+            .deliver_leaf_settlement(run_id)
+            .into_iter()
+            .collect()
     }
 
     pub(super) fn cancel_job_run_cascading<F>(

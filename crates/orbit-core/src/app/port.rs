@@ -24,6 +24,7 @@ use crate::application::distributed::{
 };
 use crate::application::job::{
     JobAdmissionPort, JobAutoConcurrencyPort, JobAutoTaskPort, JobDrainLeafPort, JobExperimentPort,
+    JobPullSettlementPort,
 };
 use crate::application::review::{ReviewCandidateSizePort, ReviewLandingDispatchPort};
 use crate::application::tag_instructions::TagInstructionExperimentPort;
@@ -36,6 +37,7 @@ pub(crate) use crate::unit::admission::{
 };
 use crate::unit::landing;
 pub(crate) use crate::unit::landing::ReviewPort as ReviewLandingDispatch;
+pub(crate) use crate::unit::pull_drain::JobPort as JobPullSettlement;
 pub(crate) use crate::unit::sweep_filing::TaskPort as TaskSweepFiling;
 pub(crate) use crate::unit::workspace_auto::{
     AutomationPort as AutomationBoard, DrainLeafPort as JobDrainLeaf,
@@ -68,10 +70,12 @@ const _: () = {
     const fn binds_automation_board<T: AutomationBoardPort>() {}
     const fn binds_job_auto_concurrency<T: JobAutoConcurrencyPort>() {}
     const fn binds_job_drain_leaf<T: JobDrainLeafPort>() {}
+    const fn binds_job_pull_settlement<T: JobPullSettlementPort>() {}
 
     binds_automation_board::<AutomationBoard<'_>>();
     binds_job_auto_concurrency::<JobAutoConcurrency<'_>>();
     binds_job_drain_leaf::<JobDrainLeaf<'_>>();
+    binds_job_pull_settlement::<JobPullSettlement<'_>>();
 };
 
 const _: () = {

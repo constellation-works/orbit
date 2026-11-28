@@ -9,7 +9,7 @@
 //! - Automation: `automation`, `seeding_policy`.
 //! - Agents and runs: `executor`, `vision_probe`, `statistics`.
 //! - Tool names: `tool_name_migration`.
-//! - Workspace and host: `distributed`, `pull_drain`,
+//! - Workspace and host: `distributed`,
 //!   `host_labels`, `change_watch`.
 //! - Policy: `application_authority`, `contracts`,
 //!   `pilot_note`, `tag_instructions`.
@@ -27,7 +27,6 @@ pub mod operator_input;
 
 pub(crate) mod pilot_note;
 
-pub(crate) mod pull_drain;
 pub mod review;
 pub mod seeding_policy;
 pub(crate) mod statistics;

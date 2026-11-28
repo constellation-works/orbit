@@ -9,7 +9,7 @@ feature: auto-concurrency
 doc_role: design
 summary: Proposed mechanism for predictive admission — per-task CPU and memory sampling from Linux worker scopes and the macOS process tree, resource profiles per workspace, work class and complexity, a host-wide load forecast with admission reservations, gap-fit admission under the existing throttle, and a shadow-first rollout.
 tags: [auto-concurrency, drain, capacity, admission]
-paths: ["crates/orbit-core/src/application/job/pipeline/worker/scope.rs", "crates/orbit-core/src/application/job/pipeline/worker/usage/sampler.rs", "crates/orbit-core/src/application/job/pipeline/worker/delivery_class.rs", "crates/orbit-core/src/unit/admission/auto_admission.rs", "crates/orbit-core/src/unit/admission/gap_fit.rs", "crates/orbit-core/src/unit/workspace_auto/classify/**", "crates/orbit-core/src/unit/workspace_auto/limiter.rs", "crates/orbit-core/src/application/pull_drain/refill/**", "crates/orbit-runtime/src/host/resource/**", "crates/orbit-store/src/repository/admission_load.rs", "crates/orbit-config/src/registry/settings/machine.rs", "crates/orbit-core/src/application/distributed/work_fit.rs", "crates/orbit-store/src/contract/task/coordination/admission.rs"]
+paths: ["crates/orbit-core/src/application/job/pipeline/worker/scope.rs", "crates/orbit-core/src/application/job/pipeline/worker/usage/sampler.rs", "crates/orbit-core/src/application/job/pipeline/worker/delivery_class.rs", "crates/orbit-core/src/unit/admission/auto_admission.rs", "crates/orbit-core/src/unit/admission/gap_fit.rs", "crates/orbit-core/src/unit/workspace_auto/classify/**", "crates/orbit-core/src/unit/workspace_auto/limiter.rs", "crates/orbit-core/src/unit/pull_drain/refill/**", "crates/orbit-runtime/src/host/resource/**", "crates/orbit-store/src/repository/admission_load.rs", "crates/orbit-config/src/registry/settings/machine.rs", "crates/orbit-core/src/application/distributed/work_fit.rs", "crates/orbit-store/src/contract/task/coordination/admission.rs"]
 related_features: [auto-concurrency, distributed-drain]
 related_artifacts: [ORB-15757, ORB-15774]
 ---
@@ -1162,7 +1162,7 @@ assumes the worst, so the forecast never treats unknown work as free.
 ## 6. Pull drains
 
 Implemented in `application/distributed/work_fit.rs` and the pull refill
-(`application/pull_drain/refill/request.rs`); the owner's filter is in the store's admission selection.
+(`unit/pull_drain/refill/request.rs`); the owner's filter is in the store's admission selection.
 
 A follower does not pick its task; the owner does. So the follower cannot run
 gap fit on a specific candidate. Instead, before every request, under the host

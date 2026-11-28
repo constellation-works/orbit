@@ -134,7 +134,7 @@ pub(crate) fn record_owner_census(rt: &OrbitRuntime, run_id: &str) {
     let Some(owner) = rt.automation_machine_identity() else {
         return;
     };
-    let crews = match crate::application::pull_drain::crew_window(rt, run_id) {
+    let crews = match crate::unit::pull_drain::crew_window(rt, run_id) {
         // [ORB-17773] The owner's own row never carries usage pressure:
         // owner-local dispatch reads this row as its requester, and it
         // must order exactly as before. Only a follower's pull request

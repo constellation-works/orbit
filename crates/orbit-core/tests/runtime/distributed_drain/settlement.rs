@@ -2,6 +2,7 @@
 
 use super::*;
 use orbit_core::application::job::JobRunCancelOutcome;
+use orbit_core::test_support::{deliver_recorded_pull_settlements, pending_pull_settlements};
 use orbit_engine::HostEnvironment;
 
 /// The session machine fences bind/settle even when the caller knows the
@@ -267,7 +268,7 @@ fn a_settlement_whose_reply_is_lost_is_redelivered_and_applied_once() {
         "blocked",
         "the owner applied the prerequisite hold"
     );
-    assert_eq!(pair.follower.pending_pull_settlements().unwrap().count, 1);
+    assert_eq!(pending_pull_settlements(&pair.follower).unwrap().count, 1);
     let applied = pair.owner_task(&task);
 
     let redelivered = pair.pass(&drain);
@@ -278,7 +279,7 @@ fn a_settlement_whose_reply_is_lost_is_redelivered_and_applied_once() {
         settles.iter().all(|settlement| *settlement == settles[0]),
         "the recorded settlement, re-sent unchanged"
     );
-    assert_eq!(pair.follower.pending_pull_settlements().unwrap().count, 0);
+    assert_eq!(pending_pull_settlements(&pair.follower).unwrap().count, 0);
     let leaf = pair.leaf_runs().pop().expect("leaf");
     let claim = pair
         .follower
@@ -346,7 +347,7 @@ fn a_recovered_claim_closes_its_pending_handoff_before_observing_the_pr() {
     let _logging = tracing::subscriber::set_default(subscriber);
     let settled = pair.pass(&drain);
     assert!(settled["error"].is_null(), "{settled}");
-    assert_eq!(pair.follower.pending_pull_settlements().unwrap().count, 0);
+    assert_eq!(pending_pull_settlements(&pair.follower).unwrap().count, 0);
     let closed = pair.follower.pull_leaf_claim(&leaf).unwrap().unwrap();
     assert_eq!(closed.settlement_phase, "settled");
     assert!(closed.refusal.as_deref().unwrap().contains("already ended"));
@@ -425,7 +426,7 @@ fn a_settlement_the_owner_refuses_while_holding_its_claim_backs_off_until_it_acc
             "{pass}"
         );
     }
-    pair.follower.deliver_recorded_pull_settlements();
+    deliver_recorded_pull_settlements(&pair.follower);
     assert_eq!(
         pair.wire.calls("orbit.drain.claim.settle").len(),
         1,
@@ -606,7 +607,7 @@ fn a_delivery_refused_settlement_backs_off_closes_and_lets_other_work_proceed() 
         closed["error"].is_null() || launch_refused(&closed),
         "{closed}"
     );
-    assert_eq!(pair.follower.pending_pull_settlements().unwrap().count, 0);
+    assert_eq!(pending_pull_settlements(&pair.follower).unwrap().count, 0);
     let claim_view = pair.follower.pull_leaf_claim(&leaf).unwrap().unwrap();
     assert_eq!(claim_view.settlement_phase, "settled");
     assert!(
@@ -684,12 +685,12 @@ fn a_pending_settlement_is_retried_after_an_owner_outage_before_the_drain_ends()
         "{outage}"
     );
     assert_eq!(pair.run_state(&drain), JobRunState::Running);
-    assert_eq!(pair.follower.pending_pull_settlements().unwrap().count, 1);
+    assert_eq!(pending_pull_settlements(&pair.follower).unwrap().count, 1);
 
     *pair.wire.unreachable.lock().unwrap() = false;
     let recovered = pair.pass(&drain);
     assert_eq!(recovered["done"], true, "{recovered}");
-    assert_eq!(pair.follower.pending_pull_settlements().unwrap().count, 0);
+    assert_eq!(pending_pull_settlements(&pair.follower).unwrap().count, 0);
     assert_eq!(pair.run_state(&drain), JobRunState::Cancelled);
     assert_eq!(
         pair.wire.calls("orbit.task.pull").len(),
@@ -747,7 +748,7 @@ fn a_forced_release_the_owner_missed_is_delivered_by_the_clock_sweep() {
     assert_eq!(cancel.forced_runs, vec![leaf.clone()]);
     assert!(worker.stopped());
     assert_eq!(pair.run_state(&leaf), JobRunState::Cancelled);
-    assert_eq!(pair.follower.pending_pull_settlements().unwrap().count, 1);
+    assert_eq!(pending_pull_settlements(&pair.follower).unwrap().count, 1);
     assert_eq!(pair.owner_status(&task), "in-progress");
 
     *pair.wire.unreachable.lock().unwrap() = false;
@@ -763,7 +764,7 @@ fn a_forced_release_the_owner_missed_is_delivered_by_the_clock_sweep() {
     )
     .expect("sweep");
     assert!(!sweep.lock_busy);
-    assert_eq!(pair.follower.pending_pull_settlements().unwrap().count, 0);
+    assert_eq!(pending_pull_settlements(&pair.follower).unwrap().count, 0);
     let owner = pair.owner_task(&task);
     assert_eq!(owner["status"], "backlog", "{owner:#}");
     assert!(

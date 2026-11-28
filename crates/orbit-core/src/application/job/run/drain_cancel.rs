@@ -232,7 +232,8 @@ impl OrbitRuntime {
         );
         // Settlements already recorded go out now; the drain releases its
         // own unlaunched claims on its next pass.
-        result.pull_settlements = self.settle_workspace_pulls();
+        result.pull_settlements =
+            crate::app::port::JobPullSettlement(self).settle_workspace_pulls();
         result.waiting_leaves = self.drain_claimed_leaves(&run.run_id)?;
         Ok(result)
     }
@@ -398,7 +399,8 @@ impl OrbitRuntime {
         // Whatever never launched goes back to the owner's backlog under the
         // same cause; recorded settlements, the releases above among them,
         // are delivered.
-        result.pull_settlements = self.settle_carried_pulls(still_carried()?, &cause);
+        result.pull_settlements = crate::app::port::JobPullSettlement(self)
+            .settle_carried_pulls(still_carried()?, &cause);
         Ok(result)
     }
 
@@ -431,7 +433,7 @@ impl OrbitRuntime {
                 "not stopped: {why}; its claim stays with the owner"
             ));
         }
-        let settling = self
+        let settling = crate::app::port::JobPullSettlement(self)
             .record_stopped_leaf_release(
                 record,
                 leaf,

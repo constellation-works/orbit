@@ -135,7 +135,10 @@ pub(in crate::app::doctor) fn doctor_check_pull_gates(
 pub(in crate::app::doctor) fn doctor_check_pull_settlements(
     runtime: &OrbitRuntime,
 ) -> WorkspaceDoctorResult {
-    pull_settlements_finding(runtime.pending_pull_settlements(), chrono::Utc::now())
+    pull_settlements_finding(
+        crate::unit::pull_drain::pending_pull_settlements(runtime),
+        chrono::Utc::now(),
+    )
 }
 
 fn pull_settlements_finding(

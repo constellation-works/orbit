@@ -370,7 +370,7 @@ impl OrbitRuntime {
         match read {
             RunFailureRead::Reconcile => {
                 let run = self.show_job_run(run_id)?;
-                self.settle_orphaned_admissions();
+                crate::app::port::JobPullSettlement(self).settle_orphaned_admissions();
                 Ok(run)
             }
             // Observed, not reconciled: naming a cause must not finalize a

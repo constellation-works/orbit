@@ -14,6 +14,7 @@ use super::record::{PullPass, record_admission_fit, record_breaker, refused_sett
 use super::refusal::{RefusalInputs, no_runnable_crew_refusal, pass_refusal};
 use super::request::RequestTrail;
 use crate::application::distributed::{OwnerAnswer, PullCrewWindow, PullPassRecord};
+use crate::unit::pull_drain::settle::reclaim_settled_leaf_build_output;
 
 /// What the settlement phase worked out, for the report.
 pub(super) struct Settled {
@@ -104,8 +105,7 @@ impl Pass<'_, '_> {
         {
             ledger.note(failure);
         }
-        self.runtime
-            .reclaim_settled_leaf_build_output(&gate.settled_before_pass)
+        reclaim_settled_leaf_build_output(self.runtime, &gate.settled_before_pass)
     }
 
     /// Count after this pass's settlements, so a breaker that opened during it

@@ -137,13 +137,13 @@ source scan, enforces the runtime direction.
 | Task-owned commit-pinned readers and executor `host_os` limits | `crates/orbit-core/src/application/task/{base_revision,executor_host_os}.rs`; the declared hosts and per-crew limits are read in `crates/orbit-runtime/src/run/engine/crew/host_os.rs`; the host-OS wait is `job/crew_pools/host_os_wait.rs` | [ORB-22289], [ORB-28395] |
 | Backlog forecast, above `workspace_auto` | `crates/orbit-core/src/unit/backlog_forecast/`; `BacklogForecastHistory` at the crate root and the budget override in `test_support`, both directly from `backlog_forecast` | [ORB-22287], [ORB-24548] |
 | Job review-admission hook | `crates/orbit-core/src/application/job/review_hook.rs` | [ORB-17924] |
-| Job-owned drain and pull-settlement ports | `crates/orbit-core/src/application/job/drain_port.rs`, implemented in `distributed/job_port.rs` and `pull_drain/job_port.rs` | [ORB-17937] |
+| Job-owned drain and pull-settlement ports | `crates/orbit-core/src/application/job/drain_port.rs`, implemented in `distributed/job_port.rs` and, bound in `app/port.rs`, `unit/pull_drain/job_port.rs` | [ORB-17937] |
 | Job-owned automation, admission and auto-concurrency ports | `crates/orbit-core/src/application/job/{automation,admission,auto_concurrency}_port.rs`, implemented in `automation/job_port.rs`, `admission/job_port.rs` and `workspace_auto/job_port.rs` | [ORB-17938] |
 | Run-owned audit writer, worker-exit evidence and definition reads, below `job/pipeline` | `crates/orbit-core/src/application/job/run/` (`audit_record.rs`, `worker_exit/`, `worker_scope.rs`, `definition.rs`); pipeline imports them | [ORB-24781], [ORB-25303] |
 | Automation-, review- and distributed-owned ports to the modules above them | `crates/orbit-core/src/application/automation/review_port.rs`, `review/distributed_port.rs` and `distributed/admission_port.rs`, implemented in `review/automation_port.rs`, `distributed/review_port.rs` and `admission/distributed_port.rs` | [ORB-17939] |
 | Distributed-owned experiment capture port | `crates/orbit-core/src/application/distributed/experiment_port.rs` (`DistributedExperimentPort`), implemented in `experiment/distributed_port.rs` over the capture in `experiment/overlay.rs` | [ORB-22416] |
 | Tag-instruction-owned experiment overlay port | `crates/orbit-core/src/application/tag_instructions.rs` (`TagInstructionExperimentPort`), implemented in `experiment/tag_instruction_port.rs` | [ORB-23019] |
-| Application-owned ports the adapter implements | `crates/orbit-core/src/application/contracts/tool_invocation.rs` (`ToolInvocationPort`) and `crates/orbit-core/src/application/pull_drain/drain/mod.rs` (`PullTransportPort`), implemented in `adapter/tool_execution.rs` and `adapter/engine_host/actions/pull/adapters.rs` | [ORB-22004] |
+| Application-owned ports the adapter implements | `crates/orbit-core/src/application/contracts/tool_invocation.rs` (`ToolInvocationPort`) and `crates/orbit-core/src/unit/pull_drain/drain/mod.rs` (`PullTransportPort`), implemented in `adapter/tool_execution.rs` and `adapter/engine_host/actions/pull/adapters.rs` | [ORB-22004] |
 | Task bundle export/import/reindex and publication | `crates/orbit-core/src/application/task_bundle/{migration,publication}.rs` | [ORB-24534] |
 | Product identity marker | `crates/orbit-core/src/app/workspace/product_profile.rs` | [ORB-22005] |
 | Tool/engine/command adapters | `crates/orbit-core/src/adapter/` | [ORB-10886] |
@@ -385,7 +385,7 @@ moved the backlog forecast out of `task` to its own place in the order:
   an inherent `OrbitRuntime` method that an `impl OrbitRuntime` block under
   `adapter/` defines with a visibility that reaches it. Application reaches tool
   execution through `contracts::ToolInvocationPort` and the pull transport
-  through `pull_drain::drain::PullTransportPort`, both implemented on `OrbitRuntime` by
+  through `unit::pull_drain::PullTransportPort`, both implemented on `OrbitRuntime` by
   the adapter; the adapter's inherent tool methods stay for its own callers. A
   bare `name(` is a free function, not an up-call, so only `receiver.name(`,
   `OrbitRuntime::name(`, `Self::name(` and the qualified-self forms
