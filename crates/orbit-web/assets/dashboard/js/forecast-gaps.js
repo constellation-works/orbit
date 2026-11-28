@@ -26,18 +26,29 @@ function proposedForecastUnavailable() {
   return forecastUnavailableInfo(approved, { coverage });
 }
 
+// The tasks the simulation drew, which excludes held work. The subset's count
+// includes held tasks (they carry spend) but they never enter the drain, so
+// they are taken out. Null when the payload cannot show the count.
+function simulatedTaskCount(forecast) {
+  const count = (value) => (Number.isSafeInteger(value) && value >= 0 ? value : null);
+  const tasks = count(forecast?.tasks);
+  const drainTasks = count(forecast?.drain_tasks);
+  const subset = forecast?.schedulable_subset;
+  if (subset == null) return drainTasks ?? tasks;
+  const subsetTasks = count(subset.tasks);
+  if (subsetTasks == null || tasks == null || drainTasks == null) return null;
+  const held = tasks - drainTasks;
+  return held < 0 ? null : count(subsetTasks - held);
+}
+
 function boundedGapCheckHint(forecast) {
   const gap = forecastBoundedGap(forecast);
   const population = "This count does not say which tasks entered the simulation or supplied its estimates.";
   if (gap) {
-    const subset = forecast?.schedulable_subset;
-    const hasSubset = subset != null;
-    const subsetTasks = Number.isSafeInteger(subset?.tasks) && subset.tasks >= 0 ? subset.tasks : null;
-    const simulationTasks = Number.isSafeInteger(forecast?.drain_tasks) && forecast.drain_tasks >= 0
-      ? forecast.drain_tasks
-      : Number.isSafeInteger(forecast?.tasks) && forecast.tasks >= 0 ? forecast.tasks : null;
+    const hasSubset = forecast?.schedulable_subset != null;
+    const simulationTasks = simulatedTaskCount(forecast);
     const scope = hasSubset
-      ? subsetTasks == null ? "In the simulated subset" : `In the ${subsetTasks}-task simulated subset`
+      ? simulationTasks == null ? "In the simulated subset" : `In the ${simulationTasks}-task simulated subset`
       : simulationTasks == null ? "In the simulation" : `In the ${simulationTasks}-task simulation`;
     return `${population} ${scope}, ${gap.detail}`;
   }
