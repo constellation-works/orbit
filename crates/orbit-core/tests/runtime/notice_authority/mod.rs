@@ -1395,3 +1395,9 @@ crate::scenario_table!(
 fn bundled_activity_notice_uses_selected_task_and_refuses_ambiguity() {
     managed_run::bundled_activity_notice_uses_selected_task_and_refuses_ambiguity();
 }
+
+#[cfg(unix)]
+#[test]
+fn ambiguous_bundle_dispatch_drops_inherited_task_identity() {
+    managed_run::ambiguous_bundle_dispatch_drops_inherited_task_identity();
+}

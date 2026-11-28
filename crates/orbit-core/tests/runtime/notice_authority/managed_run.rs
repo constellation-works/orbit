@@ -110,20 +110,26 @@ fn add_resident_task(runtime: &OrbitRuntime, title: &str, watched: &str) -> Stri
 
 #[cfg(unix)]
 /// Capture the exact `ORBIT_*` environment that `run_cli_backend` stamps for a
-/// managed `agent_implement` run of `task_id`.
+/// managed `agent_implement` run of `task_id`. `inherited` is set in the
+/// launching process first, as an outer shell or worker would hold it.
 fn dispatched_agent_implement_env(
     runtime: &OrbitRuntime,
     root: &Path,
     run_id: &str,
     task_id: Option<&str>,
     activity_input: Value,
+    inherited: &[(&str, &str)],
 ) -> Env {
     use std::os::unix::fs::PermissionsExt as _;
 
-    let _credential = orbit_common::test_env::scoped([(
-        "CLAUDE_CODE_OAUTH_TOKEN",
-        Some(FIXTURE_CLAUDE_WORKER_TOKEN),
-    )]);
+    // One guard per thread: the credential and any inherited identity share it.
+    let mut parent = vec![("CLAUDE_CODE_OAUTH_TOKEN", Some(FIXTURE_CLAUDE_WORKER_TOKEN))];
+    parent.extend(inherited.iter().map(|(name, value)| (*name, Some(*value))));
+    let _parent = orbit_common::test_env::scoped(parent);
+    // The engine host reads the runtime's environment snapshot, taken when the
+    // runtime opened, so the launching process's variables must be re-applied.
+    let launching =
+        orbit_core::test_support::with_runtime_env(runtime.clone(), orbit_common::Env::capture());
     let recorded = root.join("agent_implement.env");
     let bin = root.join("agent_implement-env-provider");
     std::fs::write(
@@ -169,7 +175,7 @@ fn dispatched_agent_implement_env(
     )
     .unwrap();
     orbit_engine::activity_job::cli_runner::run_cli_backend(
-        &orbit_core::test_support::EngineHost::new(runtime),
+        &orbit_core::test_support::EngineHost::new(&launching),
         &spec,
         "agent_implement",
         run_id,
@@ -221,6 +227,7 @@ pub(super) fn managed_pipeline_run_posts_and_closes_notices_as_agent() {
         &run_id,
         Some(&task),
         json!({"task_id": task, "workspace_path": root.path().join("repo")}),
+        &[],
     );
     #[cfg(not(unix))]
     let cli_env = managed_pipeline_env(&run_id, Some(&task));
@@ -649,6 +656,7 @@ pub(super) fn bundled_activity_notice_uses_selected_task_and_refuses_ambiguity()
             "task_id": active,
             "workspace_path": root.path().join("repo")
         }),
+        &[],
     );
     let post = |env: &Env, title: &str| {
         call_with_env(
@@ -690,6 +698,7 @@ pub(super) fn bundled_activity_notice_uses_selected_task_and_refuses_ambiguity()
         &run,
         None,
         json!({"task_ids": [first, active], "workspace_path": root.path().join("repo")}),
+        &[],
     );
     refused(
         post(&ambiguous, "Ambiguous activity"),
@@ -716,4 +725,77 @@ pub(super) fn bundled_activity_notice_uses_selected_task_and_refuses_ambiguity()
     )
     .unwrap();
     assert_eq!(closed["notice"]["closed"]["by"]["task_id"], active);
+}
+
+#[cfg(unix)]
+pub(super) fn ambiguous_bundle_dispatch_drops_inherited_task_identity() {
+    let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+    let runtime = runtime_at(root.path());
+    let first = add_task(&runtime, "First inherited bundled task");
+    let second = add_task(&runtime, "Second bundled task");
+    let run = insert_run(
+        &runtime,
+        "task_pr_pipeline",
+        Some(json!({"task_ids": [first, second]})),
+    );
+    let selected = dispatched_agent_implement_env(
+        &runtime,
+        root.path(),
+        &run,
+        Some(&second),
+        json!({
+            "task_ids": [first, second],
+            "task_id": second,
+            "workspace_path": root.path().join("repo")
+        }),
+        &[],
+    );
+    let notice = call_with_env(
+        &runtime,
+        &selected,
+        "orbit.notice.post",
+        json!({"kind": "info", "title": "Selected bundled activity", "linked_task": second}),
+        ToolEntryPoint::Cli,
+        local_cli_session(&runtime),
+    )
+    .unwrap();
+    let id = notice["notice"]["id"].as_str().unwrap();
+
+    // The launching process holds a member task's identity. The ambiguous
+    // bundle has no singular task, so the provider must receive neither name.
+    let ambiguous = dispatched_agent_implement_env(
+        &runtime,
+        root.path(),
+        &run,
+        None,
+        json!({"task_ids": [first, second], "workspace_path": root.path().join("repo")}),
+        &[
+            ("ORBIT_TASK_ID", first.as_str()),
+            ("ORBIT_ACTIVE_TASK_ID", first.as_str()),
+        ],
+    );
+    assert!(ambiguous.var("ORBIT_TASK_ID").is_none());
+    assert!(ambiguous.var("ORBIT_ACTIVE_TASK_ID").is_none());
+    refused(
+        call_with_env(
+            &runtime,
+            &ambiguous,
+            "orbit.notice.post",
+            json!({"kind": "info", "title": "Inherited identity", "linked_task": first}),
+            ToolEntryPoint::Cli,
+            local_cli_session(&runtime),
+        ),
+        "notice_poster_unidentified",
+    );
+    refused(
+        call_with_env(
+            &runtime,
+            &ambiguous,
+            "orbit.notice.close",
+            json!({"id": id, "reason": "cleared"}),
+            ToolEntryPoint::Cli,
+            local_cli_session(&runtime),
+        ),
+        "notice_poster_unidentified",
+    );
 }
