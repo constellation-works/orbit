@@ -76,6 +76,17 @@ pub(super) fn apply_plugin_build_record(conn: &Connection) -> Result<(), OrbitEr
     add_column_if_missing(conn, "plugins", "build_json", "TEXT")
 }
 
+/// v97 `plugin_page_digests` migration: the digest of each plugin page's
+/// bundle at install time, as a JSON object keyed by page id
+/// (`docs/design/plugin-pages/2_design.md` §1). Additive: an older binary
+/// ignores the column, and every plugin installed without pages reads NULL.
+pub(super) fn apply_plugin_page_digests(conn: &Connection) -> Result<(), OrbitError> {
+    if !table_exists(conn, "plugins")? {
+        return Ok(());
+    }
+    add_column_if_missing(conn, "plugins", "page_digests_json", "TEXT")
+}
+
 // Frozen private copy for v24. Do not share with another migration.
 fn ensure_audit_events_schema_v24(conn: &Connection) -> Result<(), OrbitError> {
     conn.execute_batch(

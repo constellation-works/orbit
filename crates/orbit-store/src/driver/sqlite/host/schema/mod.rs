@@ -901,12 +901,22 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         compat: MigrationCompatibility::Additive,
         apply: codebase_task_facts::apply_codebase_task_facts,
     },
+    // Plugin pages: the bundle digest of each `spec.web.pages[]` entry,
+    // recorded at install beside the manifest digest. A new nullable column,
+    // which an older binary ignores; such a binary cannot install a manifest
+    // with pages, so it never leaves a stale digest beside one.
+    Migration {
+        version: 97,
+        name: "plugin_page_digests",
+        compat: MigrationCompatibility::Additive,
+        apply: plugins::apply_plugin_page_digests,
+    },
 ];
 
 /// Highest schema version this binary knows how to produce. Public for
 /// the future `orbit migrate` surface (P3.4), alongside
 /// [`AppliedMigration`] and the `Store` version accessors.
-pub const SUPPORTED_SCHEMA_VERSION: u32 = 96;
+pub const SUPPORTED_SCHEMA_VERSION: u32 = 97;
 
 /// Registry metadata for one schema migration not yet recorded as applied,
 /// as surfaced by `orbit migrate --dry-run` (ORB-10012).

@@ -26,12 +26,22 @@ pub struct PluginValidationReport {
     pub root: String,
     pub manifest_digest: String,
     pub tools: Vec<String>,
+    /// Each `spec.web.pages[]` entry with the digest install would record.
+    pub pages: Vec<PluginValidatedPage>,
     /// Effective call-time profile, when validation was asked to render it.
     pub rendered: Option<PluginRenderedProfile>,
     /// Non-fatal observations: a `requires` this host does not satisfy, a
     /// first-party claim this source cannot support, sections parsed but not
     /// yet consumed.
     pub warnings: Vec<String>,
+}
+
+/// One page `orbit plugin validate` accepted.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginValidatedPage {
+    pub id: String,
+    /// SHA-256 over `index.html` and the listed files, hex encoded.
+    pub digest: String,
 }
 
 /// Validate a plugin source directory without installing it. `dir` is a
@@ -129,6 +139,13 @@ pub fn validate_plugin_dir_for_workspace(
             web.links.len()
         ));
     }
+    if !plugin.pages.is_empty() {
+        warnings.push(format!(
+            "this plugin declares {} page(s); install records each page's digest, and a page \
+             whose files change after install is not served until it is reinstalled",
+            plugin.pages.len()
+        ));
+    }
     let tests: usize = plugin
         .tests
         .iter()
@@ -195,6 +212,16 @@ pub fn validate_plugin_dir_for_workspace(
                     &tool.verb,
                     plugin.manifest.claims_first_party_namespace(),
                 )
+            })
+            .collect(),
+        pages: plugin
+            .pages
+            .iter()
+            .filter_map(|page| {
+                Some(PluginValidatedPage {
+                    id: page.id.clone(),
+                    digest: page.digest()?.to_string(),
+                })
             })
             .collect(),
         rendered,

@@ -6,7 +6,7 @@ Where each feature in `docs/design/` stands, from the `stage` and `next` fields 
 entry doc. Stages run idea, designing, building, shipped, with parked for work on hold.
 Live task progress is in Orbit; this board records what the feature lead last set.
 
-### Building (11)
+### Building (12)
 
 | Feature | Next | Lead |
 | --- | --- | --- |
@@ -18,11 +18,12 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Experiments](./experiments/1_scope.md) | The horizon decision-channel step remains unfiled | claude |
 | [Model Ranking](./model-ranking/1_overview.md) | R4 has no open task (ORB-23305 rejected): file the freeze and 4-week shadow run | claude |
 | [Operations as Data](./operations-as-data/1_overview.md) | Restore ORB-15934 after 2026-11-12 to refuse unknown fields | claude |
+| [Plugin Pages](./plugin-pages/1_overview.md) | Serve a page as one document and run its tool calls [ORB-29536] | claude |
 | [Resident Orchestrator](./resident-orchestrator/1_overview.md) | Re-file slice 10 pilot (ORB-21251 archived) once mandate, authority grant & manager are ready | claude |
 | [Script Steps](./script-steps/1_scope.md) | File the explicit script_grant raise surface for orbit-office proposals (phase 4 part; unfiled) | claude |
 | [Standing Drain](./standing-drain/1_scope.md) | Phases 1 (intent and surfaces) and 2 (the opt-in keeper) are built; enabling the keeper is Daniel's; next is the deploy hold, ORB-25992 | claude |
 
-### Designing (10)
+### Designing (9)
 
 | Feature | Next | Lead |
 | --- | --- | --- |
@@ -32,7 +33,6 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Eval Harness](./eval-harness/1_overview.md) | Daniel accepted every recommendation in 2_design.md §14; file build-order tasks 1 to 5 once he names the Q7 spend cap and confirms the Q2 box | claude |
 | [Owner Failover](./owner-failover/1_overview.md) | Daniel reviews the proposal and answers its open questions | claude |
 | [Pilot Notes](./pilot-notes/1_overview.md) | Add the config table and the pilot's prompt section [ORB-29586] | claude |
-| [Plugin Pages](./plugin-pages/1_overview.md) | Record the engine measurements against the one-document contract [ORB-29532] | claude |
 | [Signal Acknowledgement](./signal-acknowledgement/1_scope.md) | Daniel promotes ORB-27754 from someday to start phase 1; phases 2 and 3 are unfiled | claude |
 | [Symbol Risk Index](./symbol-risk-index/1_scope.md) | Daniel reviews this scope and 2_design.md; implementation tasks are filed after acceptance | claude |
 | [Task Risk](./task-risk/1_scope.md) | Review estimands and evidence prerequisites before authorizing implementation. | codex |

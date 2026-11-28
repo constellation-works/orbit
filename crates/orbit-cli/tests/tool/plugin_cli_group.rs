@@ -29,6 +29,10 @@ mod application_callbacks;
 #[path = "application_auto_tasks.rs"]
 mod application_auto_tasks;
 
+#[cfg(unix)]
+#[path = "plugin_page_cli.rs"]
+mod plugin_page_cli;
+
 use std::path::Path;
 
 use assert_cmd::cargo::cargo_bin_cmd;

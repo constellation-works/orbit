@@ -70,6 +70,7 @@ impl ExecuteCore for PluginEnableArgs {
         };
         let summary = &result.summary;
         support::append_agent_tool_consent_text(&mut text, summary);
+        support::append_pages_consent_text(&mut text, summary);
         if self.scope == PluginScope::Host
             && summary.disabled_by == Some(orbit_types::plugin::PluginDisabledLayer::Workspace)
         {

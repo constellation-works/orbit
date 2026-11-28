@@ -8,8 +8,8 @@ type: design
 summary: "Implemented plugin manifest, lifecycle, grants, brokered agent calls, consented builds and declarative extensions."
 tags: [plugins, tools, routines, auto-tasks, dashboard, cli]
 created_date: 2026-09-20
-updated_date: 2026-11-15
-last_validated: 2026-11-15
+updated_date: 2026-11-27
+last_validated: 2026-11-27
 stage: shipped
 next: "—"
 ---
@@ -46,8 +46,11 @@ are also implemented (see their delivery sections below).
 - New Rust **deterministic activity actions** (`DeterministicAction` stays closed); plugins
   expose a tool and call it through the generic `plugin.tool_call` action (§4.5).
 - New **agent providers / executor types**; opening `ProviderRegistry` is Phase 5.
-- **Arbitrary dashboard code or built-in feature toggles**; plugins get declarative panels
-  and links only.
+- **Dashboard code with the dashboard's authority, top-level destinations or built-in
+  feature toggles.** Plugins get declarative panels and links, and
+  [pages](../plugin-pages/1_overview.md): sub-tabs under Plugins that run in a sandboxed
+  frame and reach data only through the plugin's own `read_only` tools. A plugin adds no
+  destination to the rail.
 - Marketplace/discovery. Sources are a path, a git URL or an archive.
 
 ## 1. Contribution model
@@ -62,6 +65,7 @@ are also implemented (see their delivery sections below).
 | Skills | `spec.skills[]` | linked into `skill_link_roots` as `<ns>-<directory-name>` | Claude/Codex skill discovery |
 | Config | `spec.config` | `[plugins.<ns>]` in `config.toml`, validated by the plugin's JSON Schema | `orbit config`, Config tab provenance |
 | Dashboard | `spec.web.panels[]`, `.links[]` | generic panel renderer; link tiles | `/api/plugins/<ns>/…`, one `plugins` tab group |
+| Pages | `spec.web.pages[]` | a bundle digest recorded at install; served and drawn by the [plugin pages](../plugin-pages/2_design.md) builds | `pages[]` in `orbit plugin show` and `GET /api/plugins`; sub-tabs under Plugins |
 
 The **namespace** `<ns>` is `metadata.name`. It owns tool names `<ns>.*`, the CLI group
 `orbit <ns>`, config `[plugins.<ns>]`, the provenance tag `plugin:<ns>` on seeded definitions
@@ -172,6 +176,14 @@ spec:
     links:
       - title: Graph explorer
         url: "http://127.0.0.1:{{config.explorer_port}}"
+    pages:                                           # sub-tabs under Plugins (plugin pages design)
+      - id: overview
+        title: Graph
+        root: web/overview                           # holds index.html, the markup
+        scripts: [app.js]                            # .js or .mjs, written in this order
+        styles: [app.css]                            # .css, written in this order
+        kit: 1                                       # optional bridge version
+        tools: [status]                              # this plugin's read_only tools only
 
   tests: [tests/conformance/*.yaml]                  # request/response goldens run by `orbit plugin test`
 
@@ -1239,7 +1251,9 @@ The `plugins` tab lists every installed or pinned plugin from `GET /api/plugins`
 state, diagnostics, tools, panels, links). Its plugin records and CLI JSON from
 `plugin list`, `show`, `add`, `enable`, `disable` and `upgrade` share one
 `orbit-core` projection. Both include the consented `build` record, program
-resolution/grant diagnostics, `tools[].agent_callable` and `panels[].refresh_ms`.
+resolution/grant diagnostics, `tools[].agent_callable`, `panels[].refresh_ms` and
+`pages[]` (id, title, tools, kit version, `state` and its `diagnostic`). `add` and
+`enable` also name each page and the tools it may call in the text they show.
 The HTTP profile also includes effective `enabled` and `host_orbit_version`,
 and abbreviates `source` and `install_path` under the home directory to `~`;
 CLI paths remain usable as filesystem arguments. Session `capabilities` are
@@ -1289,10 +1303,11 @@ Typed definition hashes retain their existing struct field order.
   `[plugins.<ns>]`. A link containing `{{workspace}}`, `{{plugin_state}}` or an unknown config
   key is left wholly unrendered, never half-resolved. URLs must be `http://` or `https://`:
   `validate_structure` refuses other schemes and the renderer draws no tile for one.
-- Plugins cannot add tabs or toggle built-in features. `router.js` has one `plugins` entry, so
-  new plugins need no frontend edits.
-  [Plugin pages](../plugin-pages/1_overview.md) proposes sub-tabs a plugin can ship;
-  it is a draft and nothing in it is built [ORB-29504].
+- Plugins cannot add top-level destinations or toggle built-in features. `router.js` has one
+  `plugins` entry, so new plugins need no frontend edits. A plugin may ship
+  [pages](../plugin-pages/1_overview.md), sub-tabs under Plugins. Their manifest key,
+  validation, bundle digest and listings are built [ORB-29534]; serving and drawing them
+  are not yet.
 
 ### 4.8 Compatibility
 
@@ -1405,7 +1420,8 @@ after these four phases. Neither is pending phase-5 provider work.
 
 1. **Namespace.** `orbit.<ns>.*` is reserved for Orbit-originated plugins (§1); third parties
    get bare `<ns>.*`.
-2. **Dashboard features.** No `web.features` in v1; panels and links only.
+2. **Dashboard features.** No `web.features` in v1; panels and links only. Pages under
+   Plugins were added later by the [plugin pages](../plugin-pages/1_overview.md) design.
 3. **Install model.** Global install per host with a committed `.orbit/plugins.yaml` pin; no
    vendoring (§3).
 4. **Claude Code mirror.** `plugin/` stays the first-party mirror synced from
@@ -1455,6 +1471,7 @@ after these four phases. Neither is pending phase-5 provider work.
   callback refusal.
 - [ORB-25145] — admitted exact-file writes to workspace root files, including
   a final symlink whose checked target stays inside the worktree.
-- [ORB-29504] — drafted the plugin pages design in `docs/design/plugin-pages/`.
+- [ORB-29534] — added `spec.web.pages`, its validation, the page bundle digest and the
+  page listings.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

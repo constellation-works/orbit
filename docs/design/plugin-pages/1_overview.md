@@ -5,8 +5,8 @@ created_date: 2026-11-27
 updated_date: 2026-11-27
 last_validated: 2026-11-27
 status: Accepted
-stage: designing
-next: "Record the engine measurements against the one-document contract [ORB-29532]"
+stage: building
+next: "Serve a page as one document and run its tool calls [ORB-29536]"
 feature: plugin-pages
 doc_role: overview
 type: design
@@ -24,7 +24,8 @@ in a sandboxed frame, and the page gets data only by calling tools the plugin's 
 It exists so that a plugin such as Scribe or Formation can show the operator more than a table,
 without plugin code ever running
 with the dashboard's authority. The operator approved the design on 2026-11-27
-([ORB-29504]). Nothing in it is built.
+([ORB-29504]). The manifest key, its validation, the bundle digest and the listings are
+built ([ORB-29534]); nothing serves or draws a page yet.
 
 ## 1. Motivation
 
@@ -75,8 +76,8 @@ rest of the plugin standard are unchanged, and plugins still add no top-level de
 
 ## 3. At a Glance
 
-Nothing is built, so the table maps each concern to the design section that owns it and the
-phase that delivers it.
+The table maps each concern to the design section that owns it and the phase that delivers
+it. Only the first row is built.
 
 | Concern | Design section | Phase |
 |---|---|---|

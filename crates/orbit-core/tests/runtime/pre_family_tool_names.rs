@@ -249,6 +249,7 @@ fn upgrade_from_a_pre_family_store_rewrites_every_stored_tool_name() {
                 first_party: false,
                 certified_orbit_version: None,
                 build: None,
+                page_digests: Default::default(),
                 installed_at: String::new(),
                 updated_at: String::new(),
             })
@@ -472,6 +473,7 @@ fn record_plugin(runtime: &OrbitRuntime, name: &str, install: &Path, manifest: &
                 first_party: false,
                 certified_orbit_version: None,
                 build: None,
+                page_digests: Default::default(),
                 installed_at: String::new(),
                 updated_at: String::new(),
             })

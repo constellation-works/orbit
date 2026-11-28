@@ -17,6 +17,8 @@ mod mcp_definitions;
 #[cfg(unix)]
 mod plugin_environment;
 mod plugin_loader;
+
+mod plugin_page;
 mod proc_spawn_lockdown;
 mod proc_spawn_timeout;
 mod public_tool_surface;

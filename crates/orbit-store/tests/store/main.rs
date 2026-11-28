@@ -49,6 +49,9 @@ mod ordering;
 mod path_leases;
 #[path = "publication/pending.rs"]
 mod pending;
+
+#[path = "plugin_page_digest.rs"]
+mod plugin_page_digest;
 #[path = "file_store/policy.rs"]
 mod policy;
 #[path = "task_registry/relations.rs"]

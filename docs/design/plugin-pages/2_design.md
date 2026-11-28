@@ -8,7 +8,7 @@ status: Accepted
 feature: plugin-pages
 doc_role: design
 type: design
-summary: "Approved design, not yet built: the manifest key, the sandboxed frame and its policy, the postMessage bridge to a plugin's own tools, the Plugins sub-tabs and pages on other hosts"
+summary: "Approved design; the manifest key is built, then the sandboxed frame and its policy, the postMessage bridge to a plugin's own tools, the Plugins sub-tabs and pages on other hosts"
 tags: [plugin-pages, plugins, dashboard, orbit-web]
 related_features: [plugins, user-interface, remote-access]
 related_artifacts: [ORB-29504]
@@ -19,7 +19,8 @@ related_artifacts: [ORB-29504]
 The operator approved this design on 2026-11-27 ([ORB-29504]). The page contract in sections 1
 and 2 was revised after it was measured in two browser engines ([ORB-29532]), and the operator
 approved the revision the same day ([ORB-29573]).
-Nothing in it is built, so it describes what the builds make true. The problem, the goal and the build tasks are in the
+Section 1, the manifest, is built ([ORB-29534]). The rest describes what the later builds
+make true. The problem, the goal and the build tasks are in the
 [overview](./1_overview.md). The plugin manifest,
 grants and tool dispatch it builds on are the [plugin standard](../plugins/1_scope.md)'s.
 
@@ -52,10 +53,22 @@ spec:
   missing `index.html` or listed file; markup that holds a `script` or `link` element, which
   the browser would refuse anyway with nothing shown to the author; a script that contains
   `</script` or `<!--`, or a style that contains `</style`, either of which would end its
-  element early; and a page over the size bound.
+  element early; a file listed twice; a symbolic link; a root or listed file outside the
+  plugin root; a `kit` version Orbit does not know; a duplicate page id; and a page over the
+  size bound. The bound is 2 MiB (2,097,152 bytes) counted over `index.html` and the listed
+  files as read, and the refusal states it.
+- **Only listed files count.** A file in `root` the manifest does not list is never loaded,
+  hashed or served, so it changes neither the digest nor the page's state.
 - **The bundle is covered by consent.** Install records a digest of each page's files beside
-  the manifest digest. A load whose files do not match registers the page inactive with a
-  diagnostic naming both digests, as a changed manifest does today (STD-05 §R21).
+  the manifest digest: SHA-256 over `index.html`, then each script and style in manifest
+  order, each framed by its kind, name and length. A load whose files do not match registers
+  that page inactive with a diagnostic naming both digests, as a changed manifest does today
+  (STD-05 §R21); so does a page whose files now fail a check above. The rest of the plugin
+  keeps loading, and the recovery is the forced reinstall a changed manifest needs.
+- **The operator sees pages before consenting.** `orbit plugin add` and `enable` name each
+  page and the tools it may call, and `orbit plugin show` and `GET /api/plugins` list
+  `pages[]` with id, title, tools, kit version and the active or inactive state with its
+  diagnostic.
 
 ## 2. Serving
 
@@ -250,6 +263,7 @@ whose manifest has pages lists them in the consent prompt.
 
 - [ORB-14679] — added `/api/on/<host>/…` forwarding to another host's dashboard API.
 - [ORB-29504] — this design.
+- [ORB-29534] — built the manifest key, validation, the bundle digest and the listings.
 - [ORB-29532] — measured the frame policy in Chromium and WebKit.
 - [ORB-29573] — revised the page contract to one document after that measurement.
 

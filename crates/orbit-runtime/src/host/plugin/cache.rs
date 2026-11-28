@@ -8,7 +8,7 @@ use std::time::SystemTime;
 
 use orbit_tools::plugin::{
     LoadedPlugin, PluginLoadError, load_plugin_dir_without_tests, manifest_digest,
-    resolve_plugin_definitions,
+    plugin_pages_unchanged, resolve_plugin_definitions,
 };
 use orbit_types::plugin::{InstalledPlugin, MANIFEST_FILE_NAME};
 
@@ -96,6 +96,9 @@ pub fn load_installed_plugin(
                 .is_some_and(|bytes| manifest_digest(&bytes) == cached.loaded.manifest_digest))
         && resolve_plugin_definitions(&cached.loaded.root, &cached.loaded.manifest)?
             == cached.loaded.definitions
+        // Page files are not covered by the manifest digest, so a cached load
+        // is reused only while every page still reads to the bytes it holds.
+        && plugin_pages_unchanged(&cached.loaded)
     {
         if cached.manifest_stamp != manifest_stamp {
             plugin_host_load_cache().plugins.insert(

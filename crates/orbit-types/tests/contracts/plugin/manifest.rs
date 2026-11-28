@@ -125,6 +125,7 @@ fn a_panel_over_a_mutating_tool_is_refused_by_name() {
     manifest.spec.web = Some(PluginWebSection {
         panels: vec![panel("index", "tool:hello")],
         links: vec![],
+        pages: vec![],
     });
     manifest
         .validate_structure()
@@ -133,6 +134,7 @@ fn a_panel_over_a_mutating_tool_is_refused_by_name() {
     manifest.spec.web = Some(PluginWebSection {
         panels: vec![panel("index", "tool:maintain")],
         links: vec![],
+        pages: vec![],
     });
     let error = manifest.validate_structure().unwrap_err();
     assert_eq!(error.field, "spec.web.panels[0].source");
@@ -158,6 +160,7 @@ fn a_link_url_must_be_http_or_https() {
                 title: "Explorer".into(),
                 url: url.into(),
             }],
+            pages: vec![],
         });
         let error = manifest.validate_structure().unwrap_err();
         assert_eq!(error.field, "spec.web.links[0].url", "{url}");
@@ -173,6 +176,7 @@ fn a_link_url_must_be_http_or_https() {
             title: "Explorer".into(),
             url: "HTTPS://example.test/{{config.path}}".into(),
         }],
+        pages: vec![],
     });
     manifest
         .validate_structure()
@@ -377,6 +381,7 @@ fn digit_leading_names_are_refused_with_the_initial_letter_rule() {
     manifest.spec.web = Some(PluginWebSection {
         panels: vec![panel("1index", "tool:hello")],
         links: vec![],
+        pages: vec![],
     });
     let error = manifest.validate_structure().unwrap_err();
     assert_eq!(error.field, "spec.web.panels[0].id");

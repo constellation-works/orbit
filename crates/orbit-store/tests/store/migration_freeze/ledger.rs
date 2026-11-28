@@ -814,6 +814,10 @@ fn legacy_db_adopts_versioned_ledger() {
                 "migration.v0096".to_string(),
                 "codebase_task_facts".to_string()
             ),
+            (
+                "migration.v0097".to_string(),
+                "plugin_page_digests".to_string()
+            ),
         ]
     );
 }
