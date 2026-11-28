@@ -243,12 +243,16 @@ established outside the page ([decision](./4_decisions.md#plugin-code-acts-only-
    checks, and runs the tool once through the audited dispatch with operator capability
    and the web session as its origin.
 
-Every run request, refused or run, writes a `dashboard.operations` row recorded as
-`plugin.page_action`, with the web session, the plugin as target and the page and tool
-as arguments; the tool call that runs writes its own row too. A refused action or a
-cancelled dialog reaches the page as `{ok: false, error: {code}}` (`cancelled` for a
-cancel), and a run as the tool's output, capped as a call's is. A page cannot reach a
-mutating tool through `call`, which still refuses one with `tool_refused`.
+Every run request that reaches audited dispatch, refused or run, writes a
+`dashboard.operations` row recorded as `plugin.page_action`, with the web session, the
+plugin as target and the page as an argument. The tool is an argument only when the JSON
+request names a string `tool`: a request whose `tool` is missing or not a string, or whose
+body is not a JSON object, still writes its row without one. A request whose plugin or
+page id is invalid is refused before dispatch and writes no row. The tool call that runs
+writes its own row too. A refused action or a cancelled dialog reaches the page as
+`{ok: false, error: {code}}` (`cancelled` for a cancel), and a run as the tool's output,
+capped as a call's is. A page cannot reach a mutating tool through `call`, which still
+refuses one with `tool_refused`.
 
 **The kit** is two parts Orbit writes into the document when the manifest names `kit`: a
 script that wraps the messages as `orbit.call(tool, input)` and `orbit.act(tool, input)`,

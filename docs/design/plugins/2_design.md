@@ -1267,9 +1267,12 @@ Typed definition hashes retain their existing struct field order.
   manifest added stays inactive until `orbit plugin enable` records it.
   `POST /api/plugins/<ns>/pages/<page>/actions/confirm` checks one action for an operator
   session and issues a one-time confirmation; `.../actions/run` spends it and runs the tool
-  once with operator capability; `.../actions/cancel` releases one the operator did not use. Every run request, refused or run, has a
+  once with operator capability; `.../actions/cancel` releases one the operator did not
+  use. Every run request that reaches audited dispatch, refused or run, has a
   `dashboard.operations` row (`plugin.page_action`) carrying the web session, the plugin
-  and the tool.
+  and the page. It carries the tool only when the JSON request names a string `tool`; a
+  request without one still gets its row. A request whose plugin or page id is invalid is
+  refused before dispatch and writes no row.
 - `POST /api/plugins/<ns>/enable` and `/disable` accept `{scope: "workspace"|"host"}`
   only from operator sessions; every attempt, including a denied one, is audited.
   Workspace writes change `[plugin_enablement]` in the served workspace;
