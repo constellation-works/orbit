@@ -436,7 +436,13 @@ fn expired_confirmation_cancellation_is_independent_of_pruning() {
             let first = confirmation(&server, json!({"value": 1}));
             let second = confirmation(&server, json!({"value": 2}));
             fs::write(&clock, "301").unwrap();
-            let body = |value, token: &str| json!({"tool": "mutate", "input": {"value": value}, "confirmation": token});
+            let body = |value, token: &str| {
+                json!({
+                    "tool": "mutate",
+                    "input": {"value": value},
+                    "confirmation": token
+                })
+            };
             assert_eq!(cancel(&server, body(1, &first))["released"], false);
             let live = confirmation(&server, json!({"value": 3}));
             assert_eq!(cancel(&server, body(2, &second))["released"], false);
