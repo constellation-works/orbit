@@ -1232,6 +1232,35 @@ for path in paths:
         prefixes = [*prefixes, *expanded]
         module_parts = crate_module_parts(path)
         suffixes = inline_module_suffixes(tokens)
+        # Renaming any parent of a forbidden path can hide the remaining
+        # segments. Expand each matching parent to its alias, including chains
+        # of aliases, without treating an unrelated parent use as an edge.
+        located_renames = []
+        for index, (name, _) in enumerate(tokens):
+            if name != "use":
+                continue
+            found = []
+            use_tree(tokens, index + 1, (), found)
+            here = None if module_parts is None else [*module_parts, *suffixes[index]]
+            for segments, alias in found:
+                if segments[-1] == "self" and len(segments) > 1:
+                    segments = segments[:-1]
+                located_renames.append((segments, alias))
+                absolute = resolve_super_chain(segments, here)
+                if absolute is not None:
+                    located_renames.append((absolute, alias))
+        known = set(prefixes)
+        pending = list(known)
+        while pending:
+            prefix = pending.pop()
+            for segments, alias in located_renames:
+                if alias == "_" or prefix[:len(segments)] != segments:
+                    continue
+                replacement = (alias, *prefix[len(segments):])
+                if replacement not in known:
+                    known.add(replacement)
+                    pending.append(replacement)
+        prefixes = list(known)
 
         def matches(segments, at):
             def hit(candidate):
