@@ -94,8 +94,11 @@ What that gives:
 - **Only the listed scripts run.** A script that reached the page another way has no hash in
   the policy: one written into the markup, one a tool's output smuggled in, or one a running
   script adds. `eval` is refused as well.
-- **No network.** `connect-src 'none'` stops fetches, sockets and event streams, and no
-  directive admits a file from any server.
+- **No direct network from the frame.** `connect-src 'none'` stops fetches, sockets and
+  event streams from the frame itself, and no directive admits a file from any server.
+  This restricts direct requests only: the declared tool-call bridge in
+  [The bridge](#3-the-bridge) can still pass schema-valid page input to the plugin backend
+  through the dashboard-relayed `POST .../call`.
 - **No way out of the frame.** Without the other sandbox tokens it cannot open a window,
   navigate the dashboard, submit a form or start a download.
 
@@ -232,9 +235,13 @@ whose manifest has pages lists them in the consent prompt.
   image by URL has to bundle them into its listed scripts and styles. `data:` URLs cost about
   a third more bytes than the files they carry, and the size bound counts the document as
   written.
-- **A page can still mislead.** It draws anything inside its frame, including a form that asks
-  for a secret it then shows on screen. It cannot send what is typed anywhere. The strip above
-  the frame marks whose content it is.
+- **A page can still mislead, and its plugin sees what the bridge carries.** It draws
+  anything inside its frame, including a form that asks for a secret it then shows on screen.
+  Frame isolation stops direct requests from the frame, but anything typed can still reach
+  that plugin's backend as schema-valid input to a declared read-only tool through the
+  [bridge](#3-the-bridge), which runs through audited tool dispatch. Treat anything typed
+  into a page as visible to that plugin. The strip above the frame names which plugin's
+  content it is; it does not keep operator input private from that plugin.
 - **Each call starts the backend.** An `exec` backend is a process per call, so a page that
   polls every second costs a process every second. The in-flight sharing and the bound cap the
   damage and do not make polling cheap.
