@@ -1213,34 +1213,19 @@ for path in paths:
     tokens = list(code_tokens(source))
     if sys.argv[4] == "named-path":
         prefixes = [tuple(name.split("::")) for name in upper]
-        # A `use <path>::landing as l;` rename lets `l::checks` stand for
-        # `landing::checks`: track each alias of a multi-segment prefix's first
-        # segment, including aliases of aliases, and match prefixes through it.
-        renames = []
-        for index, (name, _) in enumerate(tokens):
-            if name == "use":
-                use_tree(tokens, index + 1, (), renames)
-        expanded = []
-        for prefix in prefixes:
-            if len(prefix) < 2:
-                continue
-            heads = {prefix[0]}
-            grown = True
-            while grown:
-                grown = False
-                for segments, alias in renames:
-                    if segments[-1] == "self" and len(segments) > 1:
-                        segments = segments[:-1]
-                    if segments[-1] in heads and alias not in heads and alias != "_":
-                        heads.add(alias)
-                        grown = True
-            expanded.extend((head, *prefix[1:]) for head in heads - {prefix[0]})
-        prefixes = [*prefixes, *expanded]
         module_parts = crate_module_parts(path)
         suffixes = inline_module_suffixes(tokens)
-        # Renaming any parent of a forbidden path can hide the remaining
-        # segments. Expand each matching parent to its alias, including chains
-        # of aliases, without treating an unrelated parent use as an edge.
+        # Imports are visible in their enclosing block and its descendants,
+        # but not in sibling blocks or child modules. Record brace ancestry
+        # at each token; use-tree braces occur after the `use` token itself.
+        scopes = []
+        stack = []
+        for index, (name, _) in enumerate(tokens):
+            if name == "}" and stack:
+                stack.pop()
+            scopes.append(tuple(stack))
+            if name == "{":
+                stack.append(index)
         located_renames = []
         for index, (name, _) in enumerate(tokens):
             if name != "use":
@@ -1251,26 +1236,51 @@ for path in paths:
             for segments, alias in found:
                 if segments[-1] == "self" and len(segments) > 1:
                     segments = segments[:-1]
-                located_renames.append((segments, alias))
+                located_renames.append((segments, alias, scopes[index], suffixes[index]))
                 absolute = resolve_super_chain(segments, here)
                 if absolute is not None:
-                    located_renames.append((absolute, alias))
-        known = set(prefixes)
-        pending = list(known)
-        while pending:
-            prefix = pending.pop()
-            for segments, alias in located_renames:
-                if alias == "_" or prefix[:len(segments)] != segments:
+                    located_renames.append((absolute, alias, scopes[index], suffixes[index]))
+
+        prefix_cache = {}
+
+        def visible_prefixes(at):
+            scope, module_suffix = scopes[at], suffixes[at]
+            key = (scope, module_suffix)
+            if key in prefix_cache:
+                return prefix_cache[key]
+            renames = [(segments, alias) for segments, alias, binding_scope, binding_module
+                       in located_renames if binding_module == module_suffix
+                       and scope[:len(binding_scope)] == binding_scope]
+            known = set(prefixes)
+            # Preserve first-segment aliases for paths such as landing::checks.
+            for prefix in prefixes:
+                if len(prefix) < 2:
                     continue
-                replacement = (alias, *prefix[len(segments):])
-                if replacement not in known:
-                    known.add(replacement)
-                    pending.append(replacement)
-        prefixes = list(known)
+                heads = {prefix[0]}
+                grown = True
+                while grown:
+                    grown = False
+                    for segments, alias in renames:
+                        if segments[-1] in heads and alias not in heads and alias != "_":
+                            heads.add(alias)
+                            grown = True
+                known.update((head, *prefix[1:]) for head in heads - {prefix[0]})
+            pending = list(known)
+            while pending:
+                prefix = pending.pop()
+                for segments, alias in renames:
+                    if alias == "_" or prefix[:len(segments)] != segments:
+                        continue
+                    replacement = (alias, *prefix[len(segments):])
+                    if replacement not in known:
+                        known.add(replacement)
+                        pending.append(replacement)
+            prefix_cache[key] = known
+            return known
 
         def matches(segments, at):
             def hit(candidate):
-                return any(candidate[:len(prefix)] == prefix for prefix in prefixes)
+                return any(candidate[:len(prefix)] == prefix for prefix in visible_prefixes(at))
             if hit(segments):
                 return True
             here = None if module_parts is None else [*module_parts, *suffixes[at]]
@@ -1278,7 +1288,7 @@ for path in paths:
             return absolute is not None and hit(absolute)
 
         for index, (name, start) in enumerate(tokens):
-            starts_prefix = any(name == prefix[0] for prefix in prefixes)
+            starts_prefix = any(name == prefix[0] for prefix in visible_prefixes(index))
             # Only the first `super` of a path. A later `super` has climbed
             # less and would name a deeper module than the chain does.
             starts_super = (name == "super" and (index == 0 or tokens[index - 1][0] != "::")

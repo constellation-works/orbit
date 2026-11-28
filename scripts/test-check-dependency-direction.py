@@ -757,6 +757,43 @@ class RelativeImportTests(unittest.TestCase):
                 self.check_files({"application/backlog_forecast/probe.rs": source},
                                  rejected=False, base=core)
 
+    def test_parent_import_visibility_respects_lexical_scopes(self):
+        core = self.root / "crates/orbit-core/src"
+        prelude = ("#![allow(dead_code, unused_imports)]\n"
+                   "mod app { pub mod port { pub fn through_port() {} } "
+                   "pub mod codebase { pub fn forbidden() {} } }\n")
+        cases = (
+            "mod allowed { fn f() { use crate::app; app::port::through_port(); } }\n"
+            "mod other { mod app { pub mod codebase { pub fn local_only() {} } } "
+            "fn f() { app::codebase::local_only(); } }\n",
+            "fn f() { { use crate::app; app::port::through_port(); } "
+            "{ mod app { pub mod codebase { pub fn local_only() {} } } "
+            "app::codebase::local_only(); } }\n",
+            "mod allowed { use crate::app as apps; fn f() { apps::port::through_port(); } }\n"
+            "mod other { mod apps { pub mod codebase { pub fn local_only() {} } } "
+            "fn f() { apps::codebase::local_only(); } }\n",
+        )
+        for source in cases:
+            with self.subTest(source=source):
+                fixture = self.root / "fixture.rs"
+                fixture.write_text(prelude + source)
+                compiled = subprocess.run(
+                    ["rustc", "--edition", "2024", "--crate-type", "lib",
+                     "--out-dir", str(self.root), str(fixture)],
+                    capture_output=True, text=True, check=False)
+                self.assertEqual(compiled.returncode, 0, compiled.stderr)
+                self.check_files({"application/review/probe.rs": source},
+                                 rejected=False, base=core)
+        self.check_rows([
+            ("application/review/same.rs",
+             "fn f() { use crate::app; app::codebase::forbidden(); }\n"),
+            ("application/review/nested.rs",
+             "use crate::app; fn f() { { app::codebase::forbidden(); } }\n"),
+            ("application/review/chained.rs",
+             "use crate::app as apps; fn f() { use apps as renamed; "
+             "renamed::codebase::forbidden(); }\n"),
+        ], rejected=True, base=core)
+
     def test_review_cannot_name_codebase(self):
         # Selective-review retirement removed this edge, but the guard still
         # accepted its reintroduction. Exercise each detector independently.
