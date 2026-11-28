@@ -32,6 +32,7 @@ Stances Orbit holds across features, with the reason and the cost, one page each
 | --- | --- |
 | [Orbit Data Handling](./principles/data-handling.md) | Orbit Data Handling — what stays on your machine, what leaves it, and to whom |
 | [Declared Footprints](./principles/declared-footprints.md) | Declared footprints: a task declares the files it will touch, and Orbit runs tasks in parallel only when those footprints do not overlap |
+| [Operator Admission](./principles/operator-admission.md) | Operator admission: agents propose work and the operator controls its admission and authority |
 | [Optimistic Merging](./principles/optimistic-merging.md) | Optimistic Merging: Orbit's preferred delivery mode. Merge fast, review after landing, keep the queue draining |
 | [Orbit Positioning](./principles/positioning.md) | Orbit Positioning |
 
