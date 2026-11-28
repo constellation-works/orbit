@@ -978,7 +978,7 @@ A script that rewrites itself during a run changes nothing for that run (§2,
   This design makes the script route stronger and leaves `local_shell` as it is (open
   question 8).
 - **The doc's size.** If phase 2 grows specs (the profile's mount table, the grant
-  witness format), the feature graduates to the full track (CONVENTIONS.md §1).
+  witness format), they move under `specs/` (CONVENTIONS.md §1).
 
 ## Phasing
 

@@ -12,7 +12,7 @@ A set of shared engineering standards is vendored read-only under `docs/standard
 
 ## Designs
 
-Each feature has one folder under `docs/design/`, with two tracks of documents, a delivery stage that is separate from the document's approval status, and a generated board of where each feature stands. [The design conventions](../design/CONVENTIONS.md) set the folder shape and the admission test for a decision entry, and [the feature board](../design/FEATURES.md) shows the current stage of each feature.
+Each feature has one folder under `docs/design/` scaffolded with an overview, a design and a decisions document, a delivery stage that is separate from the document's approval status, and a generated board of where each feature stands. [The design conventions](../design/CONVENTIONS.md) set the folder shape and the admission test for a decision entry, and [the feature board](../design/FEATURES.md) shows the current stage of each feature.
 
 ## Agent rules and records
 

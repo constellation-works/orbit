@@ -123,7 +123,19 @@ is_versioned() {
   git -C "$repo_root" ls-files --cached --others --exclude-standard --error-unmatch -- "$relative" >/dev/null 2>&1
 }
 
+# An active feature's entry doc is its 1_overview.md (STD-06 §R2); there is no fallback.
 design_entry_doc() {
+  local directory="$1"
+
+  if [[ ! -f "$directory/1_overview.md" ]]; then
+    echo "error: $directory has no 1_overview.md entry document" >&2
+    return 1
+  fi
+  printf '%s\n' "$directory/1_overview.md"
+}
+
+# Archived folders keep whatever entry doc they were archived with, including a 1_scope.md.
+archived_entry_doc() {
   local directory="$1"
   local candidate
 
@@ -134,7 +146,7 @@ design_entry_doc() {
     fi
   done
 
-  candidate="$(find "$directory" -maxdepth 1 -type f -name '*.md' ! -name 'CONVENTIONS.md' | sort | sed -n '1p')"
+  candidate="$(find "$directory" -maxdepth 1 -type f -name '*.md' | sort | sed -n '1p')"
   if [[ -z "$candidate" ]]; then
     echo "error: no top-level Markdown entry document in $directory" >&2
     return 1
@@ -286,7 +298,7 @@ design_feature_title() {
   local entry="$2"
   local title
 
-  # A scope doc's H1 is a sentence ("Scope: …"); the Feature column wants the folder's name.
+  # An archived scope doc's H1 is a sentence ("Scope: …"); the Feature column wants the folder's name.
   if [[ "$(basename "$entry")" == "1_scope.md" ]]; then
     title="$(titleize_slug "$(basename "$directory")")"
   else
@@ -321,7 +333,7 @@ render_feature_board() {
   local -a entries=()
 
   while IFS= read -r directory; do
-    entry="$(design_entry_doc "$directory")"
+    entry="$(design_entry_doc "$directory")" || return 1
     if ! is_versioned "$entry"; then
       continue
     fi
@@ -463,7 +475,7 @@ render_features() {
       printf '\n### Archived\n\n'
       printf '| Feature |\n| --- |\n'
       while IFS= read -r directory; do
-        entry="$(design_entry_doc "$directory")"
+        entry="$(archived_entry_doc "$directory")" || return 1
         if ! is_versioned "$entry"; then
           continue
         fi

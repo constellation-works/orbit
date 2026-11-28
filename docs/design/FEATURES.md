@@ -51,7 +51,7 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Crew Credentials](./crew-credentials/1_overview.md) | — | claude |
 | [Distributed Drain](./distributed-drain/1_overview.md) | — | claude |
 | [Distributions](./distributions/1_overview.md) | — | claude |
-| [Executors](./executors/4_decisions.md) | — | claude |
+| [Executors](./executors/1_overview.md) | — | claude |
 | [Federated MCP](./federated-mcp/1_overview.md) | — | grok |
 | [Fleet Notices](./fleet-notices/1_overview.md) | — | claude |
 | [Granted Tools](./granted-tools/1_overview.md) | — | claude |
@@ -78,7 +78,7 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Terminal Interface](./terminal-interface/1_overview.md) | — | claude |
 | [Usage Pressure](./usage-pressure/1_overview.md) | — | claude |
 | [User Interface](./user-interface/1_overview.md) | Build compact viewports phase 1, the small shell [ORB-29233] | gemini |
-| [Workspace Agent Corpus](./workspace-agent-corpus/1_scope.md) | — | Orbit |
+| [Workspace Agent Corpus](./workspace-agent-corpus/1_overview.md) | — | Orbit |
 
 ### Parked (4)
 
@@ -87,7 +87,7 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Conflict Budget](./conflict-budget/1_overview.md) | Parked for free time (Daniel, 2026-11-02); on pickup settle open questions, file phase 1 | claude |
 | [Crew Memory](./crew-memory/1_overview.md) | Parked after exp-5342a4d6's no-difference readout (2026-11-21); on pickup, run a variant experiment on the dormant machinery, such as the consolidation redesign in specs/consolidation.md | claude |
 | [Path Leases](./path-leases/1_overview.md) | Restore the config keys, CLI and MCP tools withdrawn in ORB-22808 before any host enables leases | claude |
-| [Project Learnings](./project-learnings/4_decisions.md) | Retired by decision (ORB-10736); candidate to move under _archived | claude |
+| [Project Learnings](./project-learnings/1_overview.md) | Retired by decision (ORB-10736); candidate to move under _archived | claude |
 
 ### Archived
 

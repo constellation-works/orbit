@@ -149,7 +149,7 @@ page holds no procedure.
 |---|---|---|
 | Tasks and delivery | Every change starts as a task, the task id is in the commit, and delivery follows the principles. | `docs/principles/`, the task concept page |
 | Standards | A set of shared engineering standards is vendored read-only under `docs/standards/` and is normative. A deviation is a decision that cites the rule and its version. Copies are updated by a sync, never by hand. | [the standards index](../../standards/README.md), the managed block in `AGENTS.md` |
-| Designs | One folder per feature, two tracks, a delivery stage separate from the document's status, and a generated board. | [the design conventions](../CONVENTIONS.md), [the feature board](../FEATURES.md) |
+| Designs | One folder per feature scaffolded with an overview, a design and a decisions doc, a delivery stage separate from the document's status, and a generated board. | [the design conventions](../CONVENTIONS.md), [the feature board](../FEATURES.md) |
 | Agent rules and records | Rule files and the decision corpus are guidance. Records are dated evidence and describe no current behaviour. | `docs/agents/` |
 | Companion tools | Orbit is developed with two companion tools, each in its own public repository: one staffs and coordinates agent sessions, the other records preferences and session history so a session can resume. A private workspace repository holds knowledge that spans repositories and the coordinating sessions' own task records. | The two public repositories |
 

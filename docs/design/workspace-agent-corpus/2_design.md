@@ -1,38 +1,21 @@
 ---
-title: Workspace agent corpus
+title: Workspace Agent Corpus — Design
 type: design
 owner: Orbit
 created_date: 2026-10-31
-updated_date: 2026-11-22
+updated_date: 2026-11-28
 status: Draft
-stage: shipped
-next: "—"
 feature: workspace-agent-corpus
-doc_role: scope
-summary: "Pinned activity-scoped corpus guidance and deterministic append proposals"
+doc_role: design
+summary: "Corpus layout and schema, pinned exact-activity injection, the task-history append outbox and reviewed batches, curated decision rules and the Library boundary"
+tags: [workspace-agent-corpus]
 ---
 
-# Workspace agent corpus
+# Workspace Agent Corpus — Design
 
-Status: shipped. Corpus injection, append proposals and decision-rule consolidation are
-implemented. The precedent auto-answer repairs [ORB-20822] and [ORB-20823] are done;
-the document remains Draft pending recorded design approval.
+This doc holds the mechanisms behind [1_overview.md](./1_overview.md), which states the problem, the goal and the phasing.
 
-Bearing: activity dispatch already pins repository guidance to a run's base revision;
-task history supplies the durable append outbox. This scope joins those existing seams.
-
-## Problem
-
-Agent activities otherwise start without the workspace's reviewed issue mechanisms,
-decision precedent and standing guidelines. Raw task history alone cannot serve as
-trusted guidance or authorize a new decision.
-
-## Goal
-
-Deliver reviewed, activity-specific corpus guidance at a pinned revision and preserve
-structured observations for later reviewed publication, with human curation of rules.
-
-## Shape
+## 1. Corpus layout
 
 A workspace keeps reviewed operational knowledge in `docs/agents/corpus/`:
 `INDEX.md`, `issues/<mechanism>.md`, `decisions/<topic>.md` and
@@ -43,7 +26,7 @@ revival of the retired native project-learnings inference subsystem.
 [ORB-20637] implements this corpus: the documents, pinned injection and the
 append outbox.
 
-### Schema and generation
+## 2. Schema and generation
 
 Every document has YAML frontmatter with `type` (`issue`, `decision`,
 `guideline`), `applies_to` (nonempty list of exact activity names), `status`
@@ -67,7 +50,7 @@ runs it, and `scripts/generate-doc-indexes.sh --check` (also in `make ci-guards`
 fails on stale rows. Never edit the index by hand. Other workspace repositories
 can use `--repo-root` and `--corpus` with the same generator.
 
-### Pinned injection
+## 3. Pinned injection
 
 `workflow.agent_corpus` maps exact activity names to a repository-relative
 `INDEX.md` path. A workspace has one corpus, shared by all mapped activities.
@@ -94,7 +77,7 @@ truncation note replaces omitted rows. No UTF-8 character is cut. The audit even
 delivered document paths, SHA-256, byte count and truncation. The run audit trail
 is the receipt; it does not assert the agent actually opened every document.
 
-### Deterministic writes and reviewed batches
+## 4. Deterministic writes and reviewed batches
 
 The write path is a **task-history sidecar outbox, then one reviewed batch PR**.
 There are no automatic commits, merges or new merge gates on `agent-main`.
@@ -155,7 +138,7 @@ step conditional on those prerequisites: when either is missing, the pass record
 which prerequisite is absent, still attaches its report and cursor, completes its
 other rules and leaves the worktree clean; it does not create a corpus.
 
-### Curated decision rules
+## 5. Curated decision rules
 
 Raw decision history, including Entries, is not a rule and is not authority.
 A rule lives in an optional `## Rules` section of `decisions/<topic>.md`, one
@@ -225,7 +208,7 @@ ambiguous, or non-option match leaves the request open. Reversal is
 `orbit decision reverse`, operator-only. It re-opens the request and restores
 the task status from before the precedent answer.
 
-### Authority and Library boundary
+## 6. Authority and Library boundary
 
 This corpus holds Orbit issue mechanisms, Orbit decision-request history and
 standing workspace judgement rules. Daniel's product direction and general
@@ -240,49 +223,23 @@ it was removed with decision assistance in [ORB-22808].
 Task tags, comments and result messages cannot write trusted corpus
 text or select an arbitrary revision for injection.
 
-## Non-goals
+## 7. Open questions
 
-- Reintroducing the retired project-learnings inference store.
-- Treating raw decision history or agent narrative as trusted rules or automatic appends.
-- Reading or writing the orbit-office Library.
+No implementation slice remains pending in this committed scope. Additional structured
+append producers require separately scoped work.
 
-## Concerns and honest limitations
+## 8. Concerns and honest limitations
 
 - An append is durable in task history before publication, but is not injected until
   its reviewed corpus change lands. Materialization needs an existing reviewed topic.
 - Injection records what guidance was delivered, not whether an agent read or followed it.
 - Missing, stale, ambiguous or inapplicable precedent leaves a new request open for a human.
 
-## Phasing
-
-1. **Corpus, pinned injection and append outbox:** done in [ORB-20637].
-2. **Historical corpus backfill:** done in [ORB-20650].
-3. **Curated decision rules and opt-in auto-answer:** done in [ORB-20747]. The
-   merged-source and exact-topic repairs are done in [ORB-20822] and [ORB-20823];
-   replay/routing and chronology repairs are done in [ORB-21053] and [ORB-21064].
-4. **Portable corpus proposals:** done in [ORB-22229], retaining every-group proposals
-   where the workspace supplies the mapped corpus and script.
-
-## Open questions
-
-No implementation slice remains pending in this committed scope. Additional structured
-append producers require separately scoped work.
-
-## Acceptance (feature level)
-
-- Dispatch uses pinned, exact-activity corpus rows and respects size bounds and refusals.
-- Only trusted structured producers create idempotent task-history append proposals;
-  reviewed publication precedes injection.
-- Only current, matching, operator-auto precedent can answer a new request; raw history
-  and unmerged corpus edits cannot supply that authority.
-- Consolidation produces proposal text without refreshing authority from replayed history
-  or replacing a newer curated choice with an older answer.
-
 ## Task References
 
 - [ORB-20637] — implements the activity-scoped corpus, pinned injection and the deterministic append outbox.
-- [ORB-20747] — adds weekly decision-rule consolidation, staleness checks and opt-in auto-answer.
 - [ORB-20650] — backfills the corpus from the past month of blocked and escalated tasks.
+- [ORB-20747] — adds weekly decision-rule consolidation, staleness checks and opt-in auto-answer.
 - [ORB-20822] — pins precedent auto-answer rules and path digests to the workspace integration revision.
 - [ORB-20823] — removes the topic-file-stem match from precedent auto-answer; a bare rule id must appear in exactly one decision file.
 - [ORB-21053] — prevents replay from refreshing rule authority and routes unique bare ids to existing rules.

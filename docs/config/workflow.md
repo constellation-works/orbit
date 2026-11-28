@@ -422,7 +422,7 @@ Human decision answers and typed engine recovery matches create deterministic
 append proposals in task history. Batch materialization creates ordinary
 reviewed corpus changes; it never commits or merges automatically. Generate
 and check the index with `scripts/agent-corpus.py` and `--check`, respectively.
-See [workspace agent corpus](../design/workspace-agent-corpus/1_scope.md) for document
+See [workspace agent corpus](../design/workspace-agent-corpus/2_design.md) for document
 schema, append materialization and the orbit-office Library boundary.
 
 ### Path leases
