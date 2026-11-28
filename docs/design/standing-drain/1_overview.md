@@ -17,7 +17,7 @@ related_features: [distributed-drain, routines, resident-orchestrator]
 
 # Standing Drain — Overview
 
-The standing drain is an opt-in keeper that submits a new owner drain whenever one has ended while admissible or pilotable work still exists and nobody has paused it. It adds no admission logic: a keeper-started drain behaves exactly like `orbit run auto` with the same flags.
+The standing drain is an opt-in keeper that submits a new owner drain when the newest one has ended, a `backlog` or `proposed` task is waiting and nobody has paused it. It adds no admission logic: a keeper-started drain behaves exactly like `orbit run auto` with the same flags. The deploy hold that would carry it across an update is planned for phase 3 ([ORB-25992]) and is not built. Until then, an update's `orbit run auto --stop` records a pause, so the shipped keeper stays idle after the update until someone starts a drain.
 
 ## 1. Motivation
 
@@ -102,11 +102,12 @@ that **nothing re-submits a drain after it ends, and nothing records whether a s
 
 ### Intended outcome
 
-When Daniel opts in, ws_orbit on the owner keeps a drain open whenever admissible or pilotable
-work exists and nobody has paused it. That includes after a window ends, a crash and an RB-15 deploy.
-A deliberate pause still works, and it stays in force until someone lifts it. Unchanged: who admits
-work and how (the admission ladder), the 24 h window cap, follower drains, and every default
-(the feature is off).
+When Daniel opts in, ws_orbit on the owner keeps a drain open whenever a `backlog` or `proposed`
+task is waiting and nobody has paused it. That is meant to include a window end, a crash and an RB-15
+deploy. Phases 1 and 2 (built) cover a window end and a crash. The deploy case needs the deploy hold
+in phase 3. A deliberate pause still works, and it stays in force until someone lifts it.
+Unchanged: who admits work and how (the admission ladder), the 24 h window cap, follower drains, and
+every default (the feature is off).
 
 ### Out of scope
 
@@ -121,8 +122,8 @@ work and how (the admission ladder), the 24 h window cap, follower drains, and e
 ### Acceptance (feature level)
 
 - With the keeper enabled and the intent `on`, after a drain's window ends or it crashes, and
-  admissible or pilotable work exists, a new drain is submitted within one clock tick plus
-  `min_resubmit_interval`, with the configured flags.
+  a `backlog` or `proposed` task is waiting, a new drain is submitted within one clock tick plus
+  `min_resubmit_interval`, with the configured flags, unless a skip condition in §2 applies.
 - After an RB-15 deploy, admission resumes on the new build without anyone starting a drain
   (phase 3).
 - A dashboard or CLI stop pauses. The pause survives deploys and window ends until a person starts a
@@ -139,10 +140,10 @@ The mechanisms are in [2_design.md](./2_design.md); decisions that qualify are k
 
 ## 2. Core Concepts
 
-- **Owner drain.** The `workspace_auto_pipeline` run an operator starts with `orbit run auto --for <window>`, at most 24 h; the keeper restarts one after it ends.
-- **Keeper.** The check on the existing clock tick that submits a drain through the same path as `orbit run auto` when work exists, the intent is `on` and no deploy hold or open crash breaker applies. It is off by default.
+- **Owner drain.** The `workspace_auto_pipeline` run an operator starts with `orbit run auto --for <window>`, at most 24 h; the keeper restarts one after it ends, when the Keeper conditions below hold.
+- **Keeper.** Shipped in phase 2 ([ORB-25991]) and off by default. On the owner's clock tick, after upgrade resume, it submits one drain through the same path as `orbit run auto` when all of these hold: `workflow.standing_drain.enabled` is set; the drain intent is `on`; no drain is pending, running or held; the newest drain ended at least `min_resubmit_interval` ago (default 10 min); a `backlog` or `proposed` task is waiting; and the crash breaker is closed. The keeper checks only these conditions, not each task's admission eligibility, which the drain's admission ladder still applies. A skip reason is audited as `drain.keeper.skip` when it changes: `intent_off` (no hand start has recorded an intent yet), `intent_paused`, `drain_live`, `drain_held` (the newest drain is in the held state), `min_resubmit_interval`, `no_work` or `breaker_open`. The breaker opens once `max_failed_resubmits` (default 3) keeper drains fail or are interrupted within an hour of each other, and stays open until a hand start.
 - **Drain intent.** The durable per-workspace state `off`, `on` or `paused { by, at, reason }`; a stop pauses it and a hand start sets it back to `on`, so a window ending or a crash never pauses.
-- **Deploy hold.** The hold a deploy sets before its admission stop and the updater clears when the install finishes, so the next tick starts a drain on the new binary; a hold past the deploy budget expires and raises an attention item.
+- **Deploy hold (planned, phase 3, [ORB-25992]; not built).** Designed as the hold a deploy sets before its admission stop and the updater clears when the install finishes, so the next tick starts a drain on the new binary; a hold past the deploy budget would expire and raise an attention item. The shipped keeper reads no hold. The stop an update runs (`orbit run auto --stop`) records a pause, as any stop does, so until phase 3 the keeper stays idle after an update until a person starts a drain.
 - **Admission ladder.** The unchanged pilot, approval, concurrency, budget and crew-health checks; the keeper never admits a task outside it.
 
 ## 3. At a Glance
