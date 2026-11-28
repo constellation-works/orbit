@@ -22,10 +22,13 @@ spec:
   # applies read and modify rules. Linux Bubblewrap enforces modify rules but
   # not profile read rules, including `denyRead`; only fixed credential and
   # runtime-directory masks and explicit caller masks restrict host reads.
-  # Do not rely on Linux `denyRead` to protect other secrets. If the backend
-  # is unavailable, `allow_fallback: true` permits bare execution without its
-  # policy or masks; otherwise the step fails. Other setup or spawn errors do
-  # not trigger fallback. Each step reports the backend it actually ran under.
+  # Do not rely on Linux `denyRead` to protect other secrets. A backend that
+  # does not match the host OS fails closed, even with `allow_fallback: true`.
+  # When the matching backend's native primitive is unavailable (bwrap absent
+  # or failing its probe, or sandbox-exec missing), the step fails unless
+  # `allow_fallback: true` permits bare execution without its policy or masks.
+  # Other setup or spawn errors do not trigger fallback. Each step reports the
+  # backend it actually ran under.
   executor_type: local_shell
   args: []
   env: {}

@@ -160,7 +160,11 @@ Orbit process inherited.
    runtime-directory masks and any explicit caller-provided masks. Do not rely
    on `denyRead` to protect other secrets on Linux.
 
-   If the declared OS backend is unavailable, the step fails unless the
+   A declared backend that does not match the host OS fails closed, even when
+   the definition sets `allow_fallback: true`: the step fails before anything
+   runs. When the backend matches the host OS but its native primitive is
+   unavailable (`bwrap` absent or failing its probe on Linux, or
+   `/usr/bin/sandbox-exec` missing on macOS), the step fails unless the
    definition sets `allow_fallback: true`. That permits bare execution without
    the backend's filesystem policy or masks; inherited restrictions still apply.
    Other sandbox setup or spawn errors do not trigger this fallback.
@@ -169,8 +173,8 @@ To wrap shell steps in the host's OS backend, add it to the definition. Use
 `linux-bwrap` on Linux or `macos-sandbox-exec` on macOS. No activity edit is
 needed to enable it: an activity without an `fsProfile` runs under
 `unrestricted`, subject to the platform limits above. Installed settings are not
-translated between platforms; an unavailable backend can run bare only when
-fallback is enabled:
+translated between platforms, so a backend for the other OS fails closed even
+with `allow_fallback: true`. Declare the host's own backend, or `sandbox: off`:
 
 ```yaml
 # kind: Executor, metadata.name: local-shell
