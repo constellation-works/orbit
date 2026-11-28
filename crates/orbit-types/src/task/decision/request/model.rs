@@ -12,6 +12,13 @@ use super::options::{DecisionAction, DecisionAnswer, DecisionRiskTier};
 
 /// History event that raises a [`DecisionRequest`].
 pub const DECISION_REQUESTED_EVENT: &str = "decision_requested";
+
+/// History event with the id of a plugin request the raiser withdrew.
+pub const DECISION_WITHDRAWN_EVENT: &str = "decision_withdrawn";
+
+/// History event with the id of an approval retired by a plugin decision.
+pub const DECISION_SUPERSEDED_EVENT: &str = "decision_superseded";
+
 /// History event that records an applied answer to a [`DecisionRequest`].
 pub const DECISION_ANSWERED_EVENT: &str = "decision_answered";
 /// History event that re-opens a precedent answer. A later human answer
@@ -226,6 +233,26 @@ impl DecisionResolution {
     }
 }
 
+/// Immutable apply metadata recorded when a plugin raises a decision.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PluginApply {
+    /// Owning plugin namespace.
+    pub plugin: String,
+    /// Stable object identifier within the plugin.
+    pub subject: String,
+    /// Canonical name of the plugin's apply tool.
+    pub tool: String,
+    /// Installed manifest digest at raise.
+    pub manifest_digest: String,
+    /// Pinned input for the apply tool.
+    pub input: serde_json::Value,
+    /// Opaque revision supplied by the plugin.
+    pub revision: String,
+    /// Writer label of the caller that spawned the plugin backend.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requested_by: Option<String>,
+}
+
 /// A request for a human decision on held work, stored as a
 /// `decision_requested` task-history entry whose note carries this record
 /// as JSON (the design names the entry's `operation_id` as the request
@@ -292,6 +319,9 @@ pub struct DecisionRequest {
     /// [`DecisionGate::ScriptGrant`] request asks consent for.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub script_grant: Option<ScriptGrantRequest>,
+    /// Apply tool and pinned input for a plugin request.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugin_apply: Option<Box<PluginApply>>,
 }
 
 impl DecisionRequest {
@@ -338,16 +368,20 @@ impl DecisionRequest {
                     _ => DecisionRiskTier::Unknown,
                 },
                 // Either answer is the human's call on authority.
-                DecisionGate::ResidentAuthority | DecisionGate::ScriptGrant => {
-                    DecisionRiskTier::Authority
-                }
+                DecisionGate::ResidentAuthority
+                | DecisionGate::ScriptGrant
+                | DecisionGate::PluginRequest => DecisionRiskTier::Authority,
             };
         }
-        let risk_tier = answers
-            .iter()
-            .map(|answer| answer.risk_tier)
-            .max()
-            .unwrap_or_default();
+        let risk_tier = if gate == DecisionGate::PluginRequest {
+            DecisionRiskTier::Authority
+        } else {
+            answers
+                .iter()
+                .map(|answer| answer.risk_tier)
+                .max()
+                .unwrap_or_default()
+        };
         Self {
             id,
             task_id,
@@ -368,7 +402,14 @@ impl DecisionRequest {
             resolution: None,
             resident_grant: None,
             script_grant: None,
+            plugin_apply: None,
         }
+    }
+
+    /// Attach the pinned metadata for a plugin request.
+    pub fn with_plugin_apply(mut self, apply: PluginApply) -> Self {
+        self.plugin_apply = Some(Box::new(apply));
+        self
     }
 
     /// Attach the script, digest, capabilities and diff a script grant

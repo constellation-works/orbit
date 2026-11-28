@@ -4,6 +4,7 @@ Contents:
 
 - [Decision requests](#decision-requests)
 - [Raising a decision](#raising-a-decision)
+- [Plugin-raised requests](#plugin-raised-requests)
 
 ## Decision requests
 
@@ -55,7 +56,8 @@ or revoked channel is refused with `channel_not_registered` or `channel_revoked`
 The result carries `requests` (the digest), `raised` (what this call raised)
 and `expiring` (every still-open request expiring within 24 hours). Repeated calls
 reuse requests for unchanged task bindings, while newly eligible tasks can add
-requests. With the decision channel disabled in this workspace, the call raises
+requests. A task with an open plugin request is skipped for approval requests.
+With the decision channel disabled in this workspace, the call raises
 nothing, writes nothing and returns no requests.
 
 `orbit.decision` action `list` (`orbit.decision.list`) lists open human decision
@@ -129,3 +131,40 @@ A weekly consolidation proposes rule edits as a pull request and never edits
 a rule outside that pull request; a human merge is what makes a rule current.
 An answer that changes lasting behaviour or policy is carried by the task it
 unblocks into the doc, config or code that owns it, in that task's PR.
+
+## Plugin-raised requests
+
+An installed and enabled plugin can call `orbit.decision.plugin_raise` from an
+authenticated callback session with `permissions.orbit_tools` consent for that
+tool. Granting the callback does not expose it over MCP. The apply tool must
+belong to the plugin and declare `execution_kind: mutating`,
+`agent_callable: false` and `mcp_scope: none`.
+
+Send `subject`, `summary`, `answers` and `apply`. Each answer has `id`, `label`
+and `consequence`. Supply two to four unique ids matching
+`[a-z][a-z0-9_]{0,31}`, with a one-line label and consequence of up to 240
+characters. Optional `recommended` names an answer id. The gate and all
+answers carry the `authority` tier.
+
+`apply` carries `tool`, `revision` and `input`. The revision and subject are
+opaque strings of 1–128 printable characters. The input is a JSON object of
+at most 8 KiB with the top-level key `decision` reserved. Keep credentials
+out of the input because the decision record includes it.
+
+Supply `task_id` for an open task in the callback's workspace or omit it for
+the plugin's `someday` holder task. Coordination writes require the owner host.
+A repeat raise for the same task, plugin, subject and revision reuses the open
+request. A new revision supersedes it. A changed installed manifest digest or
+a closed task also supersedes the request. The workspace holds up to 50 open
+plugin requests, with up to 20 per plugin. To withdraw, send `subject` and
+`withdraw: true`, with the same optional `task_id`.
+
+Read the request and its `plugin_apply` metadata with `orbit.decision` action
+`list` or `show`. `orbit attention` folds a task-form request onto an
+existing task item when one is present. A standalone item starts at low
+severity. An approve-proposed drain holds the task as `decision_pending`
+while its plugin request is open.
+
+This release records and displays plugin decisions. Executing an answer
+awaits support for apply-tool consent and execution. Older Orbit binaries
+do not list plugin requests in mixed-version fleets.

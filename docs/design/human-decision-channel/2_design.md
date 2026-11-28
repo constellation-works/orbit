@@ -1422,8 +1422,8 @@ closed investigation task.
 
 ### 12.11 Implementation slices
 
-Ordered. Each is shippable alone and inert until an operator allowlists a plugin apply
-tool and a plugin raises a request.
+The first slice records and displays requests. Executing an answer depends on
+apply-tool consent and apply execution in slices 2 and 3.
 
 1. **Record, binding, raise and attention folding.** `orbit-types`:
    `DecisionGate::PluginRequest`, `DecisionBinding::PluginObject`, `PluginApply`, the

@@ -2,7 +2,11 @@
 //! active work and changes to the consumer's material contract remain guarded.
 
 use orbit_core::application::task::TaskUpdateParams;
+use orbit_core::test_support::fixture_engine::TaskAutomationUpdate;
 use orbit_engine::RunLifecycle;
+use orbit_types::task::{
+    DecisionAnswer, DecisionBinding, DecisionGate, DecisionRequest, PluginApply,
+};
 use orbit_types::workflow::automation::members::SourceSensitivity;
 
 use super::races::apply_input;
@@ -827,6 +831,99 @@ fn held_warning_keeps_one_decision_until_explicit_decision_repilot() {
     workspace.runtime.cancel_job_run(&runs[0].run_id).unwrap();
 }
 
+#[cfg(unix)]
+fn held_warning_triage_does_not_raise_approval_alongside_plugin_decision() {
+    use orbit_core::application::task::{PilotWarningDecision, PilotWarningTriageRequest};
+    use orbit_types::task::DecisionRequestState;
+
+    let workspace = Workspace::new();
+    workspace.install_pilot_job();
+    let task = workspace.task("warning with plugin decision");
+    apply_explicit_pilot_assessment(&workspace, &task, true);
+    let plugin_request = DecisionRequest::new(
+        task.id.clone(),
+        DecisionGate::PluginRequest,
+        vec![
+            DecisionAnswer::plain("accept", "Accept", "Record acceptance."),
+            DecisionAnswer::plain("reject", "Reject", "Record rejection."),
+        ],
+        DecisionBinding::PluginObject {
+            plugin: "fixture".into(),
+            subject: "result-1".into(),
+            revision: "rev-1".into(),
+            manifest_digest: "digest-1".into(),
+        },
+        "plugin:fixture".into(),
+        Utc::now(),
+    )
+    .with_summary("Accept the fixture result?".into(), None)
+    .with_plugin_apply(PluginApply {
+        plugin: "fixture".into(),
+        subject: "result-1".into(),
+        tool: "fixture.apply".into(),
+        manifest_digest: "digest-1".into(),
+        input: json!({"result": "result-1"}),
+        revision: "rev-1".into(),
+        requested_by: Some("fixture-operator".into()),
+    });
+    orbit_core::test_support::EngineHost::new(&workspace.runtime)
+        .apply_task_automation_update(
+            &task.id,
+            TaskAutomationUpdate {
+                append_history: vec![plugin_request.history_entry("plugin:fixture")],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+    let triage = workspace
+        .runtime
+        .record_pilot_warning_triage(&PilotWarningTriageRequest {
+            task_id: task.id.clone(),
+            requested_by: "codex".into(),
+            decision: PilotWarningDecision::Propose {
+                summary: "Choose whether to reassess the warning.".into(),
+                options: serde_json::from_value(json!([
+                    {
+                        "summary": "Assess again",
+                        "consequence": "Submit one explicit pilot.",
+                        "action": {"kind": "re_pilot"}
+                    },
+                    {
+                        "summary": "Archive",
+                        "consequence": "Retire the work.",
+                        "action": {"kind": "archive"}
+                    }
+                ]))
+                .unwrap(),
+                recommended: 1,
+            },
+        })
+        .unwrap();
+    assert_eq!(triage["outcome"], "decision_pending", "{triage}");
+    assert!(
+        triage["comment"]
+            .as_str()
+            .unwrap()
+            .contains("No proposed_approval was raised")
+    );
+    assert_eq!(
+        workspace
+            .runtime
+            .list_decision_requests(Some(DecisionGate::ProposedApproval), Some(&task.id), false)
+            .unwrap()
+            .len(),
+        0,
+        "pilot-warning triage must not add a competing generic approval"
+    );
+    let requests = workspace
+        .runtime
+        .list_decision_requests(Some(DecisionGate::PluginRequest), Some(&task.id), false)
+        .unwrap();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].state, DecisionRequestState::Open);
+}
+
 crate::scenario_table!(
     explicit_assessment_freshness_scenarios,
     explicit_assessment_survives_selector_apply_promotion_and_administrative_edits,
@@ -847,5 +944,6 @@ crate::scenario_table!(
     decision_rewrite_repilots_before_dispatch,
     explicit_repilot_tool_and_update_submit_once_with_live_dedup,
     held_warning_keeps_one_decision_until_explicit_decision_repilot,
+    held_warning_triage_does_not_raise_approval_alongside_plugin_decision,
     a_never_piloted_task_is_automatically_admitted_once
 );

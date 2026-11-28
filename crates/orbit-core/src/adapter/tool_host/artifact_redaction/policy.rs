@@ -23,7 +23,6 @@ const NO_REDACTION: ActionPolicy = ActionPolicy {
     nested_objects: &[],
 };
 
-/// The free text of each option an agent raises on a decision request.
 /// A memory write's file text is free prose that persists in the audit row.
 const MEMORY_WRITE_FILES: &[NestedArrayPolicy] = &[NestedArrayPolicy {
     array_key: "files",
@@ -32,7 +31,8 @@ const MEMORY_WRITE_FILES: &[NestedArrayPolicy] = &[NestedArrayPolicy {
     mode: TextMode::Free,
 }];
 
-const DECISION_RAISE_OPTIONS: &[NestedArrayPolicy] = &[
+/// Free text in the choices of an agent or plugin decision request.
+const DECISION_REQUEST_CHOICES: &[NestedArrayPolicy] = &[
     NestedArrayPolicy {
         array_key: "options",
         field_key: "label",
@@ -41,6 +41,18 @@ const DECISION_RAISE_OPTIONS: &[NestedArrayPolicy] = &[
     },
     NestedArrayPolicy {
         array_key: "options",
+        field_key: "consequence",
+        field_alias: None,
+        mode: TextMode::Free,
+    },
+    NestedArrayPolicy {
+        array_key: "answers",
+        field_key: "label",
+        field_alias: None,
+        mode: TextMode::Free,
+    },
+    NestedArrayPolicy {
+        array_key: "answers",
         field_key: "consequence",
         field_alias: None,
         mode: TextMode::Free,
@@ -262,9 +274,9 @@ pub(super) fn policy_for_action(action: OrbitBuiltinAction) -> ActionPolicy {
         OrbitBuiltinAction::Decision(verb) => match verb {
             // A raised option's label and consequence persist in task history,
             // so they redact beside the declared question.
-            DecisionVerb::Raise => ActionPolicy {
+            DecisionVerb::Raise | DecisionVerb::PluginRaise => ActionPolicy {
                 declared: verb.spec().params,
-                nested_arrays: DECISION_RAISE_OPTIONS,
+                nested_arrays: DECISION_REQUEST_CHOICES,
                 ..NO_REDACTION
             },
             DecisionVerb::List

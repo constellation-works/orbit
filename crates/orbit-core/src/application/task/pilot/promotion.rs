@@ -59,6 +59,9 @@ const PREREQUISITE_FIELDS: [&str; 3] = ["blocked_by", "utility_warnings", "surfa
 /// items' next action. `task repilot` is only the operator route.
 pub(crate) const PILOT_HOLD_CLEARANCE_SUMMARY: &str = "Edit the description, acceptance criteria or context_files to re-pilot automatically; a comment does not. Operator route: `task repilot`";
 
+/// Classification for a proposal waiting for a plugin decision.
+pub(crate) const DECISION_PENDING: &str = "decision_pending";
+
 /// `kind` of the readout finding for a proposed task whose pilot audit cannot
 /// be resolved.
 const PILOT_ASSESSMENT_UNAVAILABLE_KIND: &str = "pilot_assessment_unavailable";

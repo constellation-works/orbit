@@ -22,4 +22,5 @@ pub(super) use remove::FAIL_TREE_DELETE;
 pub use remove::{PluginRemoveOptions, remove_plugin};
 pub(super) use sync::build_pin_drift;
 pub use sync::{PluginSyncOutcome, sync_plugins};
+pub(crate) use workspace::workspace_plugin_toggles;
 pub use workspace::{disable_plugin_in_workspace, enable_plugin_in_workspace};

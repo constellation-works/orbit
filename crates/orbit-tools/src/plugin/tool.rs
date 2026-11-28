@@ -178,9 +178,6 @@ impl PluginTool {
         )?;
         callback.stamp_env(&mut environment);
         callback.bind_application(ctx.session_context.application.as_deref())?;
-        // The decision-channel callbacks read a store no plugin child may
-        // read, so the child reaches them through this host.
-        callback.open_host_route(ctx.orbit_host.as_ref())?;
         // A call the broker runs for an agent is held to that agent's
         // profile as well as the plugin's (design
         // `docs/design/plugins/specs/agent-call-broker.md` §5).
@@ -188,7 +185,10 @@ impl PluginTool {
             Some(caller) => spec.brokered_sandbox_profile(&ctx.env, caller)?,
             None => spec.sandbox_profile(&ctx.env, ctx.workspace_root.as_deref())?,
         };
-        callback.bind_workspace_root(ctx.workspace_root.as_deref(), profile.unsandboxed)?;
+        callback.bind_spawn_context(ctx, profile.unsandboxed)?;
+        // The decision-channel callbacks read a store no plugin child may
+        // read, so the child reaches them through this host.
+        callback.open_host_route(ctx.orbit_host.as_ref())?;
         let sandbox = profile.with_callback_session(&callback);
         let request = ExecRequest {
             program: spec.command.to_string_lossy().into_owned(),

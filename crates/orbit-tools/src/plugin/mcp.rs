@@ -79,6 +79,9 @@ enum McpState {
 /// child confined to workspace A [ORB-12820].
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct SessionKey {
+    /// The writer label recorded on decisions a callback raises.
+    requested_by: Option<String>,
+    workspace_id: Option<String>,
     /// Never share a backend across application consents or exact scopes.
     application: Option<String>,
     /// The child's working directory: the caller's workspace root when it
@@ -168,7 +171,14 @@ impl McpBackend {
         let mut allowed_tools = self.spec.allowed_tools(ctx);
         allowed_tools.sort();
         allowed_tools.dedup();
+        let requested_by = allowed_tools
+            .iter()
+            .any(|tool| tool == orbit_common::governance::decision::PLUGIN_RAISE_TOOL)
+            .then(|| PluginCallbackSession::spawning_writer(ctx))
+            .flatten();
         Ok(SessionKey {
+            requested_by,
+            workspace_id: ctx.session_context.workspace_id.clone(),
             application: ctx
                 .session_context
                 .application
@@ -390,10 +400,6 @@ impl McpBackend {
         )?;
         callback.stamp_env(&mut environment);
         callback.bind_application(ctx.session_context.application.as_deref())?;
-        // The decision-channel callbacks read a store no plugin child may
-        // read, so the child reaches them through the spawning host for as
-        // long as the session lives.
-        callback.open_host_route(ctx.orbit_host.as_ref())?;
         let request = ExecRequest {
             program: self.spec.command.to_string_lossy().into_owned(),
             args: self.spec.args.clone(),
@@ -410,7 +416,11 @@ impl McpBackend {
                 .spec
                 .sandbox_profile(&ctx.env, ctx.workspace_root.as_deref())?,
         };
-        callback.bind_workspace_root(ctx.workspace_root.as_deref(), profile.unsandboxed)?;
+        callback.bind_spawn_context(ctx, profile.unsandboxed)?;
+        // The decision-channel callbacks read a store no plugin child may
+        // read, so the child reaches them through the spawning host for as
+        // long as the session lives.
+        callback.open_host_route(ctx.orbit_host.as_ref())?;
         let sandbox = profile.with_callback_session(&callback);
         sandbox.validate(&request)?;
         let child = OwnedChild::from_spawned(sandbox.spawn(&request)?);

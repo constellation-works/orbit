@@ -246,6 +246,14 @@ fn validated_callback_session_entries(global_root: &Path) -> std::io::Result<fs:
 fn identity_from(record: &SessionRecord) -> PluginCallbackIdentity {
     PluginCallbackIdentity {
         workspace_root: record.workspace_root.clone(),
+        workspace_id: record
+            .spawning_caller
+            .as_ref()
+            .and_then(|caller| caller.workspace_id.clone()),
+        requested_by: record
+            .spawning_caller
+            .as_ref()
+            .and_then(|caller| caller.requested_by.clone()),
         unconfined: record.unconfined,
         application: record.application.clone(),
         provenance: PluginProvenance {

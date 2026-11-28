@@ -50,6 +50,8 @@ pub enum DecisionGate {
     /// with the answering human as grantor, `reject` writes nothing. Anyone
     /// may raise one; only a human answers it, never precedent or the model.
     ScriptGrant,
+    /// A plugin asks a human to decide what should happen to its object.
+    PluginRequest,
 }
 
 impl DecisionGate {
@@ -64,6 +66,7 @@ impl DecisionGate {
             "model_answer_review" => Some(Self::ModelAnswerReview),
             "resident_authority" => Some(Self::ResidentAuthority),
             "script_grant" => Some(Self::ScriptGrant),
+            "plugin_request" => Some(Self::PluginRequest),
             _ => None,
         }
     }
@@ -79,6 +82,7 @@ impl DecisionGate {
             Self::ModelAnswerReview => "model_answer_review",
             Self::ResidentAuthority => "resident_authority",
             Self::ScriptGrant => "script_grant",
+            Self::PluginRequest => "plugin_request",
         }
     }
 
@@ -97,7 +101,8 @@ impl DecisionGate {
             | Self::AgentRequest
             | Self::ModelAnswerReview
             | Self::ResidentAuthority
-            | Self::ScriptGrant => return Vec::new(),
+            | Self::ScriptGrant
+            | Self::PluginRequest => return Vec::new(),
         };
         vec![
             DecisionAnswer::plain("approve", "Approve", approved),

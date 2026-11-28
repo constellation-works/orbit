@@ -638,6 +638,10 @@ pub enum DecisionRefusalCode {
     AnswerNotApplicable,
     /// Decision-channel submissions are disabled by configuration.
     DecisionChannelDisabled,
+    /// The plugin is unavailable on this host or in this workspace.
+    PluginUnavailable,
+    /// This runtime does not own coordination writes for the task.
+    HostNotOwner,
 }
 
 impl DecisionRefusalCode {
@@ -661,6 +665,8 @@ impl DecisionRefusalCode {
             Self::RequestNotFound => "request_not_found",
             Self::AnswerNotApplicable => "answer_not_applicable",
             Self::DecisionChannelDisabled => "decision_channel_disabled",
+            Self::PluginUnavailable => "plugin_unavailable",
+            Self::HostNotOwner => "host_not_owner",
         }
     }
 
@@ -682,6 +688,8 @@ impl DecisionRefusalCode {
                 | Self::DkimVerificationRequired
                 | Self::TokenInvalid
                 | Self::DecisionChannelDisabled
+                | Self::PluginUnavailable
+                | Self::HostNotOwner
         )
     }
 }

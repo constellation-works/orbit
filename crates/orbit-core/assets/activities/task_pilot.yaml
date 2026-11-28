@@ -1399,6 +1399,7 @@ spec:
   fleet_notices: read
   tool_disallow_list:
     - orbit.decision.digest
+    - orbit.decision.plugin_raise
     - orbit.decision:raise
     - orbit.decision.submit
     - orbit.drain.claim.bind

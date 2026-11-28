@@ -10,14 +10,26 @@ use super::operation::GuardedModes;
 use crate::ToolContext;
 use orbit_common::{
     OrbitError,
-    governance::{decision::DecisionVerb, operation::OperationInput},
+    governance::{
+        decision::DecisionVerb,
+        operation::{OperationInput, ToolOnlyRegistration},
+    },
 };
 use serde_json::Value;
 
 impl GuardedModes for DecisionVerb {
+    fn tool_only_registration(self) -> Option<ToolOnlyRegistration> {
+        (self == Self::PluginRaise).then_some(ToolOnlyRegistration::Active)
+    }
+
     fn preempt(self, _ctx: &ToolContext, _input: &Value) -> Option<Result<Value, OrbitError>> {
         match self {
-            Self::List | Self::Show | Self::Raise | Self::Submit | Self::Digest => None,
+            Self::List
+            | Self::Show
+            | Self::Raise
+            | Self::Submit
+            | Self::Digest
+            | Self::PluginRaise => None,
             Self::Answer => Some(Err(OrbitError::PolicyDenied(
                 "answering a decision request is the operator's: use `orbit decision answer` or the dashboard".into(),
             ))),
@@ -54,6 +66,7 @@ impl GuardedModes for DecisionVerb {
             | Self::Consolidate
             | Self::Submit
             | Self::Digest
+            | Self::PluginRaise
             | Self::ChannelRegister
             | Self::ChannelList
             | Self::ChannelRevoke
@@ -72,6 +85,7 @@ impl GuardedModes for DecisionVerb {
             | Self::Consolidate
             | Self::Submit
             | Self::Digest
+            | Self::PluginRaise
             | Self::ChannelRegister
             | Self::ChannelList
             | Self::ChannelRevoke
@@ -90,6 +104,7 @@ impl GuardedModes for DecisionVerb {
             | Self::Consolidate
             | Self::Submit
             | Self::Digest
+            | Self::PluginRaise
             | Self::ChannelRegister
             | Self::ChannelList
             | Self::ChannelRevoke

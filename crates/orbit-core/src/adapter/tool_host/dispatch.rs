@@ -285,10 +285,12 @@ fn execute_admitted(
                     input,
                 )
             });
-            if matches!(verb, DecisionVerb::Submit | DecisionVerb::Raise)
-                && (session_context.transport.is_some()
-                    || session_context.origin_session_id.is_some()
-                    || session_context.write_surface.is_some())
+            if matches!(
+                verb,
+                DecisionVerb::Submit | DecisionVerb::Raise | DecisionVerb::PluginRaise
+            ) && (session_context.transport.is_some()
+                || session_context.origin_session_id.is_some()
+                || session_context.write_surface.is_some())
             {
                 let target_id = result
                     .as_ref()
@@ -308,6 +310,7 @@ fn execute_admitted(
                 );
                 let verb_label = match verb {
                     DecisionVerb::Submit => "decision_submit",
+                    DecisionVerb::PluginRaise => "decision_plugin_raise",
                     _ => "decision_raise",
                 };
                 runtime.record_task_mutation_audit(TaskMutationAudit {

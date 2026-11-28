@@ -79,6 +79,10 @@ pub struct PluginCallbackSession {
 pub struct PluginCallbackIdentity {
     /// Workspace the host used to render the backend sandbox, when recorded.
     pub workspace_root: Option<PathBuf>,
+    /// Logical workspace the host dispatched this plugin for, when recorded.
+    pub workspace_id: Option<String>,
+    /// Writer label of the spawning caller, for provenance only.
+    pub requested_by: Option<String>,
     /// The host actually spawned this backend without filesystem confinement.
     pub unconfined: bool,
     /// Application authority minted by the host for this child, if any.
@@ -105,9 +109,19 @@ impl PluginCallbackIdentity {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub(super) struct SpawningCaller {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) workspace_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) requested_by: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub(super) struct SessionRecord {
     #[serde(default)]
     pub(super) workspace_root: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) spawning_caller: Option<Box<SpawningCaller>>,
     #[serde(default)]
     pub(super) unconfined: bool,
     #[serde(default)]
@@ -129,6 +143,35 @@ pub(super) struct SessionRecord {
 }
 
 impl PluginCallbackSession {
+    /// The host-provided writer label, or a canonical agent identity.
+    pub(crate) fn spawning_writer(ctx: &crate::ToolContext) -> Option<String> {
+        ctx.trusted_actor_label.clone().or_else(|| {
+            orbit_types::identity::require_canonical_agent_family(
+                ctx.agent_name.as_deref(),
+                ctx.model_name.as_deref(),
+            )
+            .ok()
+            .flatten()
+        })
+    }
+
+    /// Bind the spawning caller and the sandbox workspace before opening the host route.
+    pub(crate) fn bind_spawn_context(
+        &mut self,
+        ctx: &crate::ToolContext,
+        unconfined: bool,
+    ) -> Result<(), OrbitError> {
+        let workspace_id = ctx.session_context.workspace_id.clone();
+        let requested_by = Self::spawning_writer(ctx);
+        if workspace_id.is_some() || requested_by.is_some() {
+            self.record.spawning_caller = Some(Box::new(SpawningCaller {
+                workspace_id,
+                requested_by,
+            }));
+        }
+        self.bind_workspace_root(ctx.workspace_root.as_deref(), unconfined)
+    }
+
     /// Record the workspace used to render this backend's sandbox before spawn.
     /// Older records omit this binding and cannot preflight explicit selectors.
     pub fn bind_workspace_root(
@@ -211,6 +254,7 @@ impl PluginCallbackSession {
             let path = dir.join(&token);
             let record = SessionRecord {
                 workspace_root: None,
+                spawning_caller: None,
                 unconfined: false,
                 application: None,
                 schema_version: SESSION_SCHEMA_VERSION,

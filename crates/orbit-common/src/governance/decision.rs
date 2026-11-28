@@ -19,7 +19,8 @@
 //! verbs with no MCP scope, like answering.
 use crate::governance::operation::{
     CliArgKind, CliGroup, CliHelp, Effect, EnumValue, NounSpec, OperationSpec, ParamSpec,
-    ParamType, ToolOnlyRegistration, UnknownFields, both, free_text, operation_registry, required,
+    ParamType, ToolOnlyRegistration, UnknownFields, both, free_text, mcp_only, operation_registry,
+    required,
 };
 use orbit_types::tool::{McpIdRouteDeclaration, McpToolScope};
 
@@ -375,6 +376,66 @@ const DIGEST: OperationSpec<DecisionVerb> = OperationSpec {
     id_route: McpIdRouteDeclaration::Unspecified,
 };
 
+/// Canonical name of the authenticated plugin callback that raises or withdraws a request.
+pub const PLUGIN_RAISE_TOOL: &str = "orbit.decision.plugin_raise";
+
+const PLUGIN_RAISE_PARAMS: &[ParamSpec] = &[
+    mcp_only(
+        "task_id",
+        ParamType::String,
+        "The task to attach the request to. Omit for a plugin holder task.",
+    ),
+    required(mcp_only(
+        "subject",
+        ParamType::RawString,
+        "The plugin's stable object identifier.",
+    )),
+    free_text(mcp_only(
+        "summary",
+        ParamType::RawString,
+        "The question the operator should answer.",
+    )),
+    mcp_only(
+        "answers",
+        ParamType::Array,
+        "Two to four answer objects with id, label and consequence.",
+    ),
+    mcp_only(
+        "recommended",
+        ParamType::RawString,
+        "The id of the recommended answer.",
+    ),
+    mcp_only(
+        "apply",
+        ParamType::Object,
+        "The plugin's tool, pinned input and object revision.",
+    ),
+    mcp_only(
+        "withdraw",
+        ParamType::Boolean,
+        "Supersede the open request for the subject.",
+    ),
+];
+
+const PLUGIN_RAISE: OperationSpec<DecisionVerb> = OperationSpec {
+    verb: DecisionVerb::PluginRaise,
+    cli_path: &[],
+    tool_name: PLUGIN_RAISE_TOOL,
+    tool_description: concat!(
+        "Raise or withdraw a human decision request for a plugin object. ",
+        "Requires an authenticated callback from the owning plugin."
+    ),
+    cli_about: "",
+    cli_help: CliHelp::NONE,
+    effect: Effect::Write,
+    params: &[PLUGIN_RAISE_PARAMS],
+    at_least_one_of: &[],
+    retired_fields: &[],
+    unknown_fields: UnknownFields::Warn,
+    mcp_scope: None,
+    id_route: McpIdRouteDeclaration::Unspecified,
+};
+
 const CHANNEL_NAME: &[ParamSpec] = &[required(both(
     "channel",
     ParamType::String,
@@ -503,6 +564,8 @@ operation_registry! {
         Submit => SUBMIT,
         /// Raise missing approval requests and return the decision digest.
         Digest => DIGEST,
+        /// Raise or withdraw a request from an authenticated plugin callback.
+        PluginRaise => PLUGIN_RAISE,
         /// Register a decision channel on this host (operator CLI only).
         ChannelRegister => CHANNEL_REGISTER,
         /// List this host's decision channels (operator CLI only).

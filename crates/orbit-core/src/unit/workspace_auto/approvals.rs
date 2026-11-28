@@ -64,7 +64,7 @@ use super::pilot_coordination::{
 };
 pub(crate) use super::pilot_coordination::{await_approval_pilot, record_proposed_approvals};
 use crate::application::task::pilot::{
-    ExplicitAssessmentReuse, FOOTPRINT_UNRESOLVED, UNRESOLVED_PILOT_EVENT,
+    DECISION_PENDING, ExplicitAssessmentReuse, FOOTPRINT_UNRESOLVED, UNRESOLVED_PILOT_EVENT,
     approval_disqualification, classify_explicit_assessment_reuse, held_classification,
     live_execution_claim_tasks, promote_reusable_assessment, unresolved_pilot_run_id,
 };
@@ -159,6 +159,10 @@ pub(super) fn approval_snapshot(
                 findings,
             }
         };
+        if runtime.has_open_plugin_decision(&task)? {
+            snapshot.held.push(held(DECISION_PENDING, None, Vec::new()));
+            continue;
+        }
         // Operator work. Prepare excludes the same tasks; skipping them here
         // keeps a drain from dispatching a pilot that can only exclude them
         // and then record a hold the pilot must not write.

@@ -75,9 +75,9 @@ pub fn agent_decision_answers(
         .enumerate()
         .map(|(index, option)| {
             let number = index + 1;
-            let label = one_line(&option.label, &format!("option {number} label"))?;
+            let label = decision_answer_line(&option.label, &format!("option {number} label"))?;
             let consequence =
-                one_line(&option.consequence, &format!("option {number} consequence"))?;
+                decision_answer_line(&option.consequence, &format!("option {number} consequence"))?;
             let risk_tier = match option.risk_tier.as_deref() {
                 None => DecisionRiskTier::Unknown,
                 Some("routine") => DecisionRiskTier::Routine,
@@ -95,7 +95,8 @@ pub fn agent_decision_answers(
     Ok((answers, "1".to_string()))
 }
 
-fn one_line(value: &str, field: &str) -> Result<String, AgentDecisionRequestError> {
+/// Validate the single-line label or consequence of a decision answer.
+pub fn decision_answer_line(value: &str, field: &str) -> Result<String, AgentDecisionRequestError> {
     let value = value.trim();
     if value.is_empty() {
         return Err(AgentDecisionRequestError::EmptyField(field.to_string()));

@@ -36,6 +36,7 @@ impl ExecuteCore for DecisionCommand {
             DecisionVerb::Consolidate => consolidate::render(outcome),
             DecisionVerb::Submit => submit::render(outcome),
             DecisionVerb::Digest => digest::render(outcome),
+            DecisionVerb::PluginRaise => raise::render(outcome),
             DecisionVerb::ChannelRegister => channel_register::render(outcome),
             DecisionVerb::ChannelList => channel_list::render(outcome),
             DecisionVerb::ChannelRevoke => channel_revoke::render(outcome),

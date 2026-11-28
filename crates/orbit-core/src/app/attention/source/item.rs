@@ -1,6 +1,6 @@
 use orbit_common::governance::attention::cursor;
 use orbit_types::{
-    task::{DecisionRequest, Task},
+    task::{DecisionGate, DecisionRequest, Task},
     tool::{
         AttentionDegraded, AttentionItem, AttentionKind, AttentionNext, AttentionSeverity,
         AttentionTask, AttentionWorkspace,
@@ -53,7 +53,9 @@ pub(in super::super) fn finalize_attention_item(
     high: bool,
 ) -> AttentionItem {
     use AttentionSeverity as S;
+    let plugin_request = request.is_some_and(|request| request.gate == DecisionGate::PluginRequest);
     let base = match item.kind {
+        AttentionKind::DecisionOpen if plugin_request => S::Low,
         AttentionKind::Blocked => S::High,
         AttentionKind::ReviewWaiting
             if item.detail["waiting_on"] == "approval"
@@ -82,7 +84,12 @@ pub(in super::super) fn finalize_attention_item(
         item.expires_at = Some(request.expires_at);
         state["decision_id"] = json!(request.id);
         let mut answers = subject::decision_answers(subject, request);
-        if item.kind == AttentionKind::DecisionOpen {
+        if let Some(apply) = &request.plugin_apply {
+            item.detail["plugin"] = json!(apply.plugin);
+            item.detail["subject"] = json!(apply.subject);
+            item.detail["apply_tool"] = json!(apply.tool);
+        }
+        if item.kind == AttentionKind::DecisionOpen && !plugin_request {
             let mut next = subject.show_next();
             next.summary = "Read the decision options".into();
             next.tool = Some("orbit.decision".into());
@@ -95,21 +102,23 @@ pub(in super::super) fn finalize_attention_item(
             );
             next.also = answers;
             item.next = next;
-            if (request.expires_at - subject.now).num_seconds() <= 6 * 3600
-                || matches!(
-                    request.risk_tier,
-                    orbit_types::task::DecisionRiskTier::Irreversible
-                        | orbit_types::task::DecisionRiskTier::Authority
-                        | orbit_types::task::DecisionRiskTier::Spend
-                )
-            {
-                item.severity = S::High;
-            }
         } else if !answers.is_empty() {
             let mut next = answers.remove(0);
             next.also = answers;
             next.also.push(subject.show_next());
             item.next = next;
+        }
+        if item.kind == AttentionKind::DecisionOpen
+            && ((request.expires_at - subject.now).num_seconds() <= 6 * 3600
+                || (!plugin_request
+                    && matches!(
+                        request.risk_tier,
+                        orbit_types::task::DecisionRiskTier::Irreversible
+                            | orbit_types::task::DecisionRiskTier::Authority
+                            | orbit_types::task::DecisionRiskTier::Spend
+                    )))
+        {
+            item.severity = S::High;
         }
     }
     item.fingerprint = cursor::attention_fingerprint(&item, state);

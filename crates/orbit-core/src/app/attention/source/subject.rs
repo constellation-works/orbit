@@ -150,7 +150,7 @@ pub(super) fn decision_answers(
             tool: None,
             input: None,
             command: format!(
-                "orbit --workspace '{}' decision answer {} --answer '{}'",
+                "orbit --workspace '{}' decision answer {} '{}'",
                 subject.workspace.id,
                 request.id,
                 answer.id.replace('\'', "'\\''")

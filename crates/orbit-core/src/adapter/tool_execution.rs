@@ -262,6 +262,19 @@ impl OrbitRuntime {
             return Ok(output);
         }
 
+        if self.tool_registry().plugin_binding(name).is_some() {
+            // Callback sessions inherit the workspace this host resolved.
+            tool_context.session_context.workspace_id = self.workspace_id().ok();
+            if tool_context.trusted_actor_label.is_none() {
+                tool_context.trusted_actor_label = self
+                    .actor()
+                    .resolve_write_label(
+                        tool_context.agent_name.as_deref(),
+                        tool_context.model_name.as_deref(),
+                    )
+                    .ok();
+            }
+        }
         let output = match self
             .tool_registry()
             .execute(name, &tool_context, input)

@@ -100,8 +100,7 @@ impl OrbitRuntime {
                         "proposed",
                         format!(
                             "\nsummary: {summary}{listing}\n\nRecommended: option {recommended}\n\
-                             Nothing else on this task was changed: answer the decision request to \
-                             apply an option in one step."
+                             Nothing else on this task was changed."
                         ),
                         summary,
                         answers,
@@ -158,13 +157,26 @@ impl OrbitRuntime {
                     )));
                 }
             };
+            let plugin_request_open = self.has_open_plugin_decision(&task)?;
+            let outcome = if plugin_request_open && disposition == "decision" {
+                "decision_pending"
+            } else {
+                outcome
+            };
+            let triage_note = if plugin_request_open {
+                "\nNo proposed_approval was raised because a plugin decision request is already open on this task."
+            } else if disposition == "decision" {
+                "\nAnswer the decision request to apply an option in one step."
+            } else {
+                ""
+            };
             let comment = format!(
                 "pilot_warning_triage disposition={disposition} outcome={outcome} assessment={} \
                  by={}\nholding findings:\n{}{body}",
                 held.operation_id,
                 request.requested_by,
                 quoted_findings(&held.findings)
-            );
+            ) + triage_note;
             let mut decision = DecisionRequest::new(
                 task.id.clone(),
                 DecisionGate::ProposedApproval,
@@ -184,7 +196,7 @@ impl OrbitRuntime {
                 disposition,
                 outcome,
                 &comment,
-                decision,
+                (!plugin_request_open).then_some(decision),
             )?;
             answer = Some(json!({
                 "task_id": id,
@@ -207,7 +219,7 @@ impl OrbitRuntime {
         disposition: &str,
         outcome: &str,
         comment: &str,
-        decision: DecisionRequest,
+        decision: Option<DecisionRequest>,
     ) -> Result<(), OrbitError> {
         let now = Utc::now();
         let marker = TaskHistoryEntry {
@@ -237,11 +249,15 @@ impl OrbitRuntime {
             message: comment.to_string(),
             operation_id: None,
         }];
+        let mut append_history = vec![marker.clone()];
+        if let Some(decision) = decision {
+            append_history.push(decision.history_entry(SYSTEM_ACTOR_LABEL));
+        }
         self.stores().task_records().update(
             &task.id,
             StoreTaskUpdateParams {
                 actor: SYSTEM_ACTOR_LABEL.to_string(),
-                append_history: vec![marker.clone(), decision.history_entry(SYSTEM_ACTOR_LABEL)],
+                append_history,
                 append_comments,
                 expected_status: Some(vec![TaskStatus::Proposed]),
                 ..Default::default()

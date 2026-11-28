@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use orbit_common::{DecisionRefusalCode, OrbitError};
 use orbit_types::task::{
     DECISION_DIGEST_EXPIRY_WINDOW_HOURS, DecisionBinding, DecisionGate, DecisionRequest,
@@ -89,11 +91,24 @@ impl OrbitRuntime {
                 warnings.push(warning);
             }
         }
+        let plugin_tasks: BTreeSet<String> = listing
+            .requests
+            .iter()
+            .filter(|request| request.gate == DecisionGate::PluginRequest)
+            .map(|request| request.task_id.clone())
+            .collect();
+        approvals.retain(|request| !plugin_tasks.contains(&request.task_id));
+        raised.retain(|request| !plugin_tasks.contains(&request.task_id));
         let expiring: Vec<DecisionRequest> = listing
             .requests
             .into_iter()
             .filter(|request| {
-                request.expires_at <= horizon && request.gate != DecisionGate::ModelAnswerReview
+                request.expires_at <= horizon
+                    && request.gate != DecisionGate::ModelAnswerReview
+                    && !(matches!(
+                        request.gate,
+                        DecisionGate::ProposedApproval | DecisionGate::ReviewApproval
+                    ) && plugin_tasks.contains(&request.task_id))
             })
             .collect();
         let mut requests = approvals;
@@ -134,11 +149,12 @@ impl OrbitRuntime {
                     | DecisionGate::AgentRequest
                     | DecisionGate::ModelAnswerReview
                     | DecisionGate::ResidentAuthority
-                    | DecisionGate::ScriptGrant => {
+                    | DecisionGate::ScriptGrant
+                    | DecisionGate::PluginRequest => {
                         return Ok(());
                     }
                 };
-                if task.status != expected {
+                if task.status != expected || self.has_open_plugin_decision(&task)? {
                     return Ok(());
                 }
                 let candidate = if gate == DecisionGate::ReviewApproval {

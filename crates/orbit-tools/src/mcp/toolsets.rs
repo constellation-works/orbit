@@ -35,6 +35,7 @@ pub(crate) fn builtin_mcp_toolset(name: &str) -> Option<McpToolset> {
         "orbit.decision.list" | "orbit.decision.show" | "orbit.decision.raise" => T::Decisions,
         // Only the bound channel plugin or the operator calls these.
         "orbit.decision.digest" | "orbit.decision.submit" => T::DecisionChannel,
+        orbit_common::governance::decision::PLUGIN_RAISE_TOOL => return None,
         "orbit.workflow.run.list" | "orbit.workflow.run.show" | "orbit.workflow.run.observe" => {
             T::Runs
         }
