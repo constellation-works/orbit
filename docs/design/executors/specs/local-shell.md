@@ -153,17 +153,24 @@ Orbit process inherited.
 2. **The activity's `fsProfile`.** It is optional. When set, it names a policy
    profile that is resolved against the active policy and handed to sandbox
    compilation exactly as it is for a CLI agent. When omitted, the built-in
-   `unrestricted` profile applies, and the policy's `denyRead` and `denyModify`
-   rules still apply. If the executor definition declares a `sandbox`, the
-   child runs inside that OS backend for every activity that uses the executor;
-   if the OS primitive is unavailable, the step fails closed unless the
-   definition sets `allow_fallback: true`.
+   `unrestricted` profile applies. On macOS, Seatbelt applies the profile's
+   read and modify rules, including policy denies. On Linux, Bubblewrap
+   enforces modify rules but does not enforce profile read rules, including
+   `denyRead`: host reads remain available except for fixed credential and
+   runtime-directory masks and any explicit caller-provided masks. Do not rely
+   on `denyRead` to protect other secrets on Linux.
+
+   If the declared OS backend is unavailable, the step fails unless the
+   definition sets `allow_fallback: true`. That permits bare execution without
+   the backend's filesystem policy or masks; inherited restrictions still apply.
+   Other sandbox setup or spawn errors do not trigger this fallback.
 
 To wrap shell steps in the host's OS backend, add it to the definition. Use
 `linux-bwrap` on Linux or `macos-sandbox-exec` on macOS. No activity edit is
 needed to enable it: an activity without an `fsProfile` runs under
-`unrestricted`, with the policy's denies applied. Installed settings are not
-translated between platforms; an incompatible backend fails closed:
+`unrestricted`, subject to the platform limits above. Installed settings are not
+translated between platforms; an unavailable backend can run bare only when
+fallback is enabled:
 
 ```yaml
 # kind: Executor, metadata.name: local-shell
