@@ -48,7 +48,7 @@ use orbit_common::OrbitError;
 use orbit_common::governance::decision::DecisionVerb;
 use orbit_common::governance::task::TaskVerb;
 use orbit_store::TaskCompletionByComplexity;
-use orbit_tools::ReservationOwnerContext;
+use orbit_tools::{ActivityBinding, ReservationOwnerContext};
 use orbit_types::identity::HumanCrew;
 use orbit_types::task::{
     DecisionRequest, PilotAdmissionOperatorRecord, Task, TaskHistoryEntry, TaskStatus, TaskType,
@@ -236,6 +236,8 @@ pub(crate) struct ToolCaller<'a> {
     pub(crate) agent: Option<String>,
     pub(crate) model: Option<String>,
     pub(crate) reservation_owner: Option<ReservationOwnerContext>,
+    /// The managed activity the dispatching host attested for this call.
+    pub(crate) activity: Option<&'a ActivityBinding>,
 }
 
 /// A tool call as the generic tool entry admitted it.

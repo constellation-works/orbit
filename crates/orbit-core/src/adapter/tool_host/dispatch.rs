@@ -144,6 +144,7 @@ fn execute_admitted(
         agent,
         model,
         reservation_owner,
+        activity,
     } = caller;
     if let Some(mut result) =
         super::worker_tools::execute(runtime, session_context, action, &input)?
@@ -274,6 +275,7 @@ fn execute_admitted(
                             agent,
                             model,
                             reservation_owner,
+                            activity,
                         },
                         operator,
                         resident_action_key,
@@ -391,6 +393,7 @@ fn execute_admitted(
                             agent,
                             model,
                             reservation_owner,
+                            activity,
                         },
                         operator,
                         resident_action_key,
@@ -478,6 +481,7 @@ fn execute_admitted(
                 session: session_context.clone(),
                 run_id: task_scope.run_id.clone(),
                 task_id: task_scope.task_id.clone(),
+                activity: activity.cloned(),
                 agent: None,
                 model,
             },
@@ -490,6 +494,7 @@ fn execute_admitted(
                 session: session_context.clone(),
                 run_id: task_scope.run_id.clone(),
                 task_id: task_scope.task_id.clone(),
+                activity: None,
                 agent: None,
                 model,
             },
@@ -505,6 +510,7 @@ fn execute_admitted(
                 session: session_context.clone(),
                 run_id: task_scope.run_id.clone(),
                 task_id: task_scope.task_id.clone(),
+                activity: None,
                 agent,
                 model,
             },

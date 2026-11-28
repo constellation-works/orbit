@@ -202,7 +202,7 @@ fn operator_caller(state: &DashboardState) -> Result<NoticeCaller, Box<Response>
     Ok(NoticeCaller {
         session,
         scope_task_id: None,
-        active_task_id: None,
+        activity: None,
         scope_run_id: None,
         orchestrator: None,
         model: None,

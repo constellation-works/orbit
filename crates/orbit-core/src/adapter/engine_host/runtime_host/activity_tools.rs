@@ -367,6 +367,10 @@ pub(super) fn tool_context_for_activity(
         .unwrap_or_default();
     let proc_spawn_environment = Some(runtime.agent_environment(&[]));
     let run_id = run_id.map(str::trim).filter(|value| !value.is_empty());
+    let activity = run_id.map(|job_run_id| ActivityBinding {
+        job_run_id: job_run_id.to_string(),
+        task_id: None,
+    });
 
     ToolContext {
         env: runtime.env().clone(),
@@ -390,14 +394,11 @@ pub(super) fn tool_context_for_activity(
         }),
         // The dispatcher adds the task from the activity's run input; the
         // run is this context's own, never a tool's.
-        activity_binding: run_id.map(|job_run_id| ActivityBinding {
-            job_run_id: job_run_id.to_string(),
-            task_id: None,
-        }),
+        activity_binding: activity.clone(),
         orbit_host: Some(build_orbit_tool_host(
             crate::Core::within_tool_entry(runtime.clone()),
             None,
-            ToolHostRun::InProcess(run_id.map(ToOwned::to_owned)),
+            ToolHostRun::InProcess(activity),
             ToolSessionContext::default(),
         )),
         ..Default::default()
@@ -417,14 +418,15 @@ pub(in crate::adapter::engine_host) fn rebind_activity_tool_context_to_worktree(
     let worktree_text = worktree_root.to_string_lossy().into_owned();
     tool_context.workspace_root = Some(worktree_root.to_path_buf());
     tool_context.cwd = Some(worktree_text);
-    tool_context.activity_binding = Some(ActivityBinding {
+    let activity = ActivityBinding {
         job_run_id: run_id.to_string(),
         task_id: Some(task_id.to_string()),
-    });
+    };
+    tool_context.activity_binding = Some(activity.clone());
     tool_context.orbit_host = Some(build_orbit_tool_host(
         crate::Core::within_tool_entry(runtime.clone()),
         Some(task_id.to_string()),
-        ToolHostRun::InProcess(Some(run_id.to_string())),
+        ToolHostRun::InProcess(Some(activity)),
         tool_context.session_context.clone(),
     ));
 }

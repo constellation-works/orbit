@@ -11,6 +11,7 @@ use std::path::Path;
 #[cfg(unix)]
 use managed_run::ambiguous_bundle_dispatch_drops_inherited_task_identity;
 use managed_run::{
+    managed_notice_mutations_follow_the_host_attested_activity,
     managed_pipeline_run_posts_and_closes_notices_as_agent,
     managed_run_notice_authority_preserves_fail_closed_rejections,
 };
@@ -1390,6 +1391,7 @@ crate::scenario_table!(
     attention_lists_notices_under_a_registry_id_that_differs_from_the_store_id,
     managed_pipeline_run_posts_and_closes_notices_as_agent,
     managed_run_notice_authority_preserves_fail_closed_rejections,
+    managed_notice_mutations_follow_the_host_attested_activity,
 );
 
 #[cfg(unix)]

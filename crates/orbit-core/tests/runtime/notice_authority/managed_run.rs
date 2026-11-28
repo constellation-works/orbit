@@ -9,7 +9,9 @@ use orbit_core::adapter::command::{ToolCommandCall, ToolEntryPoint};
 use orbit_core::app::resident;
 use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
 use orbit_core::runtime::OrbitRuntime;
+use orbit_engine::HostEnvironment as _;
 use orbit_engine::RunLifecycle as _;
+use orbit_tools::{ActivityBinding, ToolContext};
 use orbit_types::task::{ExecutionLocation, TaskArtifact};
 use orbit_types::tool::{McpCapability, McpTransport, ToolSessionContext, WorkerInvocation};
 use serde_json::{Value, json};
@@ -801,4 +803,168 @@ pub(super) fn ambiguous_bundle_dispatch_drops_inherited_task_identity() {
         ),
         "notice_poster_unidentified",
     );
+}
+
+/// Call `tool` in process under the activity binding a dispatching host
+/// attested, with no managed environment for the notice flow to re-read.
+fn call_with_activity(
+    runtime: &OrbitRuntime,
+    tool: &str,
+    input: Value,
+    activity: Option<ActivityBinding>,
+) -> Result<Value, String> {
+    orbit_core::test_support::EngineHost::new(runtime)
+        .run_tool_with_context(
+            tool,
+            input,
+            ToolContext {
+                session_context: session(McpCapability::Agent),
+                activity_binding: activity,
+                ..ToolContext::default()
+            },
+        )
+        .map_err(|error| error.to_string())
+}
+
+fn activity(run_id: &str, task_id: Option<&str>) -> Option<ActivityBinding> {
+    Some(ActivityBinding {
+        job_run_id: run_id.to_string(),
+        task_id: task_id.map(ToOwned::to_owned),
+    })
+}
+
+/// A notice's record and history, and the open notice count, as the
+/// operator reads them.
+fn notice_state(runtime: &OrbitRuntime, id: &str) -> (Value, usize) {
+    let operator = session(McpCapability::Operator);
+    let shown = call(runtime, "orbit.notice.show", json!({"id": id}), &operator).unwrap();
+    let open = call(runtime, "orbit.notice.list", json!({}), &operator).unwrap();
+    (shown, open["notices"].as_array().map_or(0, Vec::len))
+}
+
+pub(super) fn managed_notice_mutations_follow_the_host_attested_activity() {
+    let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+    let runtime = runtime_at(root.path());
+    let first = add_task(&runtime, "First bundle member");
+    let selected = add_task(&runtime, "Selected bundle member");
+    let outsider = add_task(&runtime, "Task outside the bundle");
+    let run = insert_run(
+        &runtime,
+        "task_pr_pipeline",
+        Some(json!({"task_ids": [first, selected]})),
+    );
+    let other_run = insert_run(
+        &runtime,
+        "task_pr_pipeline",
+        Some(json!({"task_ids": [outsider]})),
+    );
+    let post = json!({
+        "kind": "incident",
+        "title": "Bundle fixture broken",
+        "dedupe_key": "bundle-fixture",
+        "linked_task": selected
+    });
+
+    // The attested leaf task, not the bundle's first member, is the poster.
+    let posted = call_with_activity(
+        &runtime,
+        "orbit.notice.post",
+        post.clone(),
+        activity(&run, Some(&selected)),
+    )
+    .expect("the attested activity task posts as an agent");
+    assert_eq!(posted["outcome"], "created");
+    assert_eq!(posted["notice"]["author"]["class"], "agent");
+    assert_eq!(posted["notice"]["author"]["task_id"], selected);
+    assert_eq!(posted["notice"]["author"]["run_id"], run);
+    let id = posted["notice"]["id"].as_str().unwrap().to_string();
+    let before = notice_state(&runtime, &id);
+
+    // Missing, ambiguous or unheld activity authority refuses every mutation,
+    // including a corroborating re-post of the same key, and changes nothing.
+    for (label, binding) in [
+        ("no activity binding", None),
+        ("bundle without a single task", activity(&run, None)),
+        (
+            "task the run does not carry",
+            activity(&run, Some(&outsider)),
+        ),
+        ("blank attested task", activity(&run, Some("  "))),
+    ] {
+        for (tool, input) in [
+            ("orbit.notice.post", post.clone()),
+            ("orbit.notice.close", json!({"id": id, "reason": "cleared"})),
+            (
+                "orbit.notice.close",
+                json!({"dedupe_key": "bundle-fixture", "reason": "cleared"}),
+            ),
+        ] {
+            let error = call_with_activity(&runtime, tool, input, binding.clone())
+                .expect_err(&format!("{label}: {tool} must refuse"));
+            assert!(
+                error.starts_with("notice_poster_unidentified"),
+                "{label}: {tool} refused with {error}"
+            );
+            assert_eq!(notice_state(&runtime, &id), before, "{label}: {tool}");
+        }
+    }
+
+    // Conflicting dispatch metadata attests no task: the CLI route refuses too.
+    let conflicting = Env::from_vars([
+        ("ORBIT_MANAGED_RUN_CONTEXT", "1"),
+        ("ORBIT_RUN_ID", run.as_str()),
+        ("ORBIT_TASK_ID", first.as_str()),
+        ("ORBIT_ACTIVE_TASK_ID", selected.as_str()),
+    ]);
+    for (tool, input) in [
+        ("orbit.notice.post", post.clone()),
+        ("orbit.notice.close", json!({"id": id, "reason": "cleared"})),
+    ] {
+        refused(
+            call_with_env(
+                &runtime,
+                &conflicting,
+                tool,
+                input,
+                ToolEntryPoint::Cli,
+                local_cli_session(&runtime),
+            ),
+            "notice_poster_unidentified",
+        );
+        assert_eq!(notice_state(&runtime, &id), before, "conflicting {tool}");
+    }
+
+    // Another member's attested activity is a valid poster, but not the
+    // selected task's notice editor; another run's task is no editor either.
+    refused(
+        call_with_activity(
+            &runtime,
+            "orbit.notice.close",
+            json!({"id": id, "reason": "cleared"}),
+            activity(&run, Some(&first)),
+        ),
+        "notice_close_refused",
+    );
+    refused(
+        call_with_activity(
+            &runtime,
+            "orbit.notice.close",
+            json!({"id": id, "reason": "cleared"}),
+            activity(&other_run, Some(&outsider)),
+        ),
+        "notice_close_refused",
+    );
+    assert_eq!(notice_state(&runtime, &id), before, "non-author close");
+
+    // The attested activity keeps its own close path.
+    let closed = call_with_activity(
+        &runtime,
+        "orbit.notice.close",
+        json!({"id": id, "reason": "cleared"}),
+        activity(&run, Some(&selected)),
+    )
+    .expect("the attested activity closes its own notice");
+    assert_eq!(closed["notice"]["status"], "closed");
+    assert_eq!(closed["notice"]["closed"]["by"]["task_id"], selected);
+    assert_eq!(closed["notice"]["closed"]["by"]["run_id"], run);
 }

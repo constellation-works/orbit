@@ -4,7 +4,7 @@
 
 use orbit_common::OrbitError;
 use orbit_common::governance::operation::{OperationInput, OperationVerb};
-use orbit_tools::ToolContext;
+use orbit_tools::{ActivityBinding, ToolContext};
 use orbit_types::tool::{McpCapability, ToolSessionContext};
 use serde_json::{Map, Value};
 
@@ -57,6 +57,10 @@ pub(crate) struct Caller {
     pub(crate) run_id: Option<String>,
     /// The task the tool context is scoped to, if any.
     pub(crate) task_id: Option<String>,
+    /// The managed activity the dispatching host attested for this call.
+    /// Only the tool host sets it; tool input and the process environment
+    /// never do.
+    pub(crate) activity: Option<ActivityBinding>,
     pub(crate) agent: Option<String>,
     pub(crate) model: Option<String>,
 }
