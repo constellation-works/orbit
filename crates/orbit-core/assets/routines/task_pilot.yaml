@@ -42,8 +42,10 @@
 # Only this host evaluates the trigger (`owner_machine`); a second host
 # registering the same workspace seeds its own owner. Explicit task-ID runs
 # (`orbit run task-pilot <id>`) remain available for proposed/backlog workspace
-# tasks and do not use this routine's configurable eligibility gate. Other
-# statuses refuse the entire explicit selection before assessment.
+# tasks and do not use this routine's configurable eligibility gate. The CLI
+# preflights explicit selections before submission; `prepare_task_pilot` skips
+# non-assessable tasks as `status_not_eligible` if a task moves before preparation
+# or is passed directly.
 #
 # A host provider hold withholds this dispatch while it covers every crew this
 # job could draw: `provider_unavailable` from the last 30 minutes, or
