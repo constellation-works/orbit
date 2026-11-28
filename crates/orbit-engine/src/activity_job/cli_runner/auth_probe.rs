@@ -1,11 +1,10 @@
 //! Minimal auth recovery calls through the provider's normal execution boundary.
 
-use orbit_common::env_vars;
 use std::path::Path;
 use std::time::Duration;
 
 use orbit_agent::{Agent, AgentConfig, AgentRequest};
-use orbit_common::security::child_env::MCP_MANAGED_BINDING_ENV_VARS;
+use orbit_common::security::child_env::{MCP_MANAGED_BINDING_ENV_VARS, TASK_IDENTITY_ENV_VARS};
 use orbit_types::identity::CrewEnvVar;
 use orbit_types::workflow::{AuthProbe, AuthProbeSuccess};
 
@@ -117,7 +116,7 @@ pub fn run_auth_probe<
     env.retain(|(key, _)| {
         !MCP_MANAGED_BINDING_ENV_VARS.contains(&key.as_str())
             && !key.starts_with("ORBIT_ACTIVITY_")
-            && ![env_vars::ORBIT_TASK_ID, "ORBIT_ACTIVE_TASK_ID"].contains(&key.as_str())
+            && !TASK_IDENTITY_ENV_VARS.contains(&key.as_str())
     });
     env.retain(|(key, _)| !invocation.fixed_env.iter().any(|(fixed, _)| key == fixed));
     env.extend(

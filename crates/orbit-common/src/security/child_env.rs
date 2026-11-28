@@ -93,6 +93,21 @@ pub const AGENT_SUBPROCESS_BASELINE_VARS: &[&str] = &[
     env_vars::USER,
 ];
 
+/// Explicit active-task binding a task-bound CLI dispatch stamps beside
+/// `ORBIT_TASK_ID`.
+pub const ACTIVE_TASK_ENV: &str = "ORBIT_ACTIVE_TASK_ID";
+
+/// Spawner-neutral task name in the commit-telemetry contract a task-bound CLI
+/// dispatch stamps.
+pub const AGENT_TASK_ENV: &str = "AGENT_TASK";
+
+/// Task-identity names CLI dispatch reserves. A provider receives them only
+/// from a task-bound activity's own stamp: inherited values, `pass` entries
+/// and crew `env` mappings of these names are cleared first, so an unbound or
+/// bundled activity holds none.
+pub const TASK_IDENTITY_ENV_VARS: &[&str] =
+    &[env_vars::ORBIT_TASK_ID, ACTIVE_TASK_ENV, AGENT_TASK_ENV];
+
 /// Exact managed binding, identity, activity policy and broker locator names
 /// Codex must forward.
 pub const MCP_MANAGED_BINDING_ENV_VARS: &[&str] = &[
@@ -134,7 +149,7 @@ const ORBIT_ENVELOPE_VARS: &[&str] = &[
     env_vars::ORBIT_AGENT_MODEL,
     MCP_MANAGED_SESSION_ID_ENV,
     env_vars::ORBIT_TASK_ID,
-    "ORBIT_ACTIVE_TASK_ID",
+    ACTIVE_TASK_ENV,
     env_vars::ORBIT_ROOT,
     MCP_MANAGED_REGISTRY_ROOT_ENV,
     MCP_MANAGED_WORKSPACE_ENV,

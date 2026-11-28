@@ -44,6 +44,8 @@ mod stderr_failure;
 #[cfg(unix)]
 mod tag_instructions;
 #[cfg(unix)]
+mod task_identity;
+#[cfg(unix)]
 mod truncated_envelope;
 
 use orbit_engine::test_support::impl_test_host;
@@ -185,6 +187,7 @@ pub(super) struct FakeCli {
     _tempdir: TempDir,
     path: PathBuf,
 }
+
 #[cfg(unix)]
 impl FakeCli {
     pub(super) fn cli_path(&self) -> &Path {
