@@ -229,10 +229,11 @@ It is never rewritten, and it is
 OS tags intersected with the stored crew executor `host_os`, its source, and
 unresolved/conflict states.
 
-For show only, `field: "delivery"` selects delivery evidence instead of task
-fields. It cannot be combined with other fields. Optional `run_id` chooses
-the delivery run; without it, the newest task-delivery run submitted with
-this task is used. `run_id` requires the delivery selection.
+For show only, request delivery evidence with `field: "delivery"` as the
+only field; do not combine it with other fields. Optional `run_id` is allowed
+only with this selection and chooses the delivery run. Without it, the newest
+task-delivery run submitted with this task is used. `run_id` requires the
+delivery selection.
 
 Delivery reports what the run committed and landed for the task: typed status,
 base/head and landed commit SHAs, PR number, timestamps and provenance only,

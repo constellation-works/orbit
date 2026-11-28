@@ -181,7 +181,7 @@ pub(super) fn delivery(
 ) -> Result<Value, OrbitError> {
     if fields.len() != 1 {
         return Err(OrbitError::InvalidInput(format!(
-            "`{TASK_SHOW_DELIVERY_FIELD}` cannot be combined with other fields"
+            "`{TASK_SHOW_DELIVERY_FIELD}` cannot be combined with other fields; pass `field: \"{TASK_SHOW_DELIVERY_FIELD}\"` alone. Optional `run_id` is allowed only with this selection."
         )));
     }
     let run_id = input.optional_string("run_id")?;

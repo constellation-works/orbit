@@ -821,7 +821,12 @@ fn a_claimed_worker_reads_the_delivery_of_its_own_leaf_only() {
                 json!({"id": TASK, "fields": ["delivery", "status"]}),
             )
             .unwrap_err();
-        assert!(combined.contains("cannot be combined"), "{combined}");
+        assert!(
+            combined.ends_with(
+                "`delivery` cannot be combined with other fields; pass `field: \"delivery\"` alone. Optional `run_id` is allowed only with this selection."
+            ),
+            "{combined}"
+        );
         // The owner decodes a JSON-encoded array in a string, so this is the
         // delivery view of another run, not a field this scope may forward.
         refused_with(

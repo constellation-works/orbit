@@ -231,6 +231,43 @@ fn newest_delivery_uses_submitted_task_bindings() {
     assert_eq!(fixture.selected(), "newest");
 }
 
+#[test]
+fn task_show_delivery_refuses_mixed_fields_and_returns_the_delivery_observation() {
+    let fixture = Fixture::new();
+    let refusal = fixture.runtime.run_tool(
+        "orbit.task.show",
+        json!({
+            "id": fixture.task,
+            "fields": ["delivery", "status"],
+            "model": "codex"
+        }),
+    );
+    const DELIVERY_MIXED_FIELDS_ERROR: &str = concat!(
+        "`delivery` cannot be combined with other fields; ",
+        "pass `field: \"delivery\"` alone. ",
+        "Optional `run_id` is allowed only with this selection."
+    );
+    assert!(matches!(
+        refusal,
+        Err(OrbitError::InvalidInput(message)) if message == DELIVERY_MIXED_FIELDS_ERROR
+    ));
+
+    fixture.run(
+        "selected",
+        "fixture_delivery",
+        1,
+        Some(json!({"task_ids": [fixture.task]})),
+    );
+    let shown = fixture
+        .runtime
+        .run_tool(
+            "orbit.task.show",
+            json!({"id": fixture.task, "field": "delivery", "model": "codex"}),
+        )
+        .expect("the delivery-only projection returns its observation");
+    assert_eq!(shown["run_id"], "selected");
+}
+
 /// A direct-path submission pins its YAML next to the run, and that pinned
 /// definition is what the run executes. The observation reads the same one:
 /// the catalog asset of the same name lists the steps in another order, so its
