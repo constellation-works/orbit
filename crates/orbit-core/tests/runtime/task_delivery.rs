@@ -242,10 +242,14 @@ fn task_show_delivery_refuses_mixed_fields_and_returns_the_delivery_observation(
             "model": "codex"
         }),
     );
+    const DELIVERY_MIXED_FIELDS_ERROR: &str = concat!(
+        "`delivery` cannot be combined with other fields; ",
+        "pass `field: \"delivery\"` alone. ",
+        "Optional `run_id` is allowed only with this selection."
+    );
     assert!(matches!(
         refusal,
-        Err(OrbitError::InvalidInput(message))
-            if message == "`delivery` cannot be combined with other fields; pass `field: \"delivery\"` alone. Optional `run_id` is allowed only with this selection."
+        Err(OrbitError::InvalidInput(message)) if message == DELIVERY_MIXED_FIELDS_ERROR
     ));
 
     fixture.run(
