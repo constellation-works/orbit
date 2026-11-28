@@ -1267,7 +1267,7 @@ Typed definition hashes retain their existing struct field order.
   manifest added stays inactive until `orbit plugin enable` records it.
   `POST /api/plugins/<ns>/pages/<page>/actions/confirm` checks one action for an operator
   session and issues a one-time confirmation; `.../actions/run` spends it and runs the tool
-  once with operator capability. Every run request, refused or run, has a
+  once with operator capability; `.../actions/cancel` releases one the operator did not use. Every run request, refused or run, has a
   `dashboard.operations` row (`plugin.page_action`) carrying the web session, the plugin
   and the tool.
 - `POST /api/plugins/<ns>/enable` and `/disable` accept `{scope: "workspace"|"host"}`
