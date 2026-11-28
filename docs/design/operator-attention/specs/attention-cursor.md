@@ -42,6 +42,7 @@ sorted keys and no insignificant whitespace.
 | `run_failed` | run id and state |
 | `run_stuck` | run id and whether the cause is a dead owner or the wall-clock bound |
 | `claim_stale` | claim id, phase and the set of diagnostics that hold |
+| `delivery_stale_base` | the detail object: base, ahead/behind counts, owner and origin commit ids, owner-only commits, and tracked changes |
 | `ci_red` | the failing run's id, per workflow |
 | `friction_untriaged` | friction id |
 | `host_unhealthy` | the sorted failing check ids and reachability state |

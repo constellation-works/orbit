@@ -72,8 +72,9 @@ Notes that bind implementations:
 - **Pilot warning evidence is observational.** Attention reads pilot receipts and prerequisites
   from settled bundles without recovering pending commits. If a prerequisite needed by the
   warning classifier cannot be read, the source reports `pilot_warning` as `source_unavailable`.
-- **Runtime kinds respect the caller's read rights.** `run_*` and `claim_stale` read sources
-  that require the Operator capability (`orbit.run` action `list`, `orbit.drain.claims`), with
+- **Runtime kinds respect the caller's read rights.** `run_*`, `claim_stale` and
+  `delivery_stale_base` read sources that require the Operator capability (`orbit.run` action
+  `list`, `orbit.drain.claims`, held delivery setup and current local Git refs), with
   one workspace-scoped `degraded` entry per selected unreadable kind otherwise.
   `host_unhealthy` is not workspace-scoped: it reads host health, which also requires Operator,
   and a session without it gets one host-scoped `degraded` entry (`scope` `host:<name>`, code
