@@ -19,9 +19,13 @@ spec:
   # to wrap every activity that uses this executor in that OS backend. The
   # backend is selected here. An activity's `fsProfile` is optional: it selects
   # a named policy profile; without one, `unrestricted` applies. macOS Seatbelt
-  # applies read and modify rules. Linux Bubblewrap enforces modify rules but
-  # not profile read rules, including `denyRead`; only fixed credential and
-  # runtime-directory masks and explicit caller masks restrict host reads.
+  # permits reads broadly by default; positive profile `read` entries do not
+  # restrict reads. It enforces `denyRead` and negated (`!`) exclusions in the
+  # profile's `read` list, plus default credential denies and any configured
+  # agent-sandbox masks. Providers may re-allow credential paths they need.
+  # Linux Bubblewrap enforces modify rules but not profile read rules,
+  # including `denyRead`. Only fixed credential and runtime-directory masks
+  # and explicit caller masks restrict host reads.
   # Do not rely on Linux `denyRead` to protect other secrets. A backend that
   # does not match the host OS fails closed, even with `allow_fallback: true`.
   # When the matching backend's native primitive is unavailable (bwrap absent
