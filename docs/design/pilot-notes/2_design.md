@@ -250,7 +250,7 @@ The clause needs a live claim. The test at `crates/orbit-core/tests/runtime/dist
    the `doctor` finding ([ORB-29586]); `notes` in the output schema, the checks in
    apply, and the readouts in `orbit.task.show`, `orbit.task.list` and `orbit task show`
    ([ORB-29588]).
-2. **The dashboard.** The notes on the task's detail ([ORB-29589], backlog). Claimed pilots get
+2. **The dashboard.** The notes on the task's detail ([ORB-29589]). Claimed pilots get
    no build: task-pilot stays on the owner ([ORB-29590], documentation only; §6).
 
 ## 8. Acceptance
@@ -324,7 +324,7 @@ The clause needs a live claim. The test at `crates/orbit-core/tests/runtime/dist
 - [ORB-29567] — this design.
 - [ORB-29586] — adds `[workflow.pilot_notes.<label>]`, the prompt section, the audit event and the `doctor` finding, and verifies plugin tool access in an isolated fixture.
 - [ORB-29588] — adds `notes` to the assessment, the checks in apply and the `pilot_notes` readout.
-- [ORB-29589] — backlog; shows pilot notes on the dashboard's task detail.
+- [ORB-29589] — shows pilot notes on the dashboard's task detail.
 - [ORB-29590] — documents where task-pilot runs; claimed tasks take the owner's notes (§6).
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
