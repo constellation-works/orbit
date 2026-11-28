@@ -53,71 +53,72 @@ pub struct IdleWithWork {
     pub unreadable_histories: usize,
 }
 
-impl OrbitRuntime {
-    /// Measure idle-with-work time over the last `days` UTC days (at least
-    /// one), up to now. Read-only.
-    pub fn drain_idle_with_work(&self, days: u32) -> Result<IdleWithWork, OrbitError> {
-        let now = Utc::now();
-        let days = i64::from(days.max(1));
-        let since = (now.date_naive() - Duration::days(days - 1))
-            .and_hms_opt(0, 0, 0)
-            .map_or(now, |midnight| midnight.and_utc());
-        let windows = merge(
-            self.drain_admission_windows_since(since, now)?
-                .into_iter()
-                .map(
-                    |DrainAdmissionWindow {
-                         opened_at,
-                         closed_at,
-                     }| (opened_at, closed_at),
-                )
-                .filter_map(|span| clip(span, (since, now)))
-                .collect(),
-        );
-        let mut unreadable_histories = 0;
-        // Each task's waiting time that fell outside every admission window.
-        let mut idle_by_task: Vec<(String, Vec<Span>)> = Vec::new();
-        let candidates = self.task_lifecycle_stamps_matching(&WAITING_STATUSES, since)?;
-        let candidate_ids: Vec<String> = candidates.iter().map(|task| task.id.clone()).collect();
-        let histories = self.get_task_histories(&candidate_ids);
-        for (task, history) in candidates.into_iter().zip(histories) {
-            let history = match history {
-                Ok(history) => history,
-                Err(error) => {
-                    tracing::debug!(task_id = %task.id, %error, "idle-with-work: history unreadable");
-                    unreadable_histories += 1;
-                    continue;
-                }
-            };
-            let idle: Vec<Span> = waiting_spans(task.status, task.created_at, &history, now)
-                .into_iter()
-                .filter_map(|span| clip(span, (since, now)))
-                .flat_map(|span| subtract(span, &windows))
-                .collect();
-            if !idle.is_empty() {
-                idle_by_task.push((task.id, idle));
+/// Measure idle-with-work time over the last `days` UTC days (at least
+/// one), up to now. Read-only.
+pub(crate) fn drain_idle_with_work(
+    rt: &OrbitRuntime,
+    days: u32,
+) -> Result<IdleWithWork, OrbitError> {
+    let now = Utc::now();
+    let days = i64::from(days.max(1));
+    let since = (now.date_naive() - Duration::days(days - 1))
+        .and_hms_opt(0, 0, 0)
+        .map_or(now, |midnight| midnight.and_utc());
+    let windows = merge(
+        rt.drain_admission_windows_since(since, now)?
+            .into_iter()
+            .map(
+                |DrainAdmissionWindow {
+                     opened_at,
+                     closed_at,
+                 }| (opened_at, closed_at),
+            )
+            .filter_map(|span| clip(span, (since, now)))
+            .collect(),
+    );
+    let mut unreadable_histories = 0;
+    // Each task's waiting time that fell outside every admission window.
+    let mut idle_by_task: Vec<(String, Vec<Span>)> = Vec::new();
+    let candidates = rt.task_lifecycle_stamps_matching(&WAITING_STATUSES, since)?;
+    let candidate_ids: Vec<String> = candidates.iter().map(|task| task.id.clone()).collect();
+    let histories = rt.get_task_histories(&candidate_ids);
+    for (task, history) in candidates.into_iter().zip(histories) {
+        let history = match history {
+            Ok(history) => history,
+            Err(error) => {
+                tracing::debug!(task_id = %task.id, %error, "idle-with-work: history unreadable");
+                unreadable_histories += 1;
+                continue;
             }
+        };
+        let idle: Vec<Span> = waiting_spans(task.status, task.created_at, &history, now)
+            .into_iter()
+            .filter_map(|span| clip(span, (since, now)))
+            .flat_map(|span| subtract(span, &windows))
+            .collect();
+        if !idle.is_empty() {
+            idle_by_task.push((task.id, idle));
         }
-        let mut days_out = Vec::new();
-        let mut day = since.date_naive();
-        while day <= now.date_naive() {
-            let start = day.and_hms_opt(0, 0, 0).map_or(since, |at| at.and_utc());
-            let bounds = (start, (start + Duration::days(1)).min(now));
-            days_out.push(summarize(day, bounds, &idle_by_task));
-            day = day.succ_opt().unwrap_or(day + Duration::days(1));
-        }
-        let whole = summarize(since.date_naive(), (since, now), &idle_by_task);
-        Ok(IdleWithWork {
-            since,
-            until: now,
-            idle_hours: whole.idle_hours,
-            idle_task_hours: whole.idle_task_hours,
-            idle_tasks: whole.idle_tasks,
-            window_hours: hours(windows.iter().map(|(a, b)| *b - *a).sum()),
-            days: days_out,
-            unreadable_histories,
-        })
     }
+    let mut days_out = Vec::new();
+    let mut day = since.date_naive();
+    while day <= now.date_naive() {
+        let start = day.and_hms_opt(0, 0, 0).map_or(since, |at| at.and_utc());
+        let bounds = (start, (start + Duration::days(1)).min(now));
+        days_out.push(summarize(day, bounds, &idle_by_task));
+        day = day.succ_opt().unwrap_or(day + Duration::days(1));
+    }
+    let whole = summarize(since.date_naive(), (since, now), &idle_by_task);
+    Ok(IdleWithWork {
+        since,
+        until: now,
+        idle_hours: whole.idle_hours,
+        idle_task_hours: whole.idle_task_hours,
+        idle_tasks: whole.idle_tasks,
+        window_hours: hours(windows.iter().map(|(a, b)| *b - *a).sum()),
+        days: days_out,
+        unreadable_histories,
+    })
 }
 
 fn is_waiting(status: TaskStatus) -> bool {

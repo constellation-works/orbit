@@ -82,13 +82,15 @@ impl<'a> Command<'a, Value> {
                 .target(Some("workspace"), Some("auto_readiness".into())),
             move |core| {
                 let runtime = core.runtime();
-                let mut payload = runtime.workspace_auto_readiness_with_detail(
-                    ids,
-                    detail,
-                    concurrency,
-                    limit,
-                    crews,
-                )?;
+                let mut payload =
+                    crate::unit::workspace_auto::workspace_auto_readiness_with_detail(
+                        runtime,
+                        ids,
+                        detail,
+                        concurrency,
+                        limit,
+                        crews,
+                    )?;
                 payload["start_options"] = drain_start_options(runtime, hosts)?;
                 // Whether the caller holds every start control; a read, so
                 // nothing is refused.

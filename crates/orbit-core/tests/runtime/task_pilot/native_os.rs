@@ -135,10 +135,14 @@ fn exclusion(workspace: &Workspace, task: &Task) -> Option<(String, String)> {
         reasons[0].is_none(),
         "{wave}"
     );
-    let readiness = workspace
-        .runtime
-        .workspace_auto_readiness(&[], None, 50, &[])
-        .unwrap();
+    let readiness = orbit_core::unit::workspace_auto::workspace_auto_readiness(
+        &workspace.runtime,
+        &[],
+        None,
+        50,
+        &[],
+    )
+    .unwrap();
     let entry = readiness["tasks"]
         .as_array()
         .unwrap()

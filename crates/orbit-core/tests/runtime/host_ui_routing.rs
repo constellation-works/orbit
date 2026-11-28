@@ -248,7 +248,9 @@ fn a_host_without_a_verified_kit_withholds_ui_tasks_until_its_kit_is_verified() 
     assert_eq!(waiting.reason.as_deref(), Some("browser_kit_missing"));
     assert_eq!(waiting.detail.as_deref(), Some(wait.as_str()));
 
-    let readiness = linux.workspace_auto_readiness(&[], None, 50, &[]).unwrap();
+    let readiness =
+        orbit_core::unit::workspace_auto::workspace_auto_readiness(&linux, &[], None, 50, &[])
+            .unwrap();
     let entry = readiness["tasks"]
         .as_array()
         .unwrap()

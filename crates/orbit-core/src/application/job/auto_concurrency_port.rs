@@ -3,15 +3,15 @@
 //! Every submission and replay of the auto drain records the concurrency
 //! mode it runs under. `workspace_auto` owns that policy, and it also drives
 //! job runs, so a direct call from here would close a cycle. This port is
-//! the way in: `workspace_auto` implements it on
-//! [`OrbitRuntime`](crate::OrbitRuntime), so composing the runtime binds it.
+//! the way in: `unit::workspace_auto` implements it on its runtime-backed
+//! `JobPort`, bound in `app::port`.
 
 use orbit_common::OrbitError;
 use serde_json::Value;
 
 /// Auto-concurrency capture job submission calls, implemented by
-/// `workspace_auto`.
-pub(in crate::application) trait JobAutoConcurrencyPort {
+/// `unit::workspace_auto`.
+pub(crate) trait JobAutoConcurrencyPort {
     /// Record in `input` the concurrency mode a submission of `job_name`
     /// runs under, or refuse an override the job does not support.
     /// `retain_snapshot` keeps the provenance a resumed or replayed run

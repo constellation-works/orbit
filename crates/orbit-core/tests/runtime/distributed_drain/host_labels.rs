@@ -290,7 +290,9 @@ fn grants_and_labels_require_the_owner_to_carry_every_label() {
         .unwrap();
     assert_eq!(exclusion["reason"], "host_labels_missing");
     assert_eq!(exclusion["detail"], wait);
-    let ready = owner.workspace_auto_readiness(&[], None, 50, &[]).unwrap();
+    let ready =
+        orbit_core::unit::workspace_auto::workspace_auto_readiness(owner, &[], None, 50, &[])
+            .unwrap();
     let row = ready["tasks"]
         .as_array()
         .unwrap()
@@ -530,9 +532,14 @@ fn tag_derived_labels_judge_follower_readiness_evidence() {
         .with_browser_kit_home(kit_home.path())
         .with_machine_labels(vec!["image-export".into()]);
     let readiness_row = |task: &str| -> Value {
-        let ready = linux_owner
-            .workspace_auto_readiness(&[], None, 50, &[])
-            .unwrap();
+        let ready = orbit_core::unit::workspace_auto::workspace_auto_readiness(
+            &linux_owner,
+            &[],
+            None,
+            50,
+            &[],
+        )
+        .unwrap();
         ready["tasks"]
             .as_array()
             .unwrap()

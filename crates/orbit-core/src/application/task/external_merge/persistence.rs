@@ -227,7 +227,10 @@ impl OrbitRuntime {
                 // Recheck the narrow backlog exception under the write lock:
                 // a later rewrite, discard or run binding must invalidate it.
                 let current = self
-                    .settlement_candidate(task.clone(), &self.live_leaf_task_ids()?)
+                    .settlement_candidate(
+                        task.clone(),
+                        &crate::app::port::TaskWorkspaceAuto(self).live_leaf_task_ids()?,
+                    )
                     .map_err(|reason| refusal::refused(id, &reason))?;
                 let matches_landing = match current.backlog_delivery {
                     Some(BacklogDelivery::OwnerPublication(_)) => {

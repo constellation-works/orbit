@@ -136,9 +136,14 @@ impl Fixture {
 
     /// Every live reading in `orbit run readiness --json`.
     fn limits(&self) -> Vec<Value> {
-        self.runtime()
-            .workspace_auto_readiness(&[], None, 50, &[])
-            .unwrap()["provider_limits"]
+        orbit_core::unit::workspace_auto::workspace_auto_readiness(
+            &self.runtime(),
+            &[],
+            None,
+            50,
+            &[],
+        )
+        .unwrap()["provider_limits"]
             .as_array()
             .cloned()
             .unwrap()
@@ -180,10 +185,14 @@ impl Fixture {
             .iter()
             .map(|crew| (*crew).to_string())
             .collect::<Vec<_>>();
-        let readiness = self
-            .runtime()
-            .workspace_auto_readiness(&[], None, 50, &allowed)
-            .unwrap();
+        let readiness = orbit_core::unit::workspace_auto::workspace_auto_readiness(
+            &self.runtime(),
+            &[],
+            None,
+            50,
+            &allowed,
+        )
+        .unwrap();
         readiness["tasks"]
             .as_array()
             .unwrap()

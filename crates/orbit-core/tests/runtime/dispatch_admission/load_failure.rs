@@ -272,9 +272,9 @@ fn readiness_reports_a_load_failed_leaf_as_held_not_ready() {
     );
     let leaf = failed_leaf(&runtime, &drain, &held.id, true);
 
-    let readiness = runtime
-        .workspace_auto_readiness(&[], None, 50, &[])
-        .expect("readiness");
+    let readiness =
+        orbit_core::unit::workspace_auto::workspace_auto_readiness(&runtime, &[], None, 50, &[])
+            .expect("readiness");
     let held_entry = readiness_task(&readiness, &held.id);
     assert_eq!(held_entry["eligible"], false, "{readiness}");
     assert_eq!(held_entry["reason"], "leaf_load_failed", "{readiness}");

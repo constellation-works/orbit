@@ -6,7 +6,7 @@
 //!
 //! - Tasks, jobs, and delivery: `task`, `task_bundle`, `job`, `workflow`,
 //!   `review`, `operator_input`.
-//! - Automation: `automation`, `workspace_auto`, `seeding_policy`.
+//! - Automation: `automation`, `seeding_policy`.
 //! - Agents and runs: `executor`, `vision_probe`, `statistics`.
 //! - Tool names: `tool_name_migration`.
 //! - Workspace and host: `distributed`, `pull_drain`,
@@ -40,7 +40,6 @@ pub mod task_bundle;
 pub(crate) mod tool_name_migration;
 pub mod vision_probe;
 pub(crate) mod workflow;
-pub(crate) mod workspace_auto;
 
 // The env variant's only caller is the Linux-only process-cleanup test, so
 // its re-export carries the same target gate.

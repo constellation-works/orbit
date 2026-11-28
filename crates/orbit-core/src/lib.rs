@@ -158,8 +158,6 @@ pub mod test_support {
     pub use crate::application::tool_name_migration::plugin_manifest_publish_hook::fail_next_plugin_manifest_restore;
     /// Run a competing plugin migration before this thread publishes a manifest.
     pub use crate::application::tool_name_migration::plugin_manifest_publish_hook::with_plugin_manifest_publish_hook;
-    /// Fail the next drain pass's release of its unadmitted gap-fit reservations.
-    pub use crate::application::workspace_auto::with_reservation_release_failure;
     pub use crate::runtime::{
         with_host_load_sampling_wait, with_owner_read_retry_wait, with_pipeline_poll_wait,
     };
@@ -172,6 +170,8 @@ pub mod test_support {
     };
     pub use crate::unit::landing::with_landing_retry_reservation_hook;
     pub use crate::unit::managed_asset::with_auto_task_manifest_read_hook;
+    /// Fail the next drain pass's release of its unadmitted gap-fit reservations.
+    pub use crate::unit::workspace_auto::with_reservation_release_failure;
     /// The engine crate, for a fixture that drives an engine mechanism directly.
     pub use orbit_engine as fixture_engine;
     pub use orbit_engine::test_support::with_cli_supervision_clock;
@@ -309,8 +309,6 @@ pub(crate) use application::job::{
 pub(crate) use application::workflow::{
     CompletionPolicy, ShipMode, find_workflow, resolved_ship_mode,
 };
-pub(crate) use application::workspace_auto::FleetReadinessFacts;
-pub(crate) use application::workspace_auto::{IDLE_WITH_WORK_DAYS, IdleWithWork};
 pub(crate) use orbit_common::security::redaction::redact_sensitive_env_text;
 pub(crate) use orbit_common::{NotFoundKind, OrbitError};
 pub(crate) use orbit_runtime::context::ActorIdentity;
@@ -322,6 +320,7 @@ pub(crate) use orbit_types::workflow::{JobRun, JobRunState, JobRunStep};
 pub(crate) use runtime::OrbitRuntime;
 pub(crate) use runtime::engine::ResolvedCrewProjection;
 pub(crate) use unit::backlog_forecast::BacklogForecastHistory;
+pub(crate) use unit::workspace_auto::{FleetReadinessFacts, IDLE_WITH_WORK_DAYS, IdleWithWork};
 
 use orbit_runtime::paths;
 

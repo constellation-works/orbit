@@ -175,7 +175,7 @@ fn inspect_run(
         .activity_invocation_evidence(&run.run_id)
         .unwrap_or_default();
     let auto_concurrency = (run.job_id == "workspace_auto_pipeline")
-        .then(|| runtime.run_auto_concurrency(&run.run_id))
+        .then(|| crate::unit::workspace_auto::run_auto_concurrency(runtime, &run.run_id))
         .transpose()?;
     let mut ids: BTreeSet<_> = job_run_task_ids(&run).into_iter().collect();
     if let Some(state) = &state {

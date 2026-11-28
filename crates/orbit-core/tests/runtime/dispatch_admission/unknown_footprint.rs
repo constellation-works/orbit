@@ -142,9 +142,9 @@ fn a_multi_slot_drain_waits_for_the_pilot_to_prepare_empty_context_work() {
             .all(|entry| entry["reason"] == "awaiting_footprint"),
         "{shown:#}"
     );
-    let readiness = runtime
-        .workspace_auto_readiness(&[], Some(2), 50, &[])
-        .unwrap();
+    let readiness =
+        orbit_core::unit::workspace_auto::workspace_auto_readiness(&runtime, &[], Some(2), 50, &[])
+            .unwrap();
     for task in [&first, &second] {
         let entry = readiness_task(&readiness, task);
         assert_eq!(entry["reason"], "awaiting_footprint", "{entry}");
@@ -243,9 +243,9 @@ fn without_a_pilot_empty_context_work_is_admitted_only_alone() {
         assert_eq!(entry["blocking_task_ids"], json!([first]), "{entry}");
         assert_eq!(entry["conflicts"][0]["provenance"], "same_wave", "{entry}");
     }
-    let readiness = runtime
-        .workspace_auto_readiness(&[], Some(4), 50, &[])
-        .unwrap();
+    let readiness =
+        orbit_core::unit::workspace_auto::workspace_auto_readiness(&runtime, &[], Some(4), 50, &[])
+            .unwrap();
     assert_eq!(readiness_task(&readiness, &first)["reason"], "ready");
     let entry = readiness_task(&readiness, &second);
     assert_eq!(entry["reason"], "conflict_deferred", "{entry}");
@@ -280,9 +280,9 @@ fn without_a_pilot_empty_context_work_is_admitted_only_alone() {
         entry["conflicts"][0]["provenance"], "exclusive_reservation",
         "{entry}"
     );
-    let readiness = runtime
-        .workspace_auto_readiness(&[], Some(4), 50, &[])
-        .unwrap();
+    let readiness =
+        orbit_core::unit::workspace_auto::workspace_auto_readiness(&runtime, &[], Some(4), 50, &[])
+            .unwrap();
     let entry = readiness_task(&readiness, &second);
     assert_eq!(entry["reason"], "awaiting_exclusive_slot", "{entry}");
     let discovery = list_backlog_tasks(&runtime, json!({}));
@@ -475,9 +475,9 @@ fn an_operator_waiver_admits_unprepared_work_like_ready_work() {
     let mut expected = vec![empty_task.clone(), editing.clone(), unassessed.clone()];
     expected.sort();
     assert_eq!(loose, expected, "{waived:#}");
-    let readiness = runtime
-        .workspace_auto_readiness(&[], Some(4), 50, &[])
-        .unwrap();
+    let readiness =
+        orbit_core::unit::workspace_auto::workspace_auto_readiness(&runtime, &[], Some(4), 50, &[])
+            .unwrap();
     for task in [&empty_task, &unassessed] {
         assert_eq!(readiness_task(&readiness, task)["eligible"], true);
     }

@@ -6,14 +6,14 @@
 //! reconciling read of the drain is what records it terminal on the
 //! dispatch. `workspace_auto` owns that record and also drives job runs, so a
 //! direct call from here would close a cycle. This port is the way in:
-//! `workspace_auto` implements it on [`OrbitRuntime`](crate::OrbitRuntime),
-//! so composing the runtime binds it.
+//! `unit::workspace_auto` implements it on its runtime-backed `DrainLeafPort`,
+//! bound in `app::port`.
 
 use orbit_types::workflow::JobRun;
 
 /// Drain leaf settlement a reconciling run read calls, implemented by
-/// `workspace_auto`.
-pub(in crate::application) trait JobDrainLeafPort {
+/// `unit::workspace_auto`.
+pub(crate) trait JobDrainLeafPort {
     /// When `run` is an auto drain, record each of its open leaf dispatches
     /// whose child run has ended as terminal with the child's final status.
     /// Best-effort: a store failure is logged, and the next read or pass

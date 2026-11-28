@@ -19,7 +19,7 @@
 //!   Thin cells drop crew, then complexity, preserving mode at five samples;
 //!   only then use the mode-pooled cell, complexity and workspace history.
 //! - The drain is simulated on the drain's leaf-run ceiling
-//!   ([`crate::OrbitRuntime::drain_concurrency_ceiling`]), with no new arrivals
+//!   ([`crate::unit::workspace_auto::drain_concurrency_ceiling`]), with no new arrivals
 //!   unless `arrivals=on`. Each iteration admits work as the drain would
 //!   [ORB-18686]: in its dispatch order, once in-forecast dependencies have
 //!   finished, never beside overlapping locks, with unknown footprints run

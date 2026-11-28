@@ -18,7 +18,7 @@ impl OrbitRuntime {
         &self,
     ) -> Result<Vec<ExternalMergeSettlement>, OrbitError> {
         self.ensure_coordination_task_write_permitted()?;
-        let carried = self.live_leaf_task_ids()?;
+        let carried = crate::app::port::TaskWorkspaceAuto(self).live_leaf_task_ids()?;
         let mut candidates = Vec::new();
         let mut claims_cache = None;
         for status in SETTLEABLE_STATUSES {
@@ -78,7 +78,7 @@ impl OrbitRuntime {
         actor: Option<&str>,
     ) -> Result<ExternalMergeSettlement, OrbitError> {
         self.ensure_coordination_task_write_permitted()?;
-        let carried = self.live_leaf_task_ids()?;
+        let carried = crate::app::port::TaskWorkspaceAuto(self).live_leaf_task_ids()?;
         let task = self.get_task(id)?;
         let candidate = self
             .settlement_candidate(task, &carried)

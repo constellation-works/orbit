@@ -137,10 +137,14 @@ impl Fixture {
 
     /// `task`'s entry in `orbit run readiness --json`.
     fn readiness(&self, task: &str) -> Value {
-        let readiness = self
-            .runtime
-            .workspace_auto_readiness(&[], None, 50, &[])
-            .unwrap();
+        let readiness = orbit_core::unit::workspace_auto::workspace_auto_readiness(
+            &self.runtime,
+            &[],
+            None,
+            50,
+            &[],
+        )
+        .unwrap();
         readiness["tasks"]
             .as_array()
             .unwrap()
@@ -253,10 +257,9 @@ fn an_empty_budget_window_reports_positive_zero() {
     assert!(description.contains("0%"), "{description}");
     assert!(!description.contains("-0%"), "{description}");
 
-    let readiness = fx
-        .runtime
-        .workspace_auto_readiness(&[], None, 50, &[])
-        .unwrap();
+    let readiness =
+        orbit_core::unit::workspace_auto::workspace_auto_readiness(&fx.runtime, &[], None, 50, &[])
+            .unwrap();
     let json_reading = readiness["provider_limits"]
         .as_array()
         .unwrap()

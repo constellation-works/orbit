@@ -18,29 +18,47 @@ pub(crate) use super::resident::TaskPort as TaskResident;
 pub(crate) use super::routine::ResidentRoutineStatus;
 use crate::app::resident::ResidentRoutineStatusPort;
 use crate::app::{agent, codebase};
-use crate::application::automation::AutomationAutoTaskPort;
+use crate::application::automation::{AutomationAutoTaskPort, AutomationBoardPort};
 use crate::application::distributed::{DistributedAutoTaskPort, DistributedExperimentPort};
-use crate::application::job::{JobAutoTaskPort, JobExperimentPort};
+use crate::application::job::{
+    JobAutoConcurrencyPort, JobAutoTaskPort, JobDrainLeafPort, JobExperimentPort,
+};
 use crate::application::review::{ReviewCandidateSizePort, ReviewLandingDispatchPort};
 use crate::application::tag_instructions::TagInstructionExperimentPort;
 use crate::application::task::{
     TaskCodebasePort, TaskCorpusPort, TaskEvolutionPort, TaskExperimentPort, TaskNoticePort,
-    TaskResidentPort, TaskSweepFilingPort,
+    TaskResidentPort, TaskSweepFilingPort, TaskWorkspaceAutoPort,
 };
 use crate::unit::landing;
 pub(crate) use crate::unit::landing::ReviewPort as ReviewLandingDispatch;
 pub(crate) use crate::unit::sweep_filing::TaskPort as TaskSweepFiling;
+pub(crate) use crate::unit::workspace_auto::{
+    AutomationPort as AutomationBoard, DrainLeafPort as JobDrainLeaf,
+    JobPort as JobAutoConcurrency, TaskPort as TaskWorkspaceAuto,
+};
 
 const _: () = {
     const fn binds_task_evolution<T: TaskEvolutionPort>() {}
     const fn binds_task_notice<T: TaskNoticePort>() {}
     const fn binds_task_resident<T: TaskResidentPort>() {}
     const fn binds_task_sweep_filing<T: TaskSweepFilingPort>() {}
+    const fn binds_task_workspace_auto<T: TaskWorkspaceAutoPort>() {}
 
     binds_task_evolution::<TaskEvolution<'_>>();
     binds_task_notice::<TaskNotice<'_>>();
     binds_task_resident::<TaskResident<'_>>();
     binds_task_sweep_filing::<TaskSweepFiling<'_>>();
+    binds_task_workspace_auto::<TaskWorkspaceAuto<'_>>();
+};
+
+const _: () = {
+    const fn binds_automation_board<T: AutomationBoardPort>() {}
+    const fn binds_job_auto_concurrency<T: JobAutoConcurrencyPort>() {}
+    const fn binds_job_drain_leaf<T: JobDrainLeafPort>() {}
+
+    binds_automation_board::<AutomationBoard<'_>>();
+    binds_job_auto_concurrency::<JobAutoConcurrency<'_>>();
+    binds_job_drain_leaf::<JobDrainLeaf<'_>>();
 };
 
 const _: () = {

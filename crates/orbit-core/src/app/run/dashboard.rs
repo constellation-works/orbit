@@ -118,10 +118,10 @@ dashboard_reads! {
         |rt| rt.run_state_stamp(run_id);
     /// The keys whose change means an executor's readiness changed.
     executor_readiness_keys() -> Vec<String> = "executor-readiness-keys",
-        |rt| rt.executor_readiness_change_keys();
+        |rt| crate::unit::workspace_auto::executor_readiness_change_keys(rt);
     /// The phase of the workspace's drain.
     drain_phase() -> &'static str = "drain-phase",
-        |rt| rt.workspace_drain_phase();
+        |rt| crate::unit::workspace_auto::workspace_drain_phase(rt);
 }
 
 dashboard_reads! {
@@ -320,7 +320,7 @@ dashboard_reads! {
     /// The forecast's accuracy over a selection, reported at `report_at`.
     forecast_accuracy(selection: AccuracySelection, report_at: DateTime<Utc>) -> ForecastAccuracy
         = "forecast-accuracy",
-        |rt| rt.forecast_accuracy_selected(selection, report_at);
+        |rt| crate::unit::workspace_auto::forecast_accuracy_selected(rt, selection, report_at);
     /// The host's capacity, when it was probed.
     host_capacity() -> Option<HostCapacity> = "host-capacity",
         |rt| Ok(rt.host_capacity());
@@ -345,13 +345,13 @@ dashboard_reads! {
         |rt| crate::app::audit::audit_event_count(rt, since);
     /// The facts fleet readiness is judged from.
     fleet_readiness_facts() -> FleetReadinessFacts = "fleet-readiness-facts",
-        |rt| Ok(rt.fleet_readiness_facts());
+        |rt| Ok(crate::unit::workspace_auto::fleet_readiness_facts(rt));
     /// This workspace's fleet readiness under `facts`, and the machine that
     /// owns it when this checkout is a replica.
     fleet_readiness(facts: &'a FleetReadinessFacts) -> (Result<Value, OrbitError>, Option<String>)
         = "fleet-readiness",
         |rt| Ok((
-            rt.workspace_fleet_readiness(facts),
+            crate::unit::workspace_auto::workspace_fleet_readiness(rt, facts),
             rt.replica_owner_machine().map(str::to_string),
         ));
     /// Whether the workspace grants leases.

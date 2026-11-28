@@ -5,9 +5,9 @@
 //! a leaf hands a task to its child before the task records the child's
 //! run. `workspace_auto` owns the leaf runs, and it also drives task writes,
 //! so a direct call from here would close a cycle. This port is the way in:
-//! `workspace_auto` implements it on [`OrbitRuntime`](crate::OrbitRuntime),
-//! so composing the runtime binds it. `admission`'s backlog listing, which
-//! `workspace_auto` also drives, reads the same tasks through it
+//! `unit::workspace_auto` implements it on its runtime-backed `TaskPort`,
+//! bound in `app::port`. `admission`'s backlog listing, which
+//! `unit::workspace_auto` also drives, reads the same tasks through it
 //! [ORB-17939].
 
 use std::collections::BTreeSet;
@@ -15,8 +15,8 @@ use std::collections::BTreeSet;
 use orbit_common::OrbitError;
 
 /// The drain read task and admission code call, implemented by
-/// `workspace_auto`.
-pub(in crate::application) trait TaskWorkspaceAutoPort {
+/// `unit::workspace_auto`.
+pub(crate) trait TaskWorkspaceAutoPort {
     /// The IDs of the tasks live `run auto` leaf runs carry.
     fn live_leaf_task_ids(&self) -> Result<BTreeSet<String>, OrbitError>;
 }

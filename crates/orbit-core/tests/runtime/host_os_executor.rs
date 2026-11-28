@@ -241,7 +241,9 @@ fn a_linux_host_waits_on_a_muse_crew_and_a_macos_host_admits_it() {
     assert_eq!(waiting.reason.as_deref(), Some("host_os_mismatch"));
     assert_eq!(waiting.detail.as_deref(), Some(WAIT));
 
-    let readiness = linux.workspace_auto_readiness(&[], None, 50, &[]).unwrap();
+    let readiness =
+        orbit_core::unit::workspace_auto::workspace_auto_readiness(&linux, &[], None, 50, &[])
+            .unwrap();
     let entry = readiness["tasks"]
         .as_array()
         .unwrap()
@@ -626,7 +628,14 @@ fn an_excluded_default_crew_is_not_pinned() {
                 .host_os_backlog_warning()
                 .expect("the drain explains its wait");
             assert!(warning.contains(WAIT), "{warning}");
-            let readiness = linux.workspace_auto_readiness(&[], None, 50, &[]).unwrap();
+            let readiness = orbit_core::unit::workspace_auto::workspace_auto_readiness(
+                &linux,
+                &[],
+                None,
+                50,
+                &[],
+            )
+            .unwrap();
             let entry = readiness["tasks"]
                 .as_array()
                 .unwrap()
@@ -1031,9 +1040,14 @@ fn a_linux_owner_with_a_macos_follower_draws_the_macos_only_crew() {
         (MAC.to_string(), HostOs::Macos),
         (STALE.to_string(), HostOs::Macos),
     ]);
-    let readiness = fleet_owner
-        .workspace_auto_readiness(&[drawn.id.clone(), dependent.id.clone()], None, 50, &[])
-        .unwrap();
+    let readiness = orbit_core::unit::workspace_auto::workspace_auto_readiness(
+        &fleet_owner,
+        &[drawn.id.clone(), dependent.id.clone()],
+        None,
+        50,
+        &[],
+    )
+    .unwrap();
     let entry = |id: &str| {
         readiness["tasks"]
             .as_array()
@@ -1055,9 +1069,14 @@ fn a_linux_owner_with_a_macos_follower_draws_the_macos_only_crew() {
         "{dependent}"
     );
     assert_eq!(dependent["host_fleet"], fleet, "{dependent}");
-    let unregistered = linux
-        .workspace_auto_readiness(std::slice::from_ref(&drawn.id), None, 50, &[])
-        .unwrap();
+    let unregistered = orbit_core::unit::workspace_auto::workspace_auto_readiness(
+        &linux,
+        std::slice::from_ref(&drawn.id),
+        None,
+        50,
+        &[],
+    )
+    .unwrap();
     assert_eq!(
         unregistered["tasks"][0]["host_fleet"], "no registered host runs macos",
         "{unregistered}"
@@ -1088,9 +1107,14 @@ fn unreadable_claims_do_not_report_registered_hosts_as_not_pulling() {
     assert!(owner.inspect_execution_claims().is_err());
     assert_eq!(owner.serving_host_oses(), BTreeSet::from([HostOs::Linux]));
 
-    let readiness = owner
-        .workspace_auto_readiness(std::slice::from_ref(&task.id), None, 50, &[])
-        .unwrap();
+    let readiness = orbit_core::unit::workspace_auto::workspace_auto_readiness(
+        &owner,
+        std::slice::from_ref(&task.id),
+        None,
+        50,
+        &[],
+    )
+    .unwrap();
     let waiting = &readiness["tasks"][0];
     assert_eq!(waiting["task_id"], task.id, "{readiness}");
     assert_eq!(waiting["reason"], "host_os_mismatch", "{waiting}");

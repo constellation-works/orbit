@@ -75,7 +75,8 @@ impl OrbitRuntime {
 
         match (source, profile) {
             (AutoDrainSubmissionSource::Local, AutoDrainSubmissionProfile::Cli) => {
-                auto_concurrency = self.captured_auto_concurrency(&invoke.run_id)?;
+                auto_concurrency = crate::app::port::JobAutoConcurrency(self)
+                    .captured_auto_concurrency(&invoke.run_id)?;
             }
             (AutoDrainSubmissionSource::Local, AutoDrainSubmissionProfile::Tool) => {
                 review = self
@@ -85,7 +86,8 @@ impl OrbitRuntime {
                         Value::Null,
                         crate::application::contracts::review_layer_json,
                     );
-                auto_concurrency = self.captured_auto_concurrency(&invoke.run_id)?;
+                auto_concurrency = crate::app::port::JobAutoConcurrency(self)
+                    .captured_auto_concurrency(&invoke.run_id)?;
                 let run = self.show_job_run_observed(&invoke.run_id)?;
                 completion = recorded_auto_drain_completion(&run);
                 approve_proposed = recorded_auto_drain_flag(&run, "approve_proposed");
@@ -97,7 +99,8 @@ impl OrbitRuntime {
                 completion = recorded_auto_drain_completion(&run);
                 approve_proposed = recorded_auto_drain_flag(&run, "approve_proposed");
                 auto_fix = recorded_auto_drain_flag(&run, "auto_fix");
-                auto_concurrency = self.captured_auto_concurrency(&invoke.run_id)?;
+                auto_concurrency = crate::app::port::JobAutoConcurrency(self)
+                    .captured_auto_concurrency(&invoke.run_id)?;
                 review = self
                     .captured_review_admission(&invoke.run_id)?
                     .as_ref()

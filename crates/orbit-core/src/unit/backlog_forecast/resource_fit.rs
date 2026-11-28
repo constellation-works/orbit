@@ -44,7 +44,7 @@ pub(super) fn resource_fit_inputs(
     now: DateTime<Utc>,
 ) -> Result<ResourceFitInputs, OrbitError> {
     let settings = runtime.auto_concurrency_settings();
-    let (mode, mode_source) = runtime.drain_auto_concurrency_mode()?;
+    let (mode, mode_source) = crate::unit::workspace_auto::drain_auto_concurrency_mode(runtime)?;
     let mut report = json!({
         "status": mode.as_str(),
         "mode": mode.as_str(),

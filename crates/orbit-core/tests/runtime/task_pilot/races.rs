@@ -456,10 +456,14 @@ fn local_auto_ship_and_readiness_wait_for_an_active_pilot_checkpoint() {
         json!({"max_active_leaf_runs": 1}),
     );
     assert_eq!(wave["loose_task_ids"], json!([]), "{wave}");
-    let ready = workspace
-        .runtime
-        .workspace_auto_readiness(&[], None, 50, &[])
-        .unwrap();
+    let ready = orbit_core::unit::workspace_auto::workspace_auto_readiness(
+        &workspace.runtime,
+        &[],
+        None,
+        50,
+        &[],
+    )
+    .unwrap();
     assert_eq!(
         ready["tasks"][0]["reason"], "active_pilot_preparation",
         "{ready}"

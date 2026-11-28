@@ -165,12 +165,12 @@ fn list_backlog_tasks_impl(
         // with no footprint to the drain's rule: it waits for its pilot, or
         // goes alone. Other live leaves carrying tasks are the work in flight;
         // this run carries none yet.
-        let live_tasks = runtime.live_leaf_task_ids().map_err(|error| {
-            DispatchError::DeterministicActionFailed {
+        let live_tasks = crate::app::port::TaskWorkspaceAuto(runtime)
+            .live_leaf_task_ids()
+            .map_err(|error| DispatchError::DeterministicActionFailed {
                 action: action.to_string(),
                 message: format!("list live leaf runs: {error}"),
-            }
-        })?;
+            })?;
         snapshot
             .include_tasks(runtime, &live_tasks, false)
             .map_err(|error| DispatchError::DeterministicActionFailed {

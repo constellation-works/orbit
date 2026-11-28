@@ -151,10 +151,14 @@ fn settle_claim(fixture: &mut Fixture, command: &str, sources: &[&str]) -> Strin
 
 /// The admission snapshot's entry for the fixture's task.
 fn readiness(fixture: &Fixture) -> Value {
-    let readiness = fixture
-        .runtime
-        .workspace_auto_readiness(&[], None, 50, &[])
-        .unwrap();
+    let readiness = orbit_core::unit::workspace_auto::workspace_auto_readiness(
+        &fixture.runtime,
+        &[],
+        None,
+        50,
+        &[],
+    )
+    .unwrap();
     readiness["tasks"]
         .as_array()
         .unwrap()

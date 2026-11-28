@@ -5,7 +5,7 @@
 //! workspace auto-drain, pull drain and pipeline actions call
 //! `unit::sweep_filing`, `application::task::pilot`,
 //! `application::task::blocked_recovery::steps`, `application::admission`,
-//! `application::workspace_auto`, `application::pull_drain` and
+//! `unit::workspace_auto`, `application::pull_drain` and
 //! `application::job::pipeline_actions`. What stays here is engine transport:
 //! `pipeline_actions` dispatches child Jobs and waits on them through
 //! `child_dispatch`, and `pull` keeps the pull drain's owner transport and

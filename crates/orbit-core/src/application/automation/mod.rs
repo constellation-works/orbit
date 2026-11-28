@@ -33,7 +33,7 @@ pub(crate) use after_landing::review_crew_overrides_definition;
 pub use after_landing::{AfterLandingHealth, AfterLandingSource};
 pub(crate) use after_landing::{after_landing_health, after_landing_switch};
 pub(crate) use auto_task_port::AutomationAutoTaskPort;
-pub(in crate::application) use board_port::AutomationBoardPort;
+pub(crate) use board_port::AutomationBoardPort;
 pub use condition::{
     ConditionChainLink, ConditionEnablePreview, ConditionFireView, ConditionListing,
     ConditionStallCleared, ConditionStatus,

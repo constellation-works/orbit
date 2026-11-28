@@ -100,7 +100,10 @@ impl OrbitRuntime {
         landing: &MergedPullRequest,
     ) -> Result<(), OrbitError> {
         let id = task.id.as_str();
-        if self.live_leaf_task_ids()?.contains(id) {
+        if crate::app::port::TaskWorkspaceAuto(self)
+            .live_leaf_task_ids()?
+            .contains(id)
+        {
             return Err(refused(
                 id,
                 "a live owner drain leaf still carries this task",

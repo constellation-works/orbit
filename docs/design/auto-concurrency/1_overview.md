@@ -139,7 +139,7 @@ alongside the original implementation work; source links follow the current
 | Resource profiles and `orbit run profiles` | [host/resource/profile/](../../../crates/orbit-runtime/src/host/resource/profile/mod.rs), [run/profiles.rs](../../../crates/orbit-cli/src/command/run/profiles.rs) | ORB-15770 |
 | Analytics › Resources: profile charts in the dashboard | [api/resource_profiles.rs](../../../crates/orbit-web/src/api/resource_profiles.rs), [js/resources.js](../../../crates/orbit-web/assets/dashboard/js/resources.js) | ORB-16616 |
 | Host-load forecast and admission reservations | [host/resource/forecast/](../../../crates/orbit-runtime/src/host/resource/forecast/mod.rs), [admission_load.rs](../../../crates/orbit-store/src/repository/admission_load.rs) | ORB-15771 |
-| Gap-fit admission in local drains | [workspace_auto/classify/](../../../crates/orbit-core/src/application/workspace_auto/classify/mod.rs), [admission/gap_fit.rs](../../../crates/orbit-core/src/application/admission/gap_fit.rs) | ORB-15772 |
+| Gap-fit admission in local drains | [workspace_auto/classify/](../../../crates/orbit-core/src/unit/workspace_auto/classify/mod.rs), [admission/gap_fit.rs](../../../crates/orbit-core/src/application/admission/gap_fit.rs) | ORB-15772 |
 | Forecast admission for pull drains | [pull_drain/refill/request.rs](../../../crates/orbit-core/src/application/pull_drain/refill/request.rs), [distributed/work_fit.rs](../../../crates/orbit-core/src/application/distributed/work_fit.rs) | ORB-15774 |
 | Host-only `[machine.auto_concurrency]` settings | [settings/machine.rs](../../../crates/orbit-config/src/registry/settings/machine.rs) | ORB-15769 |
 | Admission reasons in drain state, `orbit run show`, and readiness | [run/state/drain/mod.rs](../../../crates/orbit-types/src/workflow/run/state/drain/mod.rs), [run/admission_forecast.rs](../../../crates/orbit-cli/src/command/run/admission_forecast.rs) | ORB-15773 |
@@ -148,7 +148,7 @@ alongside the original implementation work; source links follow the current
 | Native macOS worker CPU-unit calibration and provenance | [worker/usage/tree.rs](../../../crates/orbit-core/src/application/job/pipeline/worker/usage/tree.rs) | ORB-15994 |
 | Native macOS host CPU and memory measurements | [host/resource/usage.rs](../../../crates/orbit-runtime/src/host/resource/usage.rs), [host/resource/platform.rs](../../../crates/orbit-runtime/src/host/resource/platform.rs) | ORB-15980 |
 | Protected-head starvation signal and friction | [admission/gap_fit.rs](../../../crates/orbit-core/src/application/admission/gap_fit.rs), [admission/stuck_head.rs](../../../crates/orbit-core/src/application/admission/stuck_head.rs) | ORB-15894 |
-| Threshold-one retry deduplication repair | [admission/stuck_head.rs](../../../crates/orbit-core/src/application/admission/stuck_head.rs), [workspace_auto/classify/](../../../crates/orbit-core/src/application/workspace_auto/classify/mod.rs) | ORB-16014 |
+| Threshold-one retry deduplication repair | [admission/stuck_head.rs](../../../crates/orbit-core/src/application/admission/stuck_head.rs), [workspace_auto/classify/](../../../crates/orbit-core/src/unit/workspace_auto/classify/mod.rs) | ORB-16014 |
 
 ## Per-drain control
 

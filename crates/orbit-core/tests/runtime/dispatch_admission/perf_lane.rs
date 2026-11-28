@@ -60,9 +60,9 @@ fn a_second_perf_task_waits_for_the_perf_lane_instead_of_taking_a_slot() {
         "{detail}"
     );
 
-    let readiness = runtime
-        .workspace_auto_readiness(&[], Some(4), 50, &[])
-        .unwrap();
+    let readiness =
+        orbit_core::unit::workspace_auto::workspace_auto_readiness(&runtime, &[], Some(4), 50, &[])
+            .unwrap();
     let entry = readiness_task(&readiness, &waiting);
     assert_eq!(entry["reason"], "perf_lane_busy", "{entry}");
     assert_ne!(entry["eligible"], true, "{entry}");
@@ -126,9 +126,9 @@ fn a_perf_task_waiting_on_the_lane_reports_it_when_no_slot_is_free() {
     )
     .id;
 
-    let readiness = runtime
-        .workspace_auto_readiness(&[], Some(1), 50, &[])
-        .unwrap();
+    let readiness =
+        orbit_core::unit::workspace_auto::workspace_auto_readiness(&runtime, &[], Some(1), 50, &[])
+            .unwrap();
     let entry = readiness_task(&readiness, &waiting);
     assert_eq!(entry["reason"], "perf_lane_busy", "{entry}");
     assert_ne!(entry["eligible"], true, "{entry}");

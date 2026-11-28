@@ -8,9 +8,13 @@ use super::drains::read_live_leaf_runs;
 use crate::OrbitRuntime;
 use crate::application::task::TaskWorkspaceAutoPort;
 
-impl TaskWorkspaceAutoPort for OrbitRuntime {
+/// Adapter binding [`TaskWorkspaceAutoPort`] to workspace auto's live leaf
+/// reads.
+pub(crate) struct TaskPort<'a>(pub(crate) &'a OrbitRuntime);
+
+impl TaskWorkspaceAutoPort for TaskPort<'_> {
     fn live_leaf_task_ids(&self) -> Result<BTreeSet<String>, OrbitError> {
-        Ok(read_live_leaf_runs(self)?
+        Ok(read_live_leaf_runs(self.0)?
             .into_iter()
             .flat_map(|run| run.task_ids)
             .collect())

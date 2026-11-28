@@ -589,9 +589,14 @@ impl Fixture {
 
     /// The workspace's out-of-run auto-fix readiness, with every task's entry.
     pub(in super::super) fn readiness(&self) -> Value {
-        self.runtime
-            .workspace_auto_readiness(&[], None, 10, &[])
-            .unwrap()
+        orbit_core::unit::workspace_auto::workspace_auto_readiness(
+            &self.runtime,
+            &[],
+            None,
+            10,
+            &[],
+        )
+        .unwrap()
     }
 
     /// The single-task Fix PR readiness of `task`.

@@ -311,7 +311,7 @@ fn board_facts(
     let count_of = |status: TaskStatus| by_status.get(&serde_name(&status)).copied();
     let board = &reads.board;
     let eligible = if board.contains("eligible") {
-        match runtime.eligible_task_ids() {
+        match crate::app::port::AutomationBoard(runtime).eligible_task_ids() {
             Ok(ids) => Some(
                 i64::try_from(ids.iter().filter(|id| !own_tasks.contains(*id)).count())
                     .unwrap_or(i64::MAX),
@@ -365,7 +365,7 @@ fn open_runs(runtime: &OrbitRuntime) -> Result<(i64, bool), OrbitError> {
         })?;
     Ok((
         i64::try_from(runs.len()).unwrap_or(i64::MAX),
-        runtime.local_drain_running()?,
+        crate::app::port::AutomationBoard(runtime).local_drain_running()?,
     ))
 }
 

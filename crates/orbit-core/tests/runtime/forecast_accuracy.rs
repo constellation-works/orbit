@@ -92,9 +92,12 @@ fn unfinished_minutes_stay_pending_and_only_mature_measurements_form_pairs() {
         .resource_usage()
         .host_minutes(selection.since)
         .unwrap();
-    let report = runtime
-        .forecast_accuracy_selected(selection.clone(), report_at)
-        .unwrap();
+    let report = orbit_core::unit::workspace_auto::forecast_accuracy_selected(
+        &runtime,
+        selection.clone(),
+        report_at,
+    )
+    .unwrap();
     assert_eq!(report.report_at, report_at);
     assert_eq!(report.forecasts, 16);
     assert_eq!(report.pairs.len(), 4);
@@ -130,9 +133,12 @@ fn unfinished_minutes_stay_pending_and_only_mature_measurements_form_pairs() {
     );
 
     // Exactly at the end boundary the partial minute becomes an error pair.
-    let matured = runtime
-        .forecast_accuracy_selected(selection.clone(), minute + Duration::minutes(1))
-        .unwrap();
+    let matured = orbit_core::unit::workspace_auto::forecast_accuracy_selected(
+        &runtime,
+        selection.clone(),
+        minute + Duration::minutes(1),
+    )
+    .unwrap();
     for offset in &matured.offsets {
         assert_eq!((offset.paired, offset.pending, offset.missing), (2, 1, 1));
         assert_eq!((offset.unsampled, offset.partial, offset.gap), (1, 0, 0));
@@ -141,9 +147,12 @@ fn unfinished_minutes_stay_pending_and_only_mature_measurements_form_pairs() {
         assert_eq!(offset.cpu.mean_error, Some(-44.0));
     }
     // Once the future minute ends without a row, it moves from pending to missing.
-    let missing = runtime
-        .forecast_accuracy_selected(selection.clone(), minute + Duration::minutes(6))
-        .unwrap();
+    let missing = orbit_core::unit::workspace_auto::forecast_accuracy_selected(
+        &runtime,
+        selection.clone(),
+        minute + Duration::minutes(6),
+    )
+    .unwrap();
     for offset in &missing.offsets {
         assert_eq!((offset.paired, offset.pending, offset.missing), (2, 0, 2));
         assert_eq!((offset.unsampled, offset.partial, offset.gap), (2, 0, 0));
@@ -152,9 +161,9 @@ fn unfinished_minutes_stay_pending_and_only_mature_measurements_form_pairs() {
     }
     let mut empty = selection.clone();
     empty.drain = Some("jrun-absent".into());
-    let empty = runtime
-        .forecast_accuracy_selected(empty, report_at)
-        .unwrap();
+    let empty =
+        orbit_core::unit::workspace_auto::forecast_accuracy_selected(&runtime, empty, report_at)
+            .unwrap();
     assert_eq!(empty.forecasts, 0);
     assert!(empty.pairs.is_empty() && empty.drains.is_empty());
     for offset in empty.offsets {
@@ -253,9 +262,12 @@ fn default_selection_reads_the_newest_forecasts_after_a_break() {
             .unwrap();
     }
 
-    let latest = runtime
-        .forecast_accuracy_selected(AccuracySelection::latest(), report_at)
-        .unwrap();
+    let latest = orbit_core::unit::workspace_auto::forecast_accuracy_selected(
+        &runtime,
+        AccuracySelection::latest(),
+        report_at,
+    )
+    .unwrap();
     assert_eq!(latest.forecasts, 2, "the break must not empty the report");
     assert_eq!(latest.pairs.len(), 2);
     assert_eq!(
@@ -264,18 +276,21 @@ fn default_selection_reads_the_newest_forecasts_after_a_break() {
         "the effective selection reaches back to the oldest forecast it read"
     );
 
-    let last_one = runtime
-        .forecast_accuracy_selected(AccuracySelection::last(1), report_at)
-        .unwrap();
+    let last_one = orbit_core::unit::workspace_auto::forecast_accuracy_selected(
+        &runtime,
+        AccuracySelection::last(1),
+        report_at,
+    )
+    .unwrap();
     assert_eq!(last_one.forecasts, 1);
     assert_eq!(last_one.pairs[0].run_id, "jrun-newest");
 
-    let calendar = runtime
-        .forecast_accuracy_selected(
-            AccuracySelection::since(report_at - Duration::days(30)),
-            report_at,
-        )
-        .unwrap();
+    let calendar = orbit_core::unit::workspace_auto::forecast_accuracy_selected(
+        &runtime,
+        AccuracySelection::since(report_at - Duration::days(30)),
+        report_at,
+    )
+    .unwrap();
     assert_eq!(calendar.forecasts, 0, "a time window still selects by time");
 }
 
@@ -364,9 +379,12 @@ fn gc_retained_forecast_excludes_missing_worker_attribution() {
         })
         .unwrap();
     let report = || {
-        runtime
-            .forecast_accuracy_selected(AccuracySelection::latest(), Utc::now())
-            .unwrap()
+        orbit_core::unit::workspace_auto::forecast_accuracy_selected(
+            &runtime,
+            AccuracySelection::latest(),
+            Utc::now(),
+        )
+        .unwrap()
     };
     let before = report();
     assert_eq!(before.pairs[0].attributed_cpu_cores, Some(5.0));

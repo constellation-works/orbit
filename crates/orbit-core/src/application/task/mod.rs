@@ -200,7 +200,7 @@ pub(crate) use sweep_filing_port::{
 pub use transient_infra::TransientInfraBlockedTask;
 pub use transitions::{InfraBlockedTask, TaskStartRequest};
 pub(crate) use validation_tools::positive_validation_tools;
-pub(in crate::application) use workspace_auto_port::TaskWorkspaceAutoPort;
+pub(crate) use workspace_auto_port::TaskWorkspaceAutoPort;
 pub use write_response::{
     DashboardPageReads, TaskWriteMetadata, TaskWriteResponsePolicy, active_task_triage_map,
     job_run_is_locally_navigable, link_pull_requests, mark_readiness_preparing,

@@ -177,8 +177,7 @@ fn configured_runtime(config: &str, files: &[&str]) -> (TempDir, OrbitRuntime, A
 /// The readiness view dispatch and ship share: no explicit tasks, the default
 /// page, and no tag filter.
 fn default_readiness(runtime: &OrbitRuntime) -> Value {
-    runtime
-        .workspace_auto_readiness(&[], None, 50, &[])
+    orbit_core::unit::workspace_auto::workspace_auto_readiness(runtime, &[], None, 50, &[])
         .expect("workspace auto readiness")
 }
 

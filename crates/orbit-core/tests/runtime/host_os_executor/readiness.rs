@@ -70,9 +70,14 @@ fn mixed_host_lock_readiness() {
                 (chrono::Utc::now() - chrono::Duration::seconds(age)).to_rfc3339()]).unwrap();
     };
     let read = || {
-        owner
-            .workspace_auto_readiness(std::slice::from_ref(&waiting.id), None, 50, &[])
-            .unwrap()["tasks"][0]
+        orbit_core::unit::workspace_auto::workspace_auto_readiness(
+            &owner,
+            std::slice::from_ref(&waiting.id),
+            None,
+            50,
+            &[],
+        )
+        .unwrap()["tasks"][0]
             .clone()
     };
     let missing = read();
