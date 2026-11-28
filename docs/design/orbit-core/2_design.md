@@ -29,8 +29,9 @@ described in the opening of [1_overview.md](./1_overview.md) and its
 
 ## 2. Store access boundary
 
-How Core code reaches `orbit-store` backends through `OrbitStores` and owning backend
-traits is [1_overview.md §4](./1_overview.md#4-store-access-boundary).
+Core reaches `orbit-store` through the concrete stores and repositories held by
+`OrbitStores`. See [overview §4](./1_overview.md#4-store-access-boundary) for
+the current access boundary.
 
 ## 3. Application-internal layering
 
