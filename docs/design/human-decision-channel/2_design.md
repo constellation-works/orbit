@@ -1176,9 +1176,18 @@ superseding every plugin request. The reverse holds too: a generic approval rais
 plugin request is open never supersedes that request. All open plugin subjects remain
 individually answerable.
 
+The handler in this section, including the allowlist check and generic-approval
+retirement, is registered only by the live-raise slice (§12.11). Earlier slices leave
+`orbit.decision.plugin_raise` unregistered. Digest selection stays in
+`crates/orbit-core/src/application/task/decision_channel/digest.rs`, and approval
+answers stay in
+`crates/orbit-core/src/application/task/decision/answering/record.rs`.
+
 ### 12.4 The apply step
 
-Answering a `plugin_request` uses the existing entry points and their checks unchanged:
+This path ships in slice 3 (§12.11). Until the live-raise slice, production writes no
+`plugin_request`, so a fixture reaches it only by planting a request. Answering then
+uses the existing entry points and their checks unchanged:
 
 - **CLI (`orbit decision answer`):** `answer_decision_request_as_human`
   (`crates/orbit-core/src/application/task/decision/answering/record.rs`) refuses
@@ -1276,7 +1285,10 @@ plugin protocol (`host_api`) does not change.
 **Distribution presets.** Just as [workspace presets](../distributions/2_design.md#workspace-presets)
 refuse plugin permissions and plugin enablement, a preset MUST NOT declare or grant
 `apply-tool` allowlist entries. A distribution's installer asks the operator to run
-`orbit decision apply-tool allow <ns>.<verb>` explicitly alongside `orbit plugin enable`.
+`orbit decision apply-tool allow <ns>.<verb>` explicitly alongside `orbit plugin enable`,
+and only after the live-raise slice has shipped (§12.11). The store and these commands
+ship earlier. Until that slice, a persisted entry admits nothing: no plugin request is
+written, and ordinary approvals are unchanged.
 
 ### 12.6 Auto-answer policy: human-only (`authority` tier)
 
@@ -1390,7 +1402,9 @@ rules (all within `host_api: 1`, with no core knowledge of the plugin's schema):
    `answered_by`, `via`, optional `note`).
 2. **Raise permission.** Add `orbit.decision.plugin_raise` to `permissions.orbit_tools`
    in `plugin.yaml`, and document `orbit decision apply-tool allow <ns>.<verb>` in the
-   distribution's install consent flow (§12.5).
+   distribution's install consent flow (§12.5). That install step waits until the
+   live-raise slice has shipped (§12.11). An earlier allowlist command is not part of
+   the install flow.
 3. **Deterministic revision check.** Compute `revision` as a digest over the exact
    object state the decision commits to. Recompute it under the plugin's own write lock
    when the apply tool runs and refuse before writing if it changed.
@@ -1422,63 +1436,107 @@ closed investigation task.
 
 ### 12.11 Implementation slices
 
-Ordered. Each is shippable alone and inert until an operator allowlists a plugin apply
-tool and a plugin raises a request.
+Ordered. Each slice is shippable alone. [ORB-29944] puts persisted consent and a
+working human answer ahead of any live raise, so a plugin request cannot displace an
+answerable hold before a human can answer it. Through slice 3, plugin raises and
+generic-approval suppression stay inert. Slice 4 is the first slice in which a
+fixture can raise an accepted request with persisted operator consent through the
+intended entry point, `orbit.decision.plugin_raise`. That boundary already includes
+consent (slice 2) and a working human answer (slice 3).
 
-1. **Record, binding, raise and attention folding.** `orbit-types`:
+1. **Record, binding and attention folding (inert).** `orbit-types`:
    `DecisionGate::PluginRequest`, `DecisionBinding::PluginObject`, `PluginApply`, the
-   `authority` tier arm. `orbit-common`: the governed row and `plugin_request` operation
-   spec. `orbit-tools`: stamp the spawning caller's writer label into the callback
-   session record. `orbit-core`: `orbit.decision.plugin_raise` (§12.3 checks, holder
-   task, bounds, supersession, withdraw), digest and `--approve-proposed` drain
-   exclusion, `orbit attention` folding and the `plugin_request` severity rule for
-   unfolded items (§12.8), and listing/show of the new fields. Acceptance: a
-   fixture plugin raises in both task form and holder form; an agent session, another
-   plugin's namespace, an `agent_callable: true` or `mcp_scope != none` tool are refused;
-   re-raise dedupes or supersedes by revision; withdrawal targets the original form;
-   an existing generic approval is superseded and its answer refused, while distinct
-   plugin subjects stay open and answerable; the digest and pilot-warning triage raise no
-   generic approval while one is open; digest and answer races honor the task lock; `orbit attention` folds task-form items and surfaces remaining requests and
-   holder-form items with these observable severities (fixture clock at the request's
-   `raised_at` plus the age shown; the folded subject item's severity is unchanged):
-   fresh with distant expiry `low`; age 24 hours `medium`; age 72 hours `high`; fresh with
-   `expires_at` within 6 hours `medium`; age 24 hours with expiry within 6 hours `high`; and, as the
-   contrast, a fresh `resident_authority` request with distant expiry `high`. Extend the existing decision-channel and raise
-   fixtures to cover these cases and the post-closure holder lifecycle.
-2. **Apply-tool allowlist.** `orbit-core` and `orbit-cli`: the host-local store
-   (`apply-tools.json`), `orbit decision apply-tool allow|revoke|list`, sandbox mask
-   beside the channel store, manifest-digest suspension on upgrade, and verification that
-   workspace presets reject any apply-tool consent keys (§12.5). Depends on: 1.
-3. **Two-phase apply and dashboard authorization.** `orbit-core`: the `plugin_request`
-   arm of `apply_decision_answer`, `decision_applied`, derived apply state, operator
-   ceiling callback session with `decision` provenance, precedent exclusion, and
-   `plugin_unavailable` / `host_not_owner` refusal codes. `orbit-web`: add the
+   `authority` tier arm. `orbit-tools`: stamp the spawning caller's writer label into
+   the callback session record. `orbit-core`: listing/show of the new fields, `orbit
+   attention` folding and the `plugin_request` severity rule for unfolded items
+   (§12.8). Do not register `orbit.decision.plugin_raise`, and do not add its governed
+   row. Do not change digest selection, `--approve-proposed`, or pilot-warning triage.
+   Ordinary approvals stay on
+   `crates/orbit-core/src/application/task/decision_channel/digest.rs` and
+   `crates/orbit-core/src/application/task/decision/answering/record.rs`. Acceptance:
+   fixtures construct a `plugin_request` record; they do not call a shipping raise.
+   Listing, the post-closure holder lifecycle, attention folding and these observable
+   severities hold (fixture clock at the request's `raised_at` plus the age shown; the
+   folded subject item's severity is unchanged): fresh with distant expiry `low`; age
+   24 hours `medium`; age 72 hours `high`; fresh with `expires_at` within 6 hours
+   `medium`; age 24 hours with expiry within 6 hours `high`; and, as the contrast, a
+   fresh `resident_authority` request with distant expiry `high`. The existing
+   decision-channel fixture
+   `the_digest_raises_one_proposed_approval_per_proposed_task_idempotently`
+   (`crates/orbit-core/tests/runtime/decision_channel.rs`) and the raise fixtures in
+   `crates/orbit-core/tests/runtime/decision_raise.rs` still pass unchanged. This slice
+   does not suppress them.
+2. **Apply-tool allowlist (persisted consent, still inert).** `orbit-core` and
+   `orbit-cli`: the host-local store (`apply-tools.json`), `orbit decision apply-tool
+   allow|revoke|list`, sandbox mask beside the channel store, manifest-digest
+   suspension on upgrade, and verification that workspace presets reject any
+   apply-tool consent keys (§12.5). Depends on: 1. Acceptance: an operator persists,
+   revokes and lists consent, and a preset that names apply-tool consent is refused.
+   `orbit.decision.plugin_raise` is still unregistered, so consent admits no request.
+   The digest fixture named in slice 1 still raises ordinary approvals.
+3. **Two-phase apply and dashboard authorization (answers, raises still inert).**
+   `orbit-common`: the `plugin_unavailable` and `host_not_owner` refusal codes.
+   `orbit-core`: the `plugin_request` arm of `apply_decision_answer`,
+   `decision_applied`, derived apply state, the operator-ceiling callback session with
+   `decision` provenance, and precedent exclusion. `orbit-web`: add the
    `DecisionGate::PluginRequest` operator-session authorization arm in
    `crates/orbit-web/src/api/decisions.rs` and render `apply_state` / `apply_code` /
-   `apply_summary` on the dashboard (§12.4). Depends on: 1, 2. Acceptance: CLI and
-   dashboard answers run the apply tool once with the reserved `decision` key; a non-
-   operator dashboard session is refused; plugin refusal and timeout record `failed` and
-   `unknown`; a revoked or digest-suspended tool refuses `plugin_unavailable` and writes
-   nothing; precedent and automation actors are refused.
-4. **Channel and mail (`orbit-decision-mail`).** `orbit.decision.submit` returns the
+   `apply_summary` on the dashboard (§12.4). Depends on: 1, 2. Acceptance: a fixture
+   plants a `plugin_request` and a persisted allowlist entry; it does not call a
+   shipping raise. CLI and dashboard answers then run the apply tool once with the
+   reserved `decision` key; a non-operator dashboard session is refused; plugin
+   refusal and timeout record `failed` and `unknown`; a revoked or digest-suspended
+   tool refuses `plugin_unavailable` and writes nothing; precedent and automation
+   actors are refused. Production still has no raise and no approval suppression.
+   Extend the answer coverage beside
+   `a_registered_channel_applies_an_answer_as_the_human_with_provenance` in
+   `crates/orbit-core/tests/runtime/decision_channel.rs` by planting the plugin
+   request on that path.
+4. **Live raise and approval suppression.** `orbit-common`: the governed row and
+   `plugin_request` operation spec. `orbit-core`: register
+   `orbit.decision.plugin_raise` (§12.3 checks, including the §12.5 allowlist, the
+   holder task, bounds, supersession and withdraw) and the digest and
+   `--approve-proposed` drain exclusion. Depends on: 1, 2, 3. This is the first slice
+   in which a fixture can raise an accepted request with persisted operator consent
+   through `orbit.decision.plugin_raise`. The same slice is the first that lets that
+   request displace a generic approval, and only because slice 2's consent and slice
+   3's human answer are already in the tree. Acceptance: extend
+   `crates/orbit-core/tests/runtime/decision_channel.rs` and
+   `crates/orbit-core/tests/runtime/decision_raise.rs`. A fixture plugin with a
+   persisted allowlist entry raises in both task form and holder form and the request
+   is stored; the same raise with no persisted entry is refused and writes nothing;
+   an agent session, another plugin's namespace, or an `agent_callable: true` or
+   `mcp_scope != none` tool is refused; re-raise dedupes or supersedes by revision;
+   withdrawal targets the original form; an existing generic approval is superseded
+   and its answer is refused, while distinct plugin subjects stay open and answerable
+   through the slice 3 CLI and dashboard paths; the digest and pilot-warning triage
+   raise no generic approval while one is open; digest and answer races honor the
+   task lock. Until this slice those suppression behaviors do not ship, and
+   `the_digest_raises_one_proposed_approval_per_proposed_task_idempotently` remains
+   the anchor that ordinary approvals still raise.
+5. **Channel and mail (`orbit-decision-mail`).** `orbit.decision.submit` returns the
    derived apply outcome, and `orbit-decision-mail` renders `plugin_request` items
-   (summary and answers, both single and digest) and reports the actual apply outcome in
-   confirmation and refusal mail (never saying "done" on `failed` or `unknown`). Depends
-   on: 3.
-5. **First distribution / plugin adoption (downstream repo, e.g. `orbit-research`).**
-   Adopt §12.10 in an Orbit-plane plugin (`mcp_scope: none` apply tool, revision check,
-   raise/withdraw, provenance) as end-to-end proof outside core. Depends on: 3.
+   (summary and answers, both single and digest) and reports the actual apply outcome
+   in confirmation and refusal mail (never saying "done" on `failed` or `unknown`).
+   Depends on: 4.
+6. **First distribution / plugin adoption (downstream repo, e.g. `orbit-research`).**
+   Adopt §12.10 in an Orbit-plane plugin (`mcp_scope: none` apply tool, revision
+   check, raise/withdraw, provenance) as end-to-end proof outside core. Depends on:
+   4, so adoption cannot raise until consent, a human answer and the live raise have
+   all shipped. Installers ask for apply-tool consent only after that slice
+   ([distributions](../distributions/2_design.md#how-a-distribution-installs)).
 
 ### 12.12 Compatibility
 
 - **Persisted enums.** `DecisionGate::PluginRequest` and
   `DecisionBinding::PluginObject` are new variants of closed, persisted serde enums, so
   they follow retain-don't-remove from their first release, like `ExecutionFailed` in
-  `StateTriggerKind`. A binary older than slice 1 that reads a `plugin_request` entry
-  fails to parse it, and `DecisionRequest::from_entry` returns `None`. The request is
-  then invisible to that binary and cannot be answered there. That fails closed, but it
-  is silent, so the release notes for slice 1 must say that mixed-version hosts do not
-  list plugin requests.
+  `StateTriggerKind`. Slice 1 adds the variants and does not write a `plugin_request`.
+  Slice 4 is the first production writer. A binary older than slice 1 that reads a
+  `plugin_request` entry fails to parse it, and `DecisionRequest::from_entry` returns
+  `None`. The request is then invisible to that binary and cannot be answered there.
+  That fails closed, but it is silent, so the release notes for slice 4 must say that
+  mixed-version hosts do not list plugin requests.
 - **History events.** `decision_applied` and the `apply` block on `decision_answered`
   are additive. Old readers ignore an unknown event, and `DecisionResolution` gains an
   optional field (`#[serde(default)]`).
@@ -1487,14 +1545,16 @@ tool and a plugin raises a request.
 - **Holder tasks** are ordinary `someday` tasks with a new tag (`plugin-request:<ns>`).
   No task schema changes.
 - **Refusal codes.** `plugin_unavailable` and `host_not_owner` are new codes on an
-  existing contract. A client that matches codes treats an unknown one as a refusal.
+  existing contract, added in slice 3. A client that matches codes treats an unknown
+  one as a refusal.
 - **Surfaces.** New tool, new CLI verbs and new optional output fields only; existing
   shapes stay byte-stable, within the 30-day window
   ([state-compatibility](../state-compatibility/4_decisions.md#compatibility-paths-expire-on-a-30-day-release-gated-window)).
   Plugin protocol (`host_api`): unchanged. The apply input's reserved key is a per-tool
   contract the plugin opts into by raising.
-- **Stores.** `apply-tools.json` is new, host-local and created on first allow. Its
-  absence means no tool is allowed, so every plugin request refuses
+- **Stores.** `apply-tools.json` is new, host-local and created on first allow (slice 2).
+  Its absence means no tool is allowed. Before slice 4 no raise is registered, so the
+  missing store has nothing to refuse. From slice 4, every plugin request refuses
   `plugin_unavailable` until an operator allows one.
 
 ### 12.13 Concerns & honest limitations
@@ -1522,6 +1582,7 @@ tool and a plugin raises a request.
 ## Task References
 
 - [ORB-22824] — initially designed plugin-raised decision requests with an apply callback (§12).
+- [ORB-29944] — orders persisted consent and a human answer ahead of any live plugin raise (§12.11).
 - [ORB-21835] — bounds decision-list scanning for the Tasks waiting count.
 - [ORB-21097] — implements category enablement, self-answer and the notification wait for precedent decisions.
 - [ORB-21092] — proposes model-answer provenance, the `model_answer_review` gate and veto.
