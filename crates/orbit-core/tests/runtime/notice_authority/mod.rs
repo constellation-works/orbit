@@ -1,10 +1,17 @@
 //! Fleet notice authority at the tool boundary: the poster class comes from
 //! the caller's session, never from input, and each class is held to its
 //! rights, caps and limits, with an audit row for every write and refusal.
+
+mod managed_run;
+
 mod posting;
 
 use std::path::Path;
 
+use managed_run::{
+    managed_pipeline_run_posts_and_closes_notices_as_agent,
+    managed_run_notice_authority_preserves_fail_closed_rejections,
+};
 use orbit_core::adapter::command::ToolEntryPoint;
 use orbit_core::application::task::TaskAddParams;
 use orbit_core::runtime::OrbitRuntime;
@@ -1379,4 +1386,6 @@ crate::scenario_table!(
     cross_workspace_linked_task_closes_on_read_and_in_the_closure_tick,
     attention_pages_home_notices,
     attention_lists_notices_under_a_registry_id_that_differs_from_the_store_id,
+    managed_pipeline_run_posts_and_closes_notices_as_agent,
+    managed_run_notice_authority_preserves_fail_closed_rejections,
 );
