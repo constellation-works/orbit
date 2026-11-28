@@ -248,7 +248,9 @@ impl PageServing {
             .confirmations
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
-        confirmations.retain(|_, held| held.issued.elapsed() < ACTION_CONFIRMATION_TTL);
+        let now = confirmation_now();
+        confirmations
+            .retain(|_, held| now.saturating_duration_since(held.issued) < ACTION_CONFIRMATION_TTL);
         if confirmations.len() >= ACTION_CONFIRMATION_LIMIT {
             return Err(ConfirmationRefused::Busy);
         }
@@ -256,7 +258,7 @@ impl PageServing {
             token.clone(),
             Confirmation {
                 binding,
-                issued: Instant::now(),
+                issued: confirmation_now(),
             },
         );
         Ok(token)
@@ -272,6 +274,9 @@ impl PageServing {
             .confirmations
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
+        let now = confirmation_now();
+        confirmations
+            .retain(|_, held| now.saturating_duration_since(held.issued) < ACTION_CONFIRMATION_TTL);
         if confirmations
             .get(token)
             .is_some_and(|held| held.binding == *binding)
@@ -306,7 +311,10 @@ impl PageServing {
             .remove(token);
         match held {
             None => Err("the action's confirmation is unknown or already used".to_string()),
-            Some(held) if held.issued.elapsed() >= ACTION_CONFIRMATION_TTL => {
+            Some(held)
+                if confirmation_now().saturating_duration_since(held.issued)
+                    >= ACTION_CONFIRMATION_TTL =>
+            {
                 Err("the action's confirmation expired; confirm the action again".to_string())
             }
             Some(_) if binding.is_none() => Err("a page action names its `tool`".to_string()),
@@ -386,6 +394,26 @@ impl RemoteParts {
             styles: borrow_files(&self.styles),
         }
     }
+}
+
+// The HTTP fixture advances a monotonic clock without waiting for the TTL.
+#[cfg_attr(
+    feature = "test-support",
+    allow(
+        clippy::disallowed_methods,
+        reason = "test-only clock in an isolated fixture process"
+    )
+)]
+fn confirmation_now() -> Instant {
+    let now = Instant::now();
+    #[cfg(feature = "test-support")]
+    if let Some(offset) = std::env::var_os("ORBIT_TEST_CONFIRMATION_CLOCK")
+        .and_then(|path| std::fs::read_to_string(path).ok())
+        .and_then(|value| value.trim().parse::<u64>().ok())
+    {
+        return now + Duration::from_secs(offset);
+    }
+    now
 }
 
 /// The kit a page's manifest names, as `(stylesheet, script)`. Validation

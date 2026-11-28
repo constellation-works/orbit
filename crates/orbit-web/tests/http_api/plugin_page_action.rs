@@ -421,6 +421,33 @@ fn a_cancelled_or_abandoned_confirmation_frees_its_slot_and_runs_nothing() {
 }
 
 #[test]
+fn expired_confirmation_cancellation_is_independent_of_pruning() {
+    isolated(
+        "plugin_page_action::expired_confirmation_cancellation_is_independent_of_pruning",
+        || {
+            let fixture = Fixture::new();
+            let control = install(&fixture);
+            let clock = fixture.path("confirmation-clock");
+            fs::write(&clock, "0").unwrap();
+            let server = fixture.server_with_envs(
+                true,
+                &[("ORBIT_TEST_CONFIRMATION_CLOCK", clock.as_os_str())],
+            );
+            let first = confirmation(&server, json!({"value": 1}));
+            let second = confirmation(&server, json!({"value": 2}));
+            fs::write(&clock, "301").unwrap();
+            let body = |value, token: &str| json!({"tool": "mutate", "input": {"value": value}, "confirmation": token});
+            assert_eq!(cancel(&server, body(1, &first))["released"], false);
+            let live = confirmation(&server, json!({"value": 3}));
+            assert_eq!(cancel(&server, body(2, &second))["released"], false);
+            assert_eq!(cancel(&server, body(3, &live))["released"], true);
+            assert_eq!(cancel(&server, body(3, &live))["released"], false);
+            assert_eq!(run_count(&control), 0, "cancellation runs no tool");
+        },
+    );
+}
+
+#[test]
 fn without_the_operator_session_an_action_is_refused_and_audited() {
     isolated(
         "plugin_page_action::without_the_operator_session_an_action_is_refused_and_audited",
