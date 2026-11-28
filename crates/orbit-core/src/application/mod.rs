@@ -12,13 +12,12 @@
 //! - Workspace and host: `distributed`, `pull_drain`,
 //!   `host_labels`, `change_watch`.
 //! - Policy: `application_authority`, `contracts`, `admission`,
-//!   `backlog_forecast`, `tag_instructions`.
+//!   `tag_instructions`.
 //! - `test_support` is compiled only for tests.
 
 pub(crate) mod admission;
 mod application_authority;
 pub mod automation;
-pub(crate) mod backlog_forecast;
 pub mod change_watch;
 pub mod contracts;
 pub mod distributed;

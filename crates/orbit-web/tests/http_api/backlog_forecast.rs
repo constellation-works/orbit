@@ -8,6 +8,7 @@ use orbit_core::test_support::fixture_store::contract::StoredBacklogForecast;
 use orbit_core::test_support::fixture_store::contract::{
     InvocationInsertParams, TaskHistoryUpdateParams,
 };
+use orbit_core::unit::backlog_forecast::{backlog_forecasts, record_backlog_forecast};
 use orbit_types::task::{TaskComment, TaskComplexity, TaskEnvelopeV2, TaskEventRowV2, TaskStatus};
 use orbit_types::telemetry::{InvocationTrace, TokenUsage};
 use serde_json::{Value, json};
@@ -80,7 +81,7 @@ fn clock_records_canonical_forecasts_without_endpoint_reads() {
             completed(&fixture, now - Duration::days(1));
             forecast_tick(&fixture, now, false);
             assert!(
-                fixture.runtime.backlog_forecasts(10).unwrap().is_empty(),
+                backlog_forecasts(&fixture.runtime, 10).unwrap().is_empty(),
                 "empty backlog"
             );
 
@@ -94,11 +95,11 @@ fn clock_records_canonical_forecasts_without_endpoint_reads() {
                 .unwrap();
             forecast_tick(&fixture, now, true);
             assert!(
-                fixture.runtime.backlog_forecasts(10).unwrap().is_empty(),
+                backlog_forecasts(&fixture.runtime, 10).unwrap().is_empty(),
                 "dry run"
             );
             forecast_tick(&fixture, now, false);
-            let rows = fixture.runtime.backlog_forecasts(10).unwrap();
+            let rows = backlog_forecasts(&fixture.runtime, 10).unwrap();
             assert_eq!(
                 rows.len(),
                 1,
@@ -157,9 +158,9 @@ fn clock_records_canonical_forecasts_without_endpoint_reads() {
                 predictions[0]["predicted_start_hours"]
             );
             forecast_tick(&fixture, now + Duration::minutes(59), false);
-            assert_eq!(fixture.runtime.backlog_forecasts(10).unwrap().len(), 1);
+            assert_eq!(backlog_forecasts(&fixture.runtime, 10).unwrap().len(), 1);
             forecast_tick(&fixture, now + Duration::minutes(60), false);
-            let rows = fixture.runtime.backlog_forecasts(10).unwrap();
+            let rows = backlog_forecasts(&fixture.runtime, 10).unwrap();
             assert_eq!(rows.len(), 2);
             assert_eq!(
                 rows[0].forecast_at.timestamp_micros(),
@@ -186,7 +187,7 @@ fn clock_forecast_skips_replica_and_missing_history_and_contains_write_failure()
                 .unwrap();
             forecast_tick(&fixture, now, false);
             assert!(
-                fixture.runtime.backlog_forecasts(10).unwrap().is_empty(),
+                backlog_forecasts(&fixture.runtime, 10).unwrap().is_empty(),
                 "no delivery history"
             );
             completed(&fixture, now - Duration::days(1));
@@ -214,7 +215,7 @@ fn clock_forecast_skips_replica_and_missing_history_and_contains_write_failure()
                 })
                 .unwrap();
             forecast_tick(&fixture, now, false);
-            assert!(fixture.runtime.backlog_forecasts(10).unwrap().is_empty());
+            assert!(backlog_forecasts(&fixture.runtime, 10).unwrap().is_empty());
             let log = std::fs::read_to_string(&log_path).unwrap();
             assert!(
                 log.contains("fixture forecast write refused"),
@@ -236,12 +237,12 @@ fn clock_forecast_skips_replica_and_missing_history_and_contains_write_failure()
             let server = fixture.server(false);
             assert_eq!(json_ok(server.get(ENDPOINT))["stored"]["recorded"], true);
             forecast_tick(&fixture, Utc::now(), false);
-            assert_eq!(fixture.runtime.backlog_forecasts(10).unwrap().len(), 1);
+            assert_eq!(backlog_forecasts(&fixture.runtime, 10).unwrap().len(), 1);
             drop(server);
             let fixture = fixture.into_replica("hm_forecast_owner");
             forecast_tick(&fixture, now + Duration::hours(2), false);
             assert_eq!(
-                fixture.runtime.backlog_forecasts(10).unwrap().len(),
+                backlog_forecasts(&fixture.runtime, 10).unwrap().len(),
                 1,
                 "replica cannot fill a free slot"
             );
@@ -259,7 +260,7 @@ fn clock_records_blocked_only_cohort_without_endpoint_reads() {
             one_hour_history(&fixture);
             forecast_tick(&fixture, now, false);
             assert!(
-                fixture.runtime.backlog_forecasts(10).unwrap().is_empty(),
+                backlog_forecasts(&fixture.runtime, 10).unwrap().is_empty(),
                 "no forecastable work yet"
             );
 
@@ -273,11 +274,11 @@ fn clock_records_blocked_only_cohort_without_endpoint_reads() {
                 .unwrap();
             forecast_tick(&fixture, now, true);
             assert!(
-                fixture.runtime.backlog_forecasts(10).unwrap().is_empty(),
+                backlog_forecasts(&fixture.runtime, 10).unwrap().is_empty(),
                 "dry run"
             );
             forecast_tick(&fixture, now, false);
-            let rows = fixture.runtime.backlog_forecasts(10).unwrap();
+            let rows = backlog_forecasts(&fixture.runtime, 10).unwrap();
             assert_eq!(
                 rows.len(),
                 1,
@@ -294,14 +295,14 @@ fn clock_records_blocked_only_cohort_without_endpoint_reads() {
             drop(server);
 
             forecast_tick(&fixture, now + Duration::minutes(59), false);
-            assert_eq!(fixture.runtime.backlog_forecasts(10).unwrap().len(), 1);
+            assert_eq!(backlog_forecasts(&fixture.runtime, 10).unwrap().len(), 1);
             forecast_tick(&fixture, now + Duration::minutes(60), false);
-            assert_eq!(fixture.runtime.backlog_forecasts(10).unwrap().len(), 2);
+            assert_eq!(backlog_forecasts(&fixture.runtime, 10).unwrap().len(), 2);
 
             let fixture = fixture.into_replica("hm_forecast_owner");
             forecast_tick(&fixture, now + Duration::hours(2), false);
             assert_eq!(
-                fixture.runtime.backlog_forecasts(10).unwrap().len(),
+                backlog_forecasts(&fixture.runtime, 10).unwrap().len(),
                 2,
                 "replica cannot fill a free slot"
             );
@@ -334,7 +335,7 @@ fn default_read_serves_the_fresh_snapshot_and_other_reads_compute_live() {
             let first = json_ok(server.get(ENDPOINT));
             assert_eq!(first["served_from"], "live");
             assert_eq!(first["stored"]["recorded"], true);
-            let rows = fixture.runtime.backlog_forecasts(10).unwrap();
+            let rows = backlog_forecasts(&fixture.runtime, 10).unwrap();
             assert_eq!(rows.len(), 1);
 
             let served = json_ok(server.get(ENDPOINT));
@@ -357,7 +358,7 @@ fn default_read_serves_the_fresh_snapshot_and_other_reads_compute_live() {
             // Refresh keeps the hourly throttle and never replaces the row.
             let refreshed = json_ok(server.get(&format!("{ENDPOINT}&refresh=1")));
             assert_eq!(refreshed["stored"]["recorded"], false);
-            assert_eq!(fixture.runtime.backlog_forecasts(10).unwrap(), rows);
+            assert_eq!(backlog_forecasts(&fixture.runtime, 10).unwrap(), rows);
             assert_eq!(
                 server.get(&format!("{ENDPOINT}&refresh=yes")).status(),
                 axum::http::StatusCode::BAD_REQUEST
@@ -415,7 +416,7 @@ fn stale_and_legacy_rows_compute_live_and_stay_readable() {
                 legacy["calibration"]["forecasts"].as_array().unwrap().len(),
                 1
             );
-            assert_eq!(fixture.runtime.backlog_forecasts(10).unwrap().len(), 1);
+            assert_eq!(backlog_forecasts(&fixture.runtime, 10).unwrap().len(), 1);
         },
     );
 }
@@ -676,20 +677,19 @@ fn calibration_explains_done_tasks_without_measured_usage() {
                     }))
                     .collect();
                 assert!(
-                    fixture
-                        .runtime
-                        .record_backlog_forecast(
-                            StoredBacklogForecast {
-                                workspace_id: String::new(),
-                                forecast_at: at,
-                                model_version: 23,
-                                inputs_json: "{}".into(),
-                                result_json: result.to_string(),
-                                tasks_json: json!(tasks).to_string(),
-                            },
-                            Duration::zero()
-                        )
-                        .unwrap()
+                    record_backlog_forecast(
+                        &fixture.runtime,
+                        StoredBacklogForecast {
+                            workspace_id: String::new(),
+                            forecast_at: at,
+                            model_version: 23,
+                            inputs_json: "{}".into(),
+                            result_json: result.to_string(),
+                            tasks_json: json!(tasks).to_string(),
+                        },
+                        Duration::zero()
+                    )
+                    .unwrap()
                 );
             }
 
@@ -758,24 +758,23 @@ fn terminal_comments_preserve_completion_history_and_calibration() {
             let old = completed(&fixture, now - Duration::days(40));
             let quantiles = json!({"p50": 1.0, "p90": 2.0});
             assert!(
-                fixture
-                    .runtime
-                    .record_backlog_forecast(
-                        StoredBacklogForecast {
-                            workspace_id: String::new(),
-                            forecast_at: done_at - Duration::hours(1),
-                            model_version: 1,
-                            inputs_json: "{}".into(),
-                            result_json: json!({"time_to_drain_hours": quantiles}).to_string(),
-                            tasks_json: json!([{
-                                "id": recent, "complexity": "medium",
-                                "forecast": {"hours": quantiles},
-                            }])
-                            .to_string(),
-                        },
-                        Duration::minutes(60)
-                    )
-                    .unwrap()
+                record_backlog_forecast(
+                    &fixture.runtime,
+                    StoredBacklogForecast {
+                        workspace_id: String::new(),
+                        forecast_at: done_at - Duration::hours(1),
+                        model_version: 1,
+                        inputs_json: "{}".into(),
+                        result_json: json!({"time_to_drain_hours": quantiles}).to_string(),
+                        tasks_json: json!([{
+                            "id": recent, "complexity": "medium",
+                            "forecast": {"hours": quantiles},
+                        }])
+                        .to_string(),
+                    },
+                    Duration::minutes(60)
+                )
+                .unwrap()
             );
 
             let server = fixture.server(false);
@@ -1031,7 +1030,7 @@ fn thin_metric_support_is_disclosed_and_counted() {
             assert_eq!(forecast["coverage"]["uncosted"], 0);
             assert_eq!(forecast["coverage"]["uncovered_model"], 0);
             assert_eq!(forecast["inputs"]["min_metric_samples"], 5);
-            let stored = fixture.runtime.backlog_forecasts(10).unwrap();
+            let stored = backlog_forecasts(&fixture.runtime, 10).unwrap();
             assert_eq!(stored.len(), 1);
             let stored_tasks: Value = serde_json::from_str(&stored[0].tasks_json).unwrap();
             let stored_row = stored_tasks

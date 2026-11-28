@@ -1678,7 +1678,7 @@ fi
 
 # These moved application subjects still reach adapters or the joiners only
 # through application-owned ports.
-for moved_subject in app/gc unit/landing unit/managed_asset unit/sweep_filing; do
+for moved_subject in app/gc unit/landing unit/managed_asset unit/sweep_filing unit/backlog_forecast; do
   if ! super_chains_into "$core_src" "$moved_subject" 'crate::adapter|crate::bootstrap|crate::composition' named-path ||
     ! inherent_calls_into "$core_src" "$moved_subject" 'adapter|bootstrap|composition' '' '' "$core_src"; then
     echo "orbit-core ${moved_subject/\//::} must reach adapters, bootstrap and composition through application-owned ports"
@@ -1712,10 +1712,10 @@ fi
 # derived from their `impl OrbitRuntime` blocks, so port methods use distinct
 # names. `tag_instructions` sits outside the module order but above `task`
 # [ORB-22289]: task reads commit-pinned files through its own
-# `task::base_revision`, never through it. `backlog_forecast` is above
-# `workspace_auto` and task has no port to it [ORB-22287]: only the two
-# re-export lines below name it, a compatibility shim for `lib.rs` and
-# `orbit-web`. `app::codebase` sits above `task` [ORB-22625]: task owns the
+# `task::base_revision`, never through it. `unit::backlog_forecast` is
+# above `workspace_auto` and task has no port to it [ORB-22287]; it is
+# guarded with the other lower modules below. `app::codebase` sits above
+# `task` [ORB-22625]: task owns the
 # pure block classification (`task::classify_block`) and records a done
 # landing's diff stats through `TaskCodebasePort`, which `app::codebase`
 # implements on `TaskPort` and binds in `app::port`; `app::codebase` reads
@@ -1731,7 +1731,7 @@ fi
 # decision rules, task history, tasks and blobs through `task::base_revision`.
 # Task reaches it only through
 # `TaskCorpusPort`, implemented on `app::agent::TaskPort` and bound in `app::port`.
-task_upper_modules='job|review|distributed|pull_drain|admission|backlog_forecast|workspace_auto|tag_instructions'
+task_upper_modules='job|review|distributed|pull_drain|admission|workspace_auto|tag_instructions'
 # Same-named methods on other types are not upper inherent methods; only
 # these exact lines are allowed: store reads through `stores().jobs()` and
 # `stores().tasks()`.
@@ -1744,7 +1744,7 @@ if { [[ -n "$task_upper_paths" ]] && printf '%s\n' "$task_upper_paths"; } ||
   ! inherent_calls_into "$app_src" task "$task_upper_modules" \
     "$task_upper_store_allowed" '' ||
   ! super_chains_into "$app_src" task "$task_upper_modules"; then
-  echo "orbit-core task must reach job, review, distributed, pull_drain, admission, sweep_filing and workspace_auto through its task ports, and must not name tag_instructions or backlog_forecast"
+  echo "orbit-core task must reach job, review, distributed, pull_drain, admission, sweep_filing and workspace_auto through its task ports, and must not name tag_instructions"
   fail=1
 fi
 
@@ -1813,7 +1813,7 @@ fi
 # installation and claimed-leaf capture validation reach it only through
 # `JobExperimentPort`, and the pool they read is the
 # `contracts::ExperimentCrewPool` value.
-job_upper_modules='admission|automation|backlog_forecast|review|workspace_auto'
+job_upper_modules='admission|automation|review|workspace_auto'
 if dependency_matches -n "crate::application::(${job_upper_modules})\\b" \
   "$app_src/job" -g '*.rs' -g '!**/tests/**' ||
   dependency_matches -n -U "crate::application::\\{[^}]*\\b(${job_upper_modules})\\b" \
@@ -1826,7 +1826,7 @@ fi
 
 # [ORB-17939] Above `job`, each module names only the modules below it in
 # `automation < review < distributed < pull_drain < admission <
-# workspace_auto < backlog_forecast < sweep_filing`. The cut edges go through ports the lower
+# workspace_auto < unit::backlog_forecast < unit::sweep_filing`. The cut edges go through ports the lower
 # module owns: `automation::AutomationReviewPort` (before-PR coverage and the
 # reviewer pools, implemented by `review`), `review::ReviewDistributedPort`
 # (the owner's ship contract and machine) and `distributed::
@@ -1855,24 +1855,38 @@ guard_upper_layer() {
     fail=1
   fi
 }
-guard_upper_layer automation 'review|distributed|pull_drain|admission|workspace_auto|backlog_forecast' \
+guard_upper_layer automation 'review|distributed|pull_drain|admission|workspace_auto' \
   'configured_pool_members|review_pool_by_os|select_review_crew|review_crew_candidates|admission_boundary'
-guard_upper_layer review 'distributed|pull_drain|admission|workspace_auto|backlog_forecast' \
+guard_upper_layer review 'distributed|pull_drain|admission|workspace_auto' \
   'admission_boundary|owner_completion_authority|owner_ship_contract|distributed_owner_machine_id'
-guard_upper_layer distributed 'pull_drain|admission|workspace_auto|backlog_forecast' 'executor_census'
-guard_upper_layer pull_drain 'admission|workspace_auto|backlog_forecast' ''
-guard_upper_layer admission 'workspace_auto|backlog_forecast' 'read_live_leaf_runs'
-guard_upper_layer workspace_auto 'backlog_forecast' ''
+guard_upper_layer distributed 'pull_drain|admission|workspace_auto' 'executor_census'
+guard_upper_layer pull_drain 'admission|workspace_auto' ''
+guard_upper_layer admission 'workspace_auto' 'read_live_leaf_runs'
+
+# [ORB-22287] `backlog_forecast` sits above `workspace_auto` and lives at
+# `unit::backlog_forecast`. It has no ports, so no application module below
+# it may name it: a path, a grouped tree or a `super::` chain into it is a
+# reintroduced edge. Its operations are functions, so a call names a path too.
+for lower_module in contracts task job automation review distributed pull_drain admission workspace_auto; do
+  if ! super_chains_into "$app_src" "$lower_module" 'crate::unit::backlog_forecast' named-path; then
+    echo "orbit-core ${lower_module} must not name unit::backlog_forecast"
+    fail=1
+  fi
+done
 
 # `sweep_filing` tops the module order and lives at `unit::sweep_filing`.
 # Every application module below it reaches it only through ports the lower
 # module owns, such as `task::TaskSweepFilingPort` bound in `app::port`.
-for lower_module in contracts task job automation review distributed pull_drain admission workspace_auto backlog_forecast; do
+for lower_module in contracts task job automation review distributed pull_drain admission workspace_auto; do
   if ! super_chains_into "$app_src" "$lower_module" 'crate::unit::sweep_filing' named-path; then
     echo "orbit-core ${lower_module} must not name unit::sweep_filing; reach it through a port the lower module owns"
     fail=1
   fi
 done
+if ! super_chains_into "$core_src" unit/backlog_forecast 'crate::unit::sweep_filing' named-path; then
+  echo "orbit-core unit::backlog_forecast must not name unit::sweep_filing"
+  fail=1
+fi
 
 # [ORB-23334] `app::auto_task` sits above `automation`: its scheduler
 # evaluates delivery and conditions through automation, its listing projection
@@ -1956,16 +1970,6 @@ if ! super_chains_into "$core_src/app" resident 'crate::app::routine' named-path
   fail=1
 fi
 
-# [ORB-22287] The forecast has no ports, so nothing below it may call its
-# inherent methods (names derived); `task` and `job` are covered above, through
-# their upper-module lists.
-for lower_module in automation review distributed pull_drain admission workspace_auto; do
-  if ! inherent_calls_into "$app_src" "$lower_module" backlog_forecast '' ''; then
-    echo "orbit-core ${lower_module} must not call backlog_forecast's inherent methods"
-    fail=1
-  fi
-done
-
 # Selective-review retirement removed review's risk-model freeze and its
 # codebase dependency. Keep that direction closed: review has no
 # `app::codebase` exception, and reads candidate size only through
@@ -1980,10 +1984,10 @@ fi
 # authorized edge into it is `crate::app::codebase::task_riskiness_model(runtime)`
 # in `assembly.rs`, whose returned model answers `forecast_regression_prior`.
 # Any other path into `app::codebase` (an import, a grouped tree, an alias or a
-# `super::` chain), or any path or inherent call from `app::codebase` back into
+# `super::` chain), or any path from `app::codebase` back into
 # the forecast, is a new edge.
 forecast_codebase_allowed='/backlog_forecast/assembly\.rs:[0-9]+:\s+let risk_model = crate::app::codebase::task_riskiness_model\(runtime\)\?;$'
-forecast_codebase_paths="$(super_chains_into "$app_src" backlog_forecast 'crate::app::codebase' named-path)" ||
+forecast_codebase_paths="$(super_chains_into "$core_src" unit/backlog_forecast 'crate::app::codebase' named-path)" ||
   forecast_codebase_status=$?
 forecast_codebase_unallowed="$(printf '%s\n' "$forecast_codebase_paths" | rg -v -- "$forecast_codebase_allowed" | rg -v '^$' || true)"
 # A match prints its line; a nonzero exit with nothing printed is a scan error.
@@ -1997,13 +2001,12 @@ if [[ ! -d "$core_src/app/codebase" ]]; then
   echo "dependency scan path missing: $core_src/app/codebase" >&2
   exit 1
 fi
-if dependency_matches -n 'crate::application::backlog_forecast\b' \
+if dependency_matches -n 'crate::unit::backlog_forecast\b' \
   "$core_src/app/codebase" -g '*.rs' -g '!**/tests/**' ||
-  dependency_matches -n -U 'crate::application::\{[^}]*\bbacklog_forecast\b' \
+  dependency_matches -n -U 'crate::unit::\{[^}]*\bbacklog_forecast\b' \
     "$core_src/app/codebase" -g '*.rs' -g '!**/tests/**' ||
-  ! inherent_calls_into "$core_src/app" codebase backlog_forecast '' '' "$app_src" ||
-  ! super_chains_into "$core_src/app" codebase 'crate::application::backlog_forecast' named-path; then
-  echo "orbit-core app::codebase must not name backlog_forecast or call its inherent methods"
+  ! super_chains_into "$core_src/app" codebase 'crate::unit::backlog_forecast' named-path; then
+  echo "orbit-core app::codebase must not name unit::backlog_forecast"
   fail=1
 fi
 

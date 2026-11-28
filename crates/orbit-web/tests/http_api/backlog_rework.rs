@@ -7,6 +7,7 @@ use super::support::{Fixture, isolated, json_ok};
 use chrono::{DateTime, Duration, Utc};
 use orbit_core::test_support::fixture_store;
 use orbit_core::test_support::fixture_store::contract::TaskHistoryUpdateParams;
+use orbit_core::unit::backlog_forecast::{backlog_forecasts, record_backlog_forecast};
 use orbit_types::task::{
     CONTEXT_FILES_WIDENED_EVENT, ContextFilesWidening, ContextWideningStep, Task, TaskDecision,
     TaskEnvelopeV2, TaskEventRowV2, TaskHistoryEntry, TaskRelation, TaskRelationType, TaskStatus,
@@ -605,17 +606,14 @@ fn stored_forecasts_keep_their_assumptions_after_fix_metadata_changes() {
                 tasks_json: "[]".into(),
             };
             assert!(
-                fixture
-                    .runtime
-                    .record_backlog_forecast(older.clone(), Duration::zero())
-                    .unwrap()
+                record_backlog_forecast(&fixture.runtime, older.clone(), Duration::zero()).unwrap()
             );
             let server = fixture.server(false);
             let live = json_ok(server.get(ENDPOINT));
             assert_eq!(live["served_from"], "live");
             assert_eq!(live["model_version"], 24);
             assert_eq!(live["stored"]["recorded"], true);
-            let rows = fixture.runtime.backlog_forecasts(10).unwrap();
+            let rows = backlog_forecasts(&fixture.runtime, 10).unwrap();
             assert_eq!(rows.len(), 2);
             assert_eq!(rows[1].result_json, older.result_json, "never rewritten");
             drop(server);
@@ -632,7 +630,7 @@ fn stored_forecasts_keep_their_assumptions_after_fix_metadata_changes() {
             );
             backlog_task(&fixture, "Origin", &["file:risky.rs"], &[], &[]);
             forecast_tick(&fixture, Utc::now() - Duration::minutes(5), false);
-            let rows = fixture.runtime.backlog_forecasts(10).unwrap();
+            let rows = backlog_forecasts(&fixture.runtime, 10).unwrap();
             assert_eq!(rows.len(), 1);
             assert_eq!(rows[0].model_version, 24);
             let server = fixture.server(false);
@@ -651,7 +649,7 @@ fn stored_forecasts_keep_their_assumptions_after_fix_metadata_changes() {
             assert_eq!(again["generated_at"], stored["generated_at"]);
             assert_eq!(again["inputs"], stored["inputs"]);
             assert_eq!(again["forecast"], stored["forecast"]);
-            assert_eq!(fixture.runtime.backlog_forecasts(10).unwrap(), rows);
+            assert_eq!(backlog_forecasts(&fixture.runtime, 10).unwrap(), rows);
 
             // A live refresh recovers the footprint from durable history and
             // keeps the hourly write rule.
@@ -666,7 +664,7 @@ fn stored_forecasts_keep_their_assumptions_after_fix_metadata_changes() {
                 true
             );
             assert_eq!(refreshed["stored"]["recorded"], false);
-            assert_eq!(fixture.runtime.backlog_forecasts(10).unwrap(), rows);
+            assert_eq!(backlog_forecasts(&fixture.runtime, 10).unwrap(), rows);
         },
     );
 }
@@ -736,25 +734,24 @@ fn rework_calibration_waits_for_the_horizon_and_keeps_mature_snapshots() {
                 tasks_json: stored_tasks.to_string(),
             };
             assert!(
-                fixture
-                    .runtime
-                    .record_backlog_forecast(row(snapshot, 9), Duration::zero())
+                record_backlog_forecast(&fixture.runtime, row(snapshot, 9), Duration::zero())
                     .unwrap()
             );
             // Push the mature row out of the recent-60 read.
             for hour in 0..65 {
-                fixture
-                    .runtime
-                    .record_backlog_forecast(
-                        row(now - Duration::days(4) + Duration::hours(hour), 1),
-                        Duration::zero(),
-                    )
-                    .unwrap();
-            }
-            fixture
-                .runtime
-                .record_backlog_forecast(row(now - Duration::hours(1), 9), Duration::zero())
+                record_backlog_forecast(
+                    &fixture.runtime,
+                    row(now - Duration::days(4) + Duration::hours(hour), 1),
+                    Duration::zero(),
+                )
                 .unwrap();
+            }
+            record_backlog_forecast(
+                &fixture.runtime,
+                row(now - Duration::hours(1), 9),
+                Duration::zero(),
+            )
+            .unwrap();
             let server = fixture.server(false);
             let forecast = json_ok(server.get(ENDPOINT));
             let calibration = &forecast["calibration"];

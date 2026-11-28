@@ -39,7 +39,7 @@ use crate::application::contracts::{
 pub(in crate::application::task) type CrewPools = <crate::OrbitRuntime as TaskJobPort>::CrewPools;
 
 /// What a task's newest delivery run says about merging its pull request.
-pub(in crate::application) enum DeliveryCompletion {
+pub(crate) enum DeliveryCompletion {
     /// A delivery run is still live; it finishes the task itself.
     Live,
     /// No delivery run authorised completion: there is none, or the newest
@@ -65,7 +65,7 @@ pub(in crate::application) enum DeliveryCompletion {
 
 /// The authenticated identity of the pull request a task's own native run
 /// published, as review and settlement compare it with the forge.
-pub(in crate::application) struct NativePublicationIdentity {
+pub(crate) struct NativePublicationIdentity {
     /// The published head branch.
     pub(in crate::application) branch: String,
     /// The published head commit.
@@ -80,7 +80,7 @@ pub(in crate::application) struct NativePublicationIdentity {
 
 /// The job-dispatch and crew-pool operations task code calls, implemented
 /// by `job`.
-pub(in crate::application) trait TaskJobPort {
+pub(crate) trait TaskJobPort {
     /// The crew pools an admitting pipeline captured. Task code passes them
     /// through without reading them; `job` owns their shape.
     type CrewPools;

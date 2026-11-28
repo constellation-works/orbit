@@ -79,6 +79,10 @@ use assembly::arrival_source;
 pub use options::BacklogForecastHistory;
 #[cfg(feature = "test-support")]
 pub use rework::MAX_GENERATED_ENV;
+#[cfg_attr(not(feature = "test-support"), allow(unused_imports))]
+pub use runtime::backlog_forecast;
+pub(crate) use runtime::record_scheduled_backlog_forecast;
+pub use runtime::{backlog_forecasts, record_backlog_forecast, serve_backlog_forecast};
 #[cfg(feature = "test-support")]
 pub use simulation::COMPUTE_BUDGET_ENV;
 use usage::{ForecastRun, forecast_usage};

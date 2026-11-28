@@ -5,6 +5,9 @@ use orbit_core::app::run::ShipMode;
 use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
 use orbit_core::runtime::OrbitRuntime;
 use orbit_core::runtime::WorkspaceRuntimeBinding;
+use orbit_core::unit::backlog_forecast::{
+    backlog_forecast, backlog_forecasts, record_backlog_forecast, serve_backlog_forecast,
+};
 use orbit_engine::RunLifecycle;
 use orbit_store::contract::{InvocationInsertParams, JobRunStepParams};
 use orbit_types::task::{TaskComplexity, TaskStatus};
@@ -278,9 +281,7 @@ fn forecast_riskiness_preserves_observation_timestamps() {
         delivery(&runtime, ReviewTiming::None, 1);
     }
     let pending_id = pending(&runtime, TaskComplexity::Medium, "sample");
-    let result = runtime
-        .backlog_forecast(Default::default(), None, None)
-        .unwrap();
+    let result = backlog_forecast(&runtime, Default::default(), None, None).unwrap();
     let predictions = result["forecast"]["task_predictions"]
         .as_array()
         .unwrap()
@@ -329,7 +330,7 @@ fn forecast_riskiness_preserves_observation_timestamps() {
     );
     // The stored tasks keep the same exact window the live forecast serves.
     let stored: Value =
-        serde_json::from_str(&runtime.backlog_forecasts(1).unwrap()[0].tasks_json).unwrap();
+        serde_json::from_str(&backlog_forecasts(&runtime, 1).unwrap()[0].tasks_json).unwrap();
     let stored_row = stored
         .as_array()
         .unwrap()
@@ -375,9 +376,7 @@ fn forecast_riskiness_preserves_observation_timestamps() {
 }
 
 fn forecast(runtime: &OrbitRuntime) -> Value {
-    let mut forecast = runtime
-        .backlog_forecast(Default::default(), Some(1), None)
-        .unwrap();
+    let mut forecast = backlog_forecast(runtime, Default::default(), Some(1), None).unwrap();
     // This fixture isolates review sampling, without regression-fix history.
     let predictions = forecast["forecast"]["task_predictions"].take();
     forecast["forecast"] = forecast["forecast"]["pre_regression_baseline"].take();
@@ -575,12 +574,10 @@ fn historical_uncertainty_and_running_admission_remain_explicit() {
         "captured:workspace"
     );
     assert_eq!(current["forecast"]["time_to_drain_hours"]["p90"], 1.0);
-    let canonical = runtime
-        .backlog_forecast(Default::default(), None, None)
-        .unwrap();
+    let canonical = backlog_forecast(&runtime, Default::default(), None, None).unwrap();
     assert_eq!(canonical["stored"]["recorded"], true);
     let stored: Value =
-        serde_json::from_str(&runtime.backlog_forecasts(1).unwrap()[0].tasks_json).unwrap();
+        serde_json::from_str(&backlog_forecasts(&runtime, 1).unwrap()[0].tasks_json).unwrap();
     assert_eq!(stored[0]["review_mode"], "none");
     assert_eq!(stored[0]["review_mode_source"], "captured:workspace");
 }
@@ -664,7 +661,7 @@ fn drain_scope_separates_scheduled_and_no_drain_work_from_completion() {
     // A mature snapshot can finish its drain while held work remains open.
     // Exercise the public scoring API with the same held population.
     let mature_at = Utc::now() - Duration::days(90);
-    runtime.record_backlog_forecast(orbit_store::contract::StoredBacklogForecast {
+    record_backlog_forecast(&runtime, orbit_store::contract::StoredBacklogForecast {
         workspace_id: String::new(),
         forecast_at: mature_at,
         model_version: result["model_version"].as_u64().unwrap() as u32,
@@ -676,9 +673,7 @@ fn drain_scope_separates_scheduled_and_no_drain_work_from_completion() {
             {"id": excluded, "complexity": "medium", "drain_hold": prediction(&excluded)["drain_hold"]}
         ]).to_string(),
     }, Duration::zero()).unwrap();
-    let scored = runtime
-        .backlog_forecast(Default::default(), Some(1), None)
-        .unwrap();
+    let scored = backlog_forecast(&runtime, Default::default(), Some(1), None).unwrap();
     let mature = scored["calibration"]["forecasts"]
         .as_array()
         .unwrap()
@@ -691,11 +686,9 @@ fn drain_scope_separates_scheduled_and_no_drain_work_from_completion() {
     assert!(mature["actual"]["time_to_drain_hours"].as_f64().unwrap() <= 2160.0);
 
     // Canonical persistence must retain the drain population for later scoring.
-    runtime
-        .backlog_forecast(Default::default(), None, None)
-        .unwrap();
+    backlog_forecast(&runtime, Default::default(), None, None).unwrap();
     let stored: Value =
-        serde_json::from_str(&runtime.backlog_forecasts(1).unwrap()[0].tasks_json).unwrap();
+        serde_json::from_str(&backlog_forecasts(&runtime, 1).unwrap()[0].tasks_json).unwrap();
     let stored_rows = stored.as_array().unwrap();
     for id in [&scheduled, &excluded] {
         let row = stored_rows.iter().find(|row| row["id"] == *id).unwrap();
@@ -714,9 +707,7 @@ fn drain_scope_separates_scheduled_and_no_drain_work_from_completion() {
             None,
         )
         .unwrap();
-    let held = runtime
-        .backlog_forecast(Default::default(), Some(1), None)
-        .unwrap();
+    let held = backlog_forecast(&runtime, Default::default(), Some(1), None).unwrap();
     assert_eq!(held["forecast"]["drain_tasks"], 0);
     for percentile in ["p50", "p90"] {
         assert_eq!(held["forecast"]["time_to_drain_hours"][percentile], 0.0);
@@ -811,11 +802,10 @@ fn unreadable_historical_checkpoint_keeps_forecast_and_marks_review_unknown() {
         )
         .unwrap();
 
-    let result = runtime
-        .serve_backlog_forecast(Default::default(), Some(1), None, false)
+    let result = serve_backlog_forecast(&runtime, Default::default(), Some(1), None, false)
         .expect("an unreadable historical checkpoint must not abort the forecast");
     assert!(
-        runtime.backlog_forecasts(1).unwrap().is_empty(),
+        backlog_forecasts(&runtime, 1).unwrap().is_empty(),
         "a noncanonical forecast must not write the hourly snapshot"
     );
     let mut viewed = result;

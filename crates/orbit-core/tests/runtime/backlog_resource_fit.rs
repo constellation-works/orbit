@@ -8,6 +8,7 @@ use orbit_core::app::run::ShipMode;
 use orbit_core::application::task::TaskAddParams;
 use orbit_core::runtime::OrbitRuntime;
 use orbit_core::runtime::WorkspaceRuntimeBinding;
+use orbit_core::unit::backlog_forecast::backlog_forecast;
 use orbit_store::contract::{InvocationInsertParams, RunResourceMinute};
 use orbit_types::task::{TaskComplexity, TaskStatus};
 use orbit_types::telemetry::{InvocationTrace, TokenUsage};
@@ -95,10 +96,8 @@ impl Fixture {
     }
 
     fn forecast(&self, mode: &str) -> Value {
-        let mut forecast = self
-            .runtime(mode)
-            .backlog_forecast(Default::default(), Some(4), None)
-            .unwrap();
+        let mut forecast =
+            backlog_forecast(&self.runtime(mode), Default::default(), Some(4), None).unwrap();
         // This fixture isolates resource fit, without regression-fix history.
         let predictions = forecast["forecast"]["task_predictions"].take();
         forecast["forecast"] = forecast["forecast"]["pre_regression_baseline"].take();
