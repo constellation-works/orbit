@@ -56,12 +56,13 @@ spec:
   any other name, a `read_only` tool (which belongs under `tools`) and a name listed twice.
   An action runs only as [The bridge](#3-the-bridge) describes.
 - **The operator consents to the actions.** `orbit plugin add --enable` and `orbit plugin
-  enable` list each page's actions and record that list as the operator's consent in the
-  host-owned grant witness beside the grants and program paths. An action runs only while
-  its page names it and the consent lists it for that page. A manifest whose list changed
-  since consent leaves the new actions inactive until an enabling command records it again
-  (STD-05 §R21); the dashboard's host re-enable keeps the list last consented to, and a
-  witness written before actions existed consents to none.
+  enable` list each page's actions. The host-owned grant witness records a digest for each
+  approved page and verb covering the manifest, the page's file bundle, and the tool's
+  resolved schemas. An action needs a matching digest as well as a declaration on its page
+  (STD-05 §R21). A plain forced reinstall that changes this content leaves its actions
+  inactive until CLI consent. The dashboard's host re-enable preserves the previous
+  consent, and older witnesses that record only page IDs and verbs require fresh CLI
+  consent. The plugin and its read-only page calls stay available while otherwise valid.
 - **`orbit plugin validate` refuses a page Orbit could not write out safely,** by name: a
   missing `index.html` or listed file; markup that holds a `script` or `link` element, which
   the browser would refuse anyway with nothing shown to the author; a script that contains
@@ -214,7 +215,7 @@ established outside the page ([decision](./4_decisions.md#plugin-code-acts-only-
 
 1. The dashboard sends `{tool, input}` to `.../actions/confirm`. The server requires the
    operator session, checks that the tool is this plugin's and mutating, that the page
-   names it under `actions`, that the recorded consent lists it for the page and that the
+   names it under `actions`, that its content matches the recorded consent and that the
    input fits the schema. It answers with what the dialog shows (plugin and version, page,
    canonical tool name, description, input) and a random one-time confirmation bound to
    this workspace runtime, plugin, page, tool and input. It holds at most 32 unused ones,

@@ -13,15 +13,13 @@ use orbit_types::record::OrbitEvent;
 use crate::OrbitRuntime;
 use crate::runtime::plugin::build_witness::record_build_witness;
 use crate::runtime::plugin::grants::{
-    record_authorization, record_authorized_grants, verify_install_path,
+    PageActionConsent, record_authorization, record_authorized_grants, verify_install_path,
 };
 use crate::runtime::plugin::host::projected_status;
 use crate::runtime::plugin::paths::plugin_install_path;
 
 use crate::app::plugin::inspect::{PluginSummary, summary_for_installed};
-use crate::app::plugin::lifecycle::{
-    declared_page_actions, resolve_consented_programs, unrequested_grant_warnings,
-};
+use crate::app::plugin::lifecycle::{resolve_consented_programs, unrequested_grant_warnings};
 use crate::app::plugin::secret::{prune_undeclared_secrets, unset_secret_warnings};
 
 use super::permissions::{
@@ -399,7 +397,7 @@ fn install_plugin_inner(
             enabled,
             &record.grants,
             &programs,
-            &declared_page_actions(&plugin),
+            &PageActionConsent::from_plugin(&plugin),
         )?;
     }
 
