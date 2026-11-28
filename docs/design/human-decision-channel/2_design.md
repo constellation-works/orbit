@@ -1063,7 +1063,7 @@ capability-resolved caller it is operator only. An *identified* plugin callback 
 is admitted past the row, and the handler binds it. An agent session is refused
 `caller_not_allowed`. The plugin is the raiser of record.
 
-Example input (task form, e.g. `orbit-research` result acceptance on a delivered task):
+Example input (task form, e.g. `orbit-research` result acceptance while its task is open in review):
 
 ```json
 {
@@ -1086,7 +1086,8 @@ Example input (task form, e.g. `orbit-research` result acceptance on a delivered
 `subject` is the plugin's stable id for its object. `task_id` is optional:
 
 - **Task form (`task_id` present):** the request sits on that task, for a plugin or
-  distribution whose object is backed by an Orbit task.
+  distribution whose object is backed by an Orbit task. Raise before that task closes;
+  publication of an artifact alone does not imply the task is closed.
 - **Holder form (`task_id` omitted):** core files or reuses one `someday` holder task per
   plugin in the caller's workspace (title `Decisions raised by plugin <ns>`, tag
   `plugin-request:<ns>`, `system_created`), the same pattern as script grants' per-script
@@ -1144,15 +1145,31 @@ provenance only and grants nothing.
 
 A plugin that settles its object outside Orbit (for example through a direct CLI verb or
 its own distribution UI) must tell core, or the request stays open until it expires. The
-handler therefore also accepts `{subject, withdraw: true}` (plus optional `task_id`),
-which supersedes the open request for that subject with nothing applied. Even if withdraw
-is skipped or fails, the apply tool's revision check still refuses a stale answer (§12.4).
+handler therefore also accepts a withdrawal using the original target and subject:
+`{task_id, subject, withdraw: true}` for task form, or `{subject, withdraw: true}`
+with `task_id` omitted for holder form. Core resolves only that `(task, plugin, subject)`
+identity; it must not fall back to the holder for a task-form withdrawal or affect a
+same-subject request on another task. Withdrawal supersedes that open request with nothing
+applied. Even if withdraw is skipped or fails, the apply tool's revision check still
+refuses a stale answer (§12.4).
 
-When the raise names a task in `proposed` or `review`, `orbit.decision.digest` does not
-also raise a `proposed_approval` or `review_approval` request on that task while the
-plugin request is open, and an `--approve-proposed` drain holds the task as
-`decision_pending`. One task, one question: the plugin's answers are the only ones
-offered.
+When a task-form raise names a task in `proposed` or `review`, it replaces that task's
+competing generic `proposed_approval` or `review_approval`. Under the same task write
+lock used by the digest and answer paths, a successful raise retires any already-open
+matching generic approval as superseded before exposing the plugin request. A later
+answer to the retired request, including an issued mail token, is refused as
+`request_superseded` with no effect. An approval already answered before the raise is
+not undone; recheck the task status and binding under the lock and refuse the raise if
+the task is no longer eligible. While any task-form plugin request remains open, the
+digest does not raise that generic approval and an `--approve-proposed` drain holds the
+task as `decision_pending`. Once none remains open, a subsequent digest may raise a
+fresh generic approval if the task is still eligible; it never revives the retired one.
+
+History folding must give `plugin_request` independent identities by `(task, plugin,
+subject)`: a later revision or withdrawal retires only that identity, not other plugin
+subjects or unrelated independent gates. Conversely, generic approval retirement is
+explicit and must not rely on the existing ordinary-request-per-task fold accidentally
+superseding every plugin request. All open plugin subjects remain individually answerable.
 
 ### 12.4 The apply step
 
@@ -1318,8 +1335,10 @@ plugin subprocess calls to `orbit attention`'s recompute loop:
 - **Task form (`task_id` present):** if the task already has a subject attention item
   (`review_waiting`, `blocked`, `pilot_hold`), `orbit attention`'s fold pass folds the
   open `plugin_request` into that subject item (carrying `refs.decision_id`, `expires_at`
-  and the plugin's answers in `next`), keeping the "one condition, one item" invariant.
-  When the task has no other subject item, it surfaces as `decision_open`.
+  and the plugin's answers in `next`). If several plugin subjects are open, each must
+  remain individually visible and answerable: fold at most one into the subject item and
+  surface the others as separate `decision_open` items. When the task has no other
+  subject item, each request surfaces as `decision_open`.
 - **Holder form (`task_id` omitted):** each open request on the `someday` holder task
   surfaces as one `decision_open` item carrying `refs.decision_id`, `detail.plugin`,
   `detail.subject` and `detail.apply_tool`, with `next` pointing to `orbit decision
@@ -1366,21 +1385,28 @@ rules (all within `host_api: 1`, with no core knowledge of the plugin's schema):
    when the apply tool runs and refuse before writing if it changed.
 4. **Out-of-band settlement races safely.** When the object is settled through the
    plugin's own CLI or UI instead of Orbit, call
-   `orbit.decision.plugin_raise {subject, withdraw: true}` (best effort) so the open
-   request does not linger. The revision check guarantees the first writer wins even if
-   withdraw is missed.
+   `orbit.decision.plugin_raise` with the original target and subject (best effort):
+   `{task_id, subject, withdraw: true}` for a task-form raise, or
+   `{subject, withdraw: true}` with `task_id` omitted for a holder-form raise. This
+   retires only that request. The revision check guarantees the first writer wins even
+   if withdraw is missed.
 5. **Provenance.** Record `decision.{request_id, answered_by, via}` in the plugin's own
    audit/evidence record so the effect traces back to the Orbit decision entry.
 
 **First Orbit-plane example (`orbit-research`).** A delivered research investigation
-writes a result README tied to an Orbit task and waits for `research.accept` to persist
+publishes a result README tied to an Orbit task and waits for `research.accept` to persist
 `research-acceptance.json`. Today that wait is visible only in a dashboard panel
-(`awaiting-acceptance`). With §12, an internal `research.accept-apply` (`mcp_scope: none`,
-`agent_callable: false`) lets `orbit-research` raise a task-form `plugin_request` on the
-investigation task (`subject: R-<n>`, `revision`: README blob SHA + run id, answers
-`accept` / `reject`). The digest suppresses duplicate `review_approval` (§12.3), the
-request folds into `orbit attention` (§12.8), and answering from the dashboard, CLI or
-`decision-mail` runs `research.accept-apply` on the workspace owner host.
+(`awaiting-acceptance`). For this task-form example, publication occurs while the
+investigation task remains open in `review`; before it closes, `orbit-research` raises
+`plugin_request` on that task (`subject: R-<n>`, `revision`: README blob SHA + run id,
+answers `accept` / `reject`). An internal `research.accept-apply` (`mcp_scope: none`,
+`agent_callable: false`) applies an answer. Core retires any already-open generic
+`review_approval` and suppresses another while the plugin request is open (§12.3); the
+request appears in `orbit attention` (§12.8), and an answer from the dashboard, CLI or
+`decision-mail` runs the apply tool on the workspace owner host. Closing the task
+supersedes an unanswered request. If publication instead completes the task before
+acceptance, the plugin must raise in holder form after closure, omitting `task_id`;
+it cannot raise on the closed investigation task.
 
 ### 12.11 Implementation slices
 
@@ -1397,8 +1423,12 @@ tool and a plugin raises a request.
    `plugin_request` items (§12.8), and listing/show of the new fields. Acceptance: a
    fixture plugin raises in both task form and holder form; an agent session, another
    plugin's namespace, an `agent_callable: true` or `mcp_scope != none` tool are refused;
-   re-raise dedupes or supersedes by revision; withdraw supersedes; `orbit attention`
-   folds task-form items and surfaces holder-form items at `low` severity.
+   re-raise dedupes or supersedes by revision; withdrawal targets the original form;
+   an existing generic approval is superseded and its answer refused, while distinct
+   plugin subjects stay open and answerable; digest and answer races honor the task
+   lock; `orbit attention` folds task-form items and surfaces remaining requests and
+   holder-form items at `low` severity. Extend the existing decision-channel and raise
+   fixtures to cover these cases and the post-closure holder lifecycle.
 2. **Apply-tool allowlist.** `orbit-core` and `orbit-cli`: the host-local store
    (`apply-tools.json`), `orbit decision apply-tool allow|revoke|list`, sandbox mask
    beside the channel store, manifest-digest suspension on upgrade, and verification that
