@@ -4,8 +4,10 @@
 A Git-ignored local notes directory under docs/design/ must not make
 feature-board generation or --check fail or change their output, while a
 Git-visible feature with a missing overview or a missing/invalid stage
-still fails with a targeted error. Exercises the public generator script
-rather than its shell internals.
+still fails with a targeted error. A Git query that fails must stop
+generation and --check with a Git diagnostic and leave the generated
+files untouched. Exercises the public generator script rather than its
+shell internals.
 """
 import subprocess
 import sys
@@ -57,6 +59,19 @@ def run_generator(repo, *args):
     return subprocess.run(
         ["bash", str(GENERATOR), *args, str(repo)],
         capture_output=True, text=True, check=False,
+    )
+
+
+def commit_all(repo):
+    """Commit the fixture, so its files are tracked as in a real checkout."""
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True,
+                   capture_output=True, text=True)
+    subprocess.run(
+        ["git", "-c", "user.name=fixture",
+         "-c", "user.email=fixture@example.invalid",
+         "-c", "commit.gpgsign=false",
+         "commit", "-q", "-m", "fixture"],
+        cwd=repo, check=True, capture_output=True, text=True,
     )
 
 
@@ -156,6 +171,80 @@ class GenerateDocIndexesFixture(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0, result.stdout)
             self.assertIn("needs stage", result.stderr)
             self.assertIn("someday", result.stderr)
+
+    def test_committed_missing_overview_fails(self):
+        scratch = ROOT / ".orbit/tmp"
+        scratch.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(
+            prefix="doc-indexes-committed-", dir=scratch
+        ) as directory:
+            repo = make_repo(directory)
+            broken = repo / "docs/design/broken"
+            broken.mkdir()
+            (broken / "2_design.md").write_text(
+                "# Broken design\n", encoding="utf-8"
+            )
+            commit_all(repo)
+            result = run_generator(repo)
+            self.assertNotEqual(result.returncode, 0, result.stdout)
+            self.assertIn("1_overview.md", result.stderr)
+            self.assertIn("broken", result.stderr)
+
+    def test_git_visibility_failure_stops_both_modes(self):
+        scratch = ROOT / ".orbit/tmp"
+        scratch.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(
+            prefix="doc-indexes-git-failure-", dir=scratch
+        ) as directory:
+            repo = make_repo(directory)
+            broken = repo / "docs/design/broken"
+            broken.mkdir()
+            (broken / "2_design.md").write_text(
+                "# Broken design\n", encoding="utf-8"
+            )
+            commit_all(repo)
+            board = repo / "docs/design/FEATURES.md"
+            index = repo / "docs/INDEX.md"
+            board.write_text("SENTINEL BOARD\n", encoding="utf-8")
+            index.write_text("SENTINEL INDEX\n", encoding="utf-8")
+            # A corrupt index makes `git ls-files` exit 128 (fatal), not "not visible".
+            (repo / ".git/index").write_bytes(b"not a git index")
+
+            for args in ((), ("--check",)):
+                with self.subTest(mode=args or ("write",)):
+                    result = run_generator(repo, *args)
+                    self.assertNotEqual(
+                        result.returncode, 0, result.stdout + result.stderr
+                    )
+                    self.assertIn("git ls-files failed", result.stderr)
+                    self.assertEqual(
+                        board.read_text(encoding="utf-8"), "SENTINEL BOARD\n"
+                    )
+                    self.assertEqual(
+                        index.read_text(encoding="utf-8"), "SENTINEL INDEX\n"
+                    )
+
+    def test_non_ascii_feature_stays_listed(self):
+        scratch = ROOT / ".orbit/tmp"
+        scratch.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(
+            prefix="doc-indexes-unicode-", dir=scratch
+        ) as directory:
+            repo = make_repo(directory)
+            cafe = repo / "docs/design/café"
+            cafe.mkdir()
+            (cafe / "1_overview.md").write_text(
+                "---\ntitle: Café Feature\nstage: building\nnext: Ship it.\n"
+                "owner: Fixture\n---\n\n# Café Feature\n",
+                encoding="utf-8",
+            )
+            commit_all(repo)
+            result = run_generator(repo)
+            self.assertEqual(
+                result.returncode, 0, result.stdout + result.stderr
+            )
+            board = (repo / "docs/design/FEATURES.md").read_text(encoding="utf-8")
+            self.assertIn("Café Feature", board)
 
 
 if __name__ == "__main__":

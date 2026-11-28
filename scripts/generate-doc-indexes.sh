@@ -116,11 +116,13 @@ markdown_escape() {
   printf '%s' "$value"
 }
 
+# Both helpers test the snapshot read in the main flow below, so no Git call runs inside
+# a conditional where a failed query would look like "not visible".
 is_versioned() {
   local file="$1"
   local relative="${file#"$repo_root/"}"
 
-  git -C "$repo_root" ls-files --cached --others --exclude-standard --error-unmatch -- "$relative" >/dev/null 2>&1
+  [[ "$git_visible_lines" == *$'\n'"$relative"$'\n'* ]]
 }
 
 # A directory counts as a feature candidate only when Git sees at least one
@@ -129,10 +131,8 @@ is_versioned() {
 dir_is_versioned() {
   local directory="$1"
   local relative="${directory#"$repo_root/"}"
-  local visible
 
-  visible="$(git -C "$repo_root" ls-files --cached --others --exclude-standard -- "$relative/")"
-  [[ -n "$visible" ]]
+  [[ "$git_visible_lines" == *$'\n'"$relative/"* ]]
 }
 
 # An active feature's entry doc is its 1_overview.md (STD-06 §R2); there is no fallback.
@@ -525,6 +525,18 @@ write_or_check() {
 }
 
 check_docs_root || exit 1
+
+# Git's view of docs/: tracked files, plus untracked files Git does not ignore. It is read
+# here, outside any conditional, so a failed query stops the run before anything renders
+# or is written. Inside an `if !` test Bash ignores errexit, so a query there would read
+# as "not visible" and drop rows without a word. Names are NUL-separated so Git does not
+# quote non-ASCII or special characters; tr makes them lines for whole-line matches, and
+# pipefail (set at the top) keeps a failed git query as the pipeline's status.
+git_visible_lines="$(git -C "$repo_root" ls-files -z --cached --others --exclude-standard -- docs | tr '\0' '\n')" || {
+  echo "error: git ls-files failed under $repo_root, so the doc indexes cannot tell which files Git sees" >&2
+  exit 1
+}
+git_visible_lines=$'\n'"$git_visible_lines"$'\n'
 
 tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/orbit-doc-indexes.XXXXXX")"
 trap 'rm -rf "$tmp_dir"' EXIT
