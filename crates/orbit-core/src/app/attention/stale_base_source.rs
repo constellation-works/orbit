@@ -13,6 +13,12 @@ use std::time::Instant;
 
 const KIND: AttentionKind = AttentionKind::DeliveryStaleBase;
 
+struct ObservationFailure {
+    branch: String,
+    checkout: Option<String>,
+    message: String,
+}
+
 // The setup error is the durable evidence of the precise branch and checkout.
 // Retained candidate-branch refusals have a different message and are excluded.
 fn refusal(message: &str) -> Option<(&str, Option<&str>)> {
@@ -60,34 +66,43 @@ fn observe(
     branch: &str,
     checkout: Option<&str>,
 ) -> Result<Option<AttentionItem>, OrbitError> {
-    let repo = git2::Repository::open(&context.runtime.paths().repo_root)
-        .map_err(|e| OrbitError::Execution(e.to_string()))?;
+    let repo_path = &context.runtime.paths().repo_root;
+    let repo = git2::Repository::open(repo_path).map_err(|error| {
+        OrbitError::Execution(format!(
+            "Cannot open workspace repository '{}': {error}",
+            repo_path.display()
+        ))
+    })?;
     let resolve = |name: &str| {
         repo.find_reference(name)
             .and_then(|r| r.peel_to_commit())
             .map(|c| c.id())
+            .map_err(|error| {
+                OrbitError::Execution(format!("Cannot resolve Git ref {name}: {error}"))
+            })
     };
-    let (owner, remote) = match (
-        resolve(&format!("refs/heads/{branch}")),
-        resolve(&format!("refs/remotes/origin/{branch}")),
-    ) {
-        (Ok(owner), Ok(remote)) => (owner, remote),
-        _ => {
-            return Err(OrbitError::Execution(format!(
-                "Cannot resolve local or origin ref for {branch}"
-            )));
-        }
-    };
-    let (ahead, behind) = repo
-        .graph_ahead_behind(owner, remote)
-        .map_err(|e| OrbitError::Execution(e.to_string()))?;
+    let owner_ref = format!("refs/heads/{branch}");
+    let remote_ref = format!("refs/remotes/origin/{branch}");
+    let owner = resolve(&owner_ref)?;
+    let remote = resolve(&remote_ref)?;
+    let (ahead, behind) = repo.graph_ahead_behind(owner, remote).map_err(|error| {
+        OrbitError::Execution(format!(
+            "Cannot compare local and origin history for {branch}: {error}"
+        ))
+    })?;
     let dirty = if ahead == 0 && behind > 0 {
         if let Some(path) = checkout {
-            let holder =
-                git2::Repository::open(path).map_err(|e| OrbitError::Execution(e.to_string()))?;
+            let holder = git2::Repository::open(path).map_err(|error| {
+                OrbitError::Execution(format!("Cannot open recorded checkout '{}': {error}", path))
+            })?;
             let attached = holder
                 .head()
-                .map_err(|e| OrbitError::Execution(e.to_string()))?
+                .map_err(|error| {
+                    OrbitError::Execution(format!(
+                        "Cannot read HEAD for recorded checkout '{}': {error}",
+                        path
+                    ))
+                })?
                 .shorthand()
                 .ok()
                 .map(str::to_owned);
@@ -96,7 +111,12 @@ fn observe(
             attached.as_deref() == Some(branch)
                 && !holder
                     .statuses(Some(&mut options))
-                    .map_err(|e| OrbitError::Execution(e.to_string()))?
+                    .map_err(|error| {
+                        OrbitError::Execution(format!(
+                            "Cannot read tracked status for recorded checkout '{}': {error}",
+                            path
+                        ))
+                    })?
                     .is_empty()
         } else {
             false
@@ -107,17 +127,23 @@ fn observe(
     if behind == 0 || (ahead == 0 && !dirty) {
         return Ok(None);
     }
-    let mut walk = repo
-        .revwalk()
-        .map_err(|e| OrbitError::Execution(e.to_string()))?;
+    let mut walk = repo.revwalk().map_err(|error| {
+        OrbitError::Execution(format!("Cannot read commits for {branch}: {error}"))
+    })?;
     walk.push(owner)
         .and_then(|()| walk.hide(remote))
-        .map_err(|e| OrbitError::Execution(e.to_string()))?;
+        .map_err(|error| {
+            OrbitError::Execution(format!("Cannot compare commits for {branch}: {error}"))
+        })?;
     let mut commits = Vec::new();
     for oid in walk {
         let commit = repo
-            .find_commit(oid.map_err(|e| OrbitError::Execution(e.to_string()))?)
-            .map_err(|e| OrbitError::Execution(e.to_string()))?;
+            .find_commit(oid.map_err(|error| {
+                OrbitError::Execution(format!("Cannot read commit history for {branch}: {error}"))
+            })?)
+            .map_err(|error| {
+                OrbitError::Execution(format!("Cannot read commit in {branch}: {error}"))
+            })?;
         let message = commit.summary().ok().flatten().unwrap_or("");
         commits.push(json!({
             "sha": commit.id().to_string(),
@@ -212,7 +238,7 @@ pub(super) fn read(
         return;
     }
     let start = Instant::now();
-    let result: Result<Option<AttentionItem>, OrbitError> =
+    let result: Result<(Option<AttentionItem>, Vec<ObservationFailure>), OrbitError> =
         (|| {
             let mut runs = Vec::new();
             for job in DELIVERY_LEAF_JOBS {
@@ -232,6 +258,7 @@ pub(super) fn read(
             // hide an older, still-held base in the same workspace.
             runs.sort_by_key(|run| std::cmp::Reverse(run.recency_at()));
             let mut seen = std::collections::BTreeSet::new();
+            let mut observation_failures = Vec::new();
             for run in &runs {
                 let Some((branch, checkout)) = hold(run) else {
                     continue;
@@ -252,11 +279,19 @@ pub(super) fn read(
                             step.target_id == "worktree_setup" && step.state == JobRunState::Success
                         })
                 });
-                if !admitted && let Some(item) = observe(context, run, branch, checkout)? {
-                    return Ok(Some(item));
+                if !admitted {
+                    match observe(context, run, branch, checkout) {
+                        Ok(Some(item)) => return Ok((Some(item), observation_failures)),
+                        Ok(None) => {}
+                        Err(error) => observation_failures.push(ObservationFailure {
+                            branch: branch.to_owned(),
+                            checkout: checkout.map(str::to_owned),
+                            message: error.to_string(),
+                        }),
+                    }
                 }
             }
-            Ok(None)
+            Ok((None, observation_failures))
         })();
     candidates
         .timings
@@ -271,8 +306,28 @@ pub(super) fn read(
         return;
     }
     match result {
-        Ok(Some(item)) => candidates.items.push(item),
-        Ok(None) => {}
+        Ok((item, observation_failures)) => {
+            for failure in observation_failures {
+                let checkout = failure
+                    .checkout
+                    .map(|path| format!(" at recorded checkout '{path}'"))
+                    .unwrap_or_default();
+                let mut degraded = workspace_degraded(
+                    context.workspace,
+                    KIND.as_str(),
+                    "source_unavailable",
+                    format!(
+                        "Cannot inspect held delivery base '{}'{}: {}. Verify its refs and recorded checkout, then retry",
+                        failure.branch, checkout, failure.message
+                    ),
+                );
+                degraded.subject = Some(failure.branch);
+                candidates.degraded.push(degraded);
+            }
+            if let Some(item) = item {
+                candidates.items.push(item);
+            }
+        }
         Err(error) => candidates.degraded.push(workspace_degraded(
             context.workspace,
             KIND.as_str(),
