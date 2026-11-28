@@ -184,6 +184,11 @@ pub mod test_support {
     pub use orbit_store::contract::{ReviewInvocationRecord, ReviewReserveRequest};
     /// Canonical (artifact-hashing) task-bundle reads on this thread.
     pub use orbit_store::test_support::canonical_bundle_reads;
+    /// Full job-run step hydrations (`read_steps` / `read_steps_for_runs`) on
+    /// this thread.
+    pub use orbit_store::test_support::job_run_full_step_reads;
+    /// `JobRun` rows decoded on this thread.
+    pub use orbit_store::test_support::job_run_rows_hydrated;
     /// Lightweight task-bundle reads on this thread, listing or by id.
     pub use orbit_store::test_support::lightweight_bundle_reads;
     /// Listing-path task-bundle reads on this thread.

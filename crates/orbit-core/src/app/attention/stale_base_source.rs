@@ -3,20 +3,28 @@
 use super::source::{
     AttentionCandidates, AttentionSourceContext, attention_reason, workspace_degraded,
 };
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, Utc};
 use orbit_common::OrbitError;
 use orbit_common::governance::attention::cursor;
 use orbit_engine::BaseSyncMode;
-use orbit_store::contract::JobRunQuery;
+use orbit_store::contract::{JobRunInputTextFilter, JobRunStepTargetQuery};
 use orbit_types::tool::{AttentionItem, AttentionKind, AttentionNext, AttentionSeverity};
 use orbit_types::workflow::{
-    DELIVERY_LEAF_JOBS, JobRun, JobRunState, JobRunStep, TASK_CLAIMED_LOCAL_PIPELINE_JOB,
-    WORKTREE_SETUP_STEP_ID,
+    DELIVERY_LEAF_JOBS, JobRun, JobRunState, JobRunStep, JobTargetType,
+    TASK_CLAIMED_LOCAL_PIPELINE_JOB, WORKTREE_SETUP_STEP_ID,
 };
 use serde_json::json;
 use std::time::Instant;
 
 const KIND: AttentionKind = AttentionKind::DeliveryStaleBase;
+
+const STALE_BASE_HOLD_QUERY_LIMIT: usize = 128;
+
+const STALE_BASE_CLEAR_QUERY_LIMIT: usize = 64;
+
+const STALE_BASE_CLEAR_LOOKBACK_MINUTES: i64 = 5;
+
+const STALE_BASE_INPUT_KEYS: &[&str] = &["base_sync", "base_branch"];
 
 struct Hold<'a> {
     branch: &'a str,
@@ -116,6 +124,83 @@ fn setup_admitted_after_hold(later: &JobRun, hold: &Hold<'_>) -> bool {
         let started_at = step.started_at.unwrap_or(finished_at);
         started_at >= hold.at && finished_at > hold.at
     })
+}
+
+fn retain_local_host_runs(runs: &mut Vec<JobRun>, machine_id: &str) {
+    runs.retain(|run| {
+        run.executed_on
+            .as_ref()
+            .is_none_or(|host| host.machine_id == machine_id)
+    });
+}
+
+fn clearing_query(
+    job_ids: Vec<String>,
+    allow_missing_base_sync: bool,
+    branch_values: &[String],
+    state: Option<JobRunState>,
+    recency_since: Option<DateTime<Utc>>,
+) -> JobRunStepTargetQuery {
+    JobRunStepTargetQuery {
+        job_ids,
+        state,
+        recency_since,
+        step_target_id: WORKTREE_SETUP_STEP_ID.into(),
+        step_target_type: Some(JobTargetType::Activity),
+        step_state: Some(JobRunState::Success),
+        input_text_filters: vec![
+            JobRunInputTextFilter {
+                key: "base_sync",
+                values: vec!["local".into()],
+                trim: true,
+                allow_missing: allow_missing_base_sync,
+            },
+            JobRunInputTextFilter {
+                key: "base_branch",
+                values: branch_values.to_vec(),
+                trim: false,
+                allow_missing: false,
+            },
+        ],
+        input_keys: Some(STALE_BASE_INPUT_KEYS),
+        limit: Some(STALE_BASE_CLEAR_QUERY_LIMIT),
+        ..Default::default()
+    }
+}
+
+fn has_admitted_local_setup_after_hold(
+    context: &AttentionSourceContext<'_>,
+    hold: &Hold<'_>,
+) -> Result<bool, OrbitError> {
+    let jobs = context.runtime.stores().jobs();
+    let branch_values = [hold.branch.to_owned(), format!("origin/{}", hold.branch)];
+    let explicit_local_jobs = DELIVERY_LEAF_JOBS
+        .iter()
+        .copied()
+        .filter(|job| *job != TASK_CLAIMED_LOCAL_PIPELINE_JOB)
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    let default_local_jobs = vec![TASK_CLAIMED_LOCAL_PIPELINE_JOB.to_owned()];
+    let recent_since = Some(hold.at - Duration::minutes(STALE_BASE_CLEAR_LOOKBACK_MINUTES));
+    for (job_ids, allow_missing) in [(explicit_local_jobs, false), (default_local_jobs, true)] {
+        for (state, recency_since) in [(None, recent_since), (Some(JobRunState::Running), None)] {
+            let mut candidates = jobs.list_job_runs_with_step_target(&clearing_query(
+                job_ids.clone(),
+                allow_missing,
+                &branch_values,
+                state,
+                recency_since,
+            ))?;
+            retain_local_host_runs(&mut candidates, &context.host.machine_id);
+            if candidates
+                .iter()
+                .any(|later| setup_admitted_after_hold(later, hold))
+            {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
 }
 
 fn observe(
@@ -301,51 +386,52 @@ pub(super) fn read(
         return;
     }
     let start = Instant::now();
-    let result: Result<(Option<AttentionItem>, Vec<ObservationFailure>), OrbitError> =
-        (|| {
-            let mut runs = Vec::new();
-            for job in DELIVERY_LEAF_JOBS {
-                runs.extend(context.runtime.stores().jobs().list_job_runs_filtered(
-                    &JobRunQuery {
-                        job_id: Some((*job).into()),
-                        ..Default::default()
-                    },
-                )?);
-            }
-            runs.retain(|run| {
-                run.executed_on
-                    .as_ref()
-                    .is_none_or(|host| host.machine_id == context.host.machine_id)
-            });
-            // Inspect the newest hold per base. A resolved newer base must not
-            // hide an older, still-held base in the same workspace.
-            runs.sort_by_key(|run| std::cmp::Reverse(run.recency_at()));
-            let mut seen = std::collections::BTreeSet::new();
-            let mut observation_failures = Vec::new();
-            for run in &runs {
-                let Some(hold) = hold(run) else {
-                    continue;
-                };
-                if !seen.insert(hold.branch) {
-                    continue;
-                }
-                let admitted = runs
+    let result: Result<(Option<AttentionItem>, Vec<ObservationFailure>), OrbitError> = (|| {
+        let mut held_runs = context
+            .runtime
+            .stores()
+            .jobs()
+            .list_job_runs_with_step_target(&JobRunStepTargetQuery {
+                job_ids: DELIVERY_LEAF_JOBS
                     .iter()
-                    .any(|later| setup_admitted_after_hold(later, &hold));
-                if !admitted {
-                    match observe(context, run, hold.branch, hold.checkout) {
-                        Ok(Some(item)) => return Ok((Some(item), observation_failures)),
-                        Ok(None) => {}
-                        Err(error) => observation_failures.push(ObservationFailure {
-                            branch: hold.branch.to_owned(),
-                            checkout: hold.checkout.map(str::to_owned),
-                            message: error.to_string(),
-                        }),
-                    }
+                    .map(|job| (*job).to_owned())
+                    .collect(),
+                state: Some(JobRunState::Held),
+                step_target_id: WORKTREE_SETUP_STEP_ID.into(),
+                step_target_type: Some(JobTargetType::Activity),
+                step_exclude_state: Some(JobRunState::Success),
+                step_require_error_message: true,
+                input_keys: Some(&[]),
+                limit: Some(STALE_BASE_HOLD_QUERY_LIMIT),
+                ..Default::default()
+            })?;
+        retain_local_host_runs(&mut held_runs, &context.host.machine_id);
+        // Inspect the newest hold per base. A resolved newer base must not
+        // hide an older, still-held base in the same workspace.
+        held_runs.sort_by_key(|run| std::cmp::Reverse(run.recency_at()));
+        let mut seen = std::collections::BTreeSet::new();
+        let mut observation_failures = Vec::new();
+        for run in &held_runs {
+            let Some(hold) = hold(run) else {
+                continue;
+            };
+            if !seen.insert(hold.branch) {
+                continue;
+            }
+            if !has_admitted_local_setup_after_hold(context, &hold)? {
+                match observe(context, run, hold.branch, hold.checkout) {
+                    Ok(Some(item)) => return Ok((Some(item), observation_failures)),
+                    Ok(None) => {}
+                    Err(error) => observation_failures.push(ObservationFailure {
+                        branch: hold.branch.to_owned(),
+                        checkout: hold.checkout.map(str::to_owned),
+                        message: error.to_string(),
+                    }),
                 }
             }
-            Ok((None, observation_failures))
-        })();
+        }
+        Ok((None, observation_failures))
+    })();
     candidates
         .timings
         .insert(KIND.as_str().into(), start.elapsed().as_micros());
