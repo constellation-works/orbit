@@ -92,7 +92,8 @@ returns.
     at once.
 - The leaf's agent runs in claimed mode: the sandbox denies `~/.ssh`, so it
   has no direct route to the owner. The run broker carries only the scoped
-  claimed-task read and other owner calls documented in the runbook; the
+  claimed-task read and other owner calls documented in the [owner surface
+  reference](distributed-drain-owner-surface.md); the
   agent is denied `orbit.task.update` and returns its execution summary as
   step output. `claim_handoff` carries it to the owner's `execution_summary`.
   Never loosen the sandbox to give an agent direct owner access.
