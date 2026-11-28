@@ -42,7 +42,9 @@ pub(super) const MEASURES: [Measure; MEASURE_COUNT] = [
         weight: 10.0,
         units: "implemented tasks",
         sign: -1.0,
-        unrecorded: Some("required-check failures are not recorded by cause yet"),
+        unrecorded: Some(
+            "cause-classified required-check failure records exist, but the CI measure is not yet integrated into Rank",
+        ),
         definition: "Required-check failures on the row's candidate heads classed code.",
     },
     Measure {
@@ -65,7 +67,12 @@ pub(super) const MEASURES: [Measure; MEASURE_COUNT] = [
         units: "implemented tasks",
         sign: -1.0,
         unrecorded: None,
-        definition: "The implementer scorecard's crew-caused rework, which already leaves out review verdicts; CI failures are not yet classified by cause and final-recovery faults are not yet computed as a ranking measure, so neither is subtracted.",
+        definition: concat!(
+            "The implementer scorecard's crew-caused rework, which excludes review verdicts. ",
+            "Required-check failure causes are recorded, but CI is not yet integrated into Rank, ",
+            "so those failures are not subtracted here; final-recovery faults are not computed ",
+            "as a ranking measure and are not subtracted.",
+        ),
     },
     Measure {
         key: "tool_call_errors",
@@ -98,8 +105,9 @@ pub(super) struct Measure {
     /// `+1` when more is better, `-1` for a problem measure, so a positive
     /// residual is always better than expected.
     pub(super) sign: f64,
-    /// `Some(reason)` while the measure's events are not recorded: it
-    /// reports as unmeasured and leaves every weight denominator.
+    /// `Some(reason)` while a measure is unavailable to Rank, whether its
+    /// events are unrecorded or its ranking integration is not implemented.
+    /// It reports as unmeasured and leaves every weight denominator.
     pub(super) unrecorded: Option<&'static str>,
     pub(super) definition: &'static str,
 }

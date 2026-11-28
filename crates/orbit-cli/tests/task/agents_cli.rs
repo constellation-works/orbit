@@ -488,6 +488,46 @@ fn agents_show_ambiguous_crew_names_each_selector_and_its_candidate_models() {
     assert_eq!(by_model["row"]["model"], MODELS[0], "{by_model}");
 }
 
+/// Rank JSON and its human notice explain that CI causes are classified even
+/// though the CI measure does not yet contribute to the ranking.
+#[test]
+fn agents_rank_explains_ci_coverage_gap() {
+    if crate::isolated_test::run_in_child("agents_cli::agents_rank_explains_ci_coverage_gap") {
+        return;
+    }
+
+    let agents = AgentsFixture::new();
+    let fixture = &agents.fixture;
+    let payload = fixture.json(&["agents", "rank", "--json"]);
+    let ci = payload["measures"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|measure| measure["key"] == "ci_failures")
+        .unwrap();
+    assert_eq!(ci["status"], "unmeasured", "{payload}");
+    let reason = ci["reason"].as_str().unwrap();
+    assert!(reason.contains("cause-classified required-check failure records exist"));
+    assert!(reason.contains("not yet integrated into Rank"));
+
+    let output = fixture
+        .command(&["agents", "rank"])
+        .env("NO_COLOR", "1")
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    let human = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        human.contains(reason),
+        "Rank notice should share its JSON reason:\n{human}"
+    );
+}
+
 /// `--by-type` returns the cell matrix and the configured type list, is
 /// refused for other roles, and leaves the plain ranking's shape alone.
 #[test]
