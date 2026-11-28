@@ -1280,6 +1280,13 @@ fn stale_owner_base_attention_deduplicates_and_clears() {
         items[0]["detail"]["owner_only_commits"][0]["task_id"],
         "ORB-123"
     );
+    std::fs::write(repo.join("tracked.txt"), "dirty diverged").unwrap();
+    let diverged_dirty = call(&runtime, json!({"kind": "delivery_stale_base"}), &operator);
+    assert_eq!(
+        diverged_dirty["items"][0]["detail"]["tracked_changes"],
+        true
+    );
+    run_git(&repo, &["reset", "--hard", &local]);
     let id = items[0]["id"].clone();
     let again = call(&runtime, json!({"kind": "delivery_stale_base"}), &operator);
     assert_eq!(again["items"][0]["id"], id);
@@ -1288,6 +1295,18 @@ fn stale_owner_base_attention_deduplicates_and_clears() {
     let dirty = call(&runtime, json!({"kind": "delivery_stale_base"}), &operator);
     assert_eq!(dirty["items"][0]["detail"]["ahead"], 0, "{dirty}");
     assert_eq!(dirty["items"][0]["detail"]["tracked_changes"], true);
+    assert!(
+        dirty["items"][0]["reason"]
+            .as_str()
+            .unwrap()
+            .contains("tracked changes")
+    );
+    let command = dirty["items"][0]["next"]["command"].as_str().unwrap();
+    assert!(
+        command.contains("status --short --untracked-files=no"),
+        "{command}"
+    );
+    assert!(command.contains(repo.to_str().unwrap()), "{command}");
     run_git(&repo, &["reset", "--hard", &base]);
     let clean = call(&runtime, json!({"kind": "delivery_stale_base"}), &operator);
     assert!(clean["items"].as_array().unwrap().is_empty(), "{clean}");
@@ -1295,6 +1314,47 @@ fn stale_owner_base_attention_deduplicates_and_clears() {
     record(now + Duration::seconds(2), JobRunState::Success, None);
     let cleared = call(&runtime, json!({"kind": "delivery_stale_base"}), &operator);
     assert!(cleared["items"].as_array().unwrap().is_empty(), "{cleared}");
+}
+
+#[test]
+fn stale_owner_base_attention_bounds_commits_and_reads_trailers() {
+    let (root, runtime) = attention_runtime();
+    let repo = root.path().join("repo");
+    let (_, _, remote) = setup_diverged_owner_base(&repo);
+    for index in 0..21 {
+        run_git(
+            &repo,
+            &[
+                "commit",
+                "--allow-empty",
+                "-m",
+                &format!("delivery {index}"),
+                "-m",
+                "Orbit-Task: ORB-456",
+            ],
+        );
+    }
+    let local = run_git(&repo, &["rev-parse", "HEAD"]);
+    record_setup_run(
+        &runtime,
+        SetupRun::at(
+            "task_local_pipeline",
+            json!({"base_branch": "agent-main", "base_sync": "local"}),
+            Utc::now() - Duration::minutes(1),
+            JobRunState::Held,
+            Some(diverged_hold_message(&repo, "agent-main", &local, &remote)),
+        ),
+    );
+    let response = call(
+        &runtime,
+        json!({"kind": "delivery_stale_base"}),
+        &session(McpCapability::Operator),
+    );
+    let detail = &response["items"][0]["detail"];
+    assert_eq!(detail["ahead"], 22, "{response}");
+    let commits = detail["owner_only_commits"].as_array().unwrap();
+    assert_eq!(commits.len(), 20);
+    assert_eq!(commits[0]["task_id"], "ORB-456");
 }
 
 #[test]
