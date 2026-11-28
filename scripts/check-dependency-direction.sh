@@ -1701,13 +1701,13 @@ if dependency_matches -n 'crate::application::automation\b|(super::)+automation\
 fi
 
 # [ORB-17936] `task` is the lowest of the ten modules above contracts. It
-# reaches `job`, `review`, `distributed`, `pull_drain`,
+# reaches `job`, `review`, `distributed`,
 # `unit::sweep_filing` and `unit::workspace_auto` only through the ports it
 # owns (`TaskJobPort`, `TaskReviewPort`, `TaskDistributedPort`,
 # `TaskSweepFilingPort`, `TaskWorkspaceAutoPort`), which those modules
 # implement on `OrbitRuntime` or, for `unit::sweep_filing` and
-# `unit::workspace_auto`, on their `TaskPort` bound in `app::port`. Pull drain
-# now sits in `unit`; the higher-unit path guard below checks that edge. A
+# `unit::workspace_auto`, on their `TaskPort` bound in `app::port`. Task never
+# names `unit::pull_drain`; the higher-unit path guard below rejects it. A
 # path, a grouped tree, a `super::` chain that climbs out of `task` into one of
 # them, or a call to an inherent method they define is a reintroduced edge
 # [ORB-17972], [ORB-22003]. The names are derived from their
