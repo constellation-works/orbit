@@ -2,7 +2,7 @@
 title: Orbit Core — Overview
 owner: codex
 created_date: 2026-07-04
-updated_date: 2026-11-26
+updated_date: 2026-11-27
 last_validated: 2026-11-14
 status: Implemented
 stage: shipped
@@ -160,11 +160,16 @@ source scan, enforces the runtime direction.
 
 ## 4. Store Access Boundary
 
-`OrbitStores`, defined in `orbit-runtime`'s `context` module, is the typed holder
-for `orbit-store` backends; it is not an external SDK surface. Code inside Core
-delegates ordinary persistence to the owning backend traits [ORB-10355], while
-outer crates use explicit `OrbitRuntime` methods and application APIs. Runtime exposes mechanisms; coordination across
-stores or side effects belongs to the owning application operation.
+`OrbitStores`, defined in `orbit-runtime`'s `stored` module, holds the concrete
+access handles used by Core: a `TaskV2Store`, `TaskCoordination`, the task
+document, history, artifact and reservation repositories, the lexical index,
+job runs, executor and policy `FileStore`s, and the host SQLite `Store`. Core
+uses these stores and repositories directly; for example, executor definition
+reads and writes go through a `FileStore` and its `executor_def` repository.
+These handles are internal, not an external SDK surface. Outer crates use
+explicit `OrbitRuntime` methods and application APIs. Runtime exposes
+mechanisms; coordination across stores or side effects belongs to the owning
+application operation.
 
 ## 5. Application-Internal Layering
 
