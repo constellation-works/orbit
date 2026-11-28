@@ -120,6 +120,46 @@ impl OrbitRuntime {
         self.resolve_task_pilot_comments(task_id, &self.get_task_comments(task_id)?)
     }
 
+    /// The notes of `task_id`'s current (latest applied) assessment, one
+    /// `{label, text, instruction_sha256, operation_id, at}` entry per note.
+    ///
+    /// `None` when the task has no assessment. An assessment that cannot be
+    /// read yields no notes, as the pilot readout degrades beside it
+    /// (`pilot_assessment_unavailable`), and never fails the task's read.
+    pub(crate) fn pilot_notes_readout(
+        &self,
+        task_id: &str,
+        comments: &[TaskComment],
+        observational: bool,
+    ) -> Option<Value> {
+        let (comment, receipt) = super::pilot_receipts(comments).next()?;
+        let operation_id = receipt.operation_id;
+        let audit = if observational {
+            self.observe_task_pilot_audit(task_id, receipt)
+        } else {
+            self.task_pilot_audit(task_id, receipt)
+        };
+        let notes = audit
+            .ok()
+            .and_then(|audit| audit.get("assessment")?.get(super::note::NOTES).cloned())
+            .and_then(|notes| notes.as_array().cloned())
+            .unwrap_or_default();
+        Some(Value::Array(
+            notes
+                .iter()
+                .filter_map(|note| {
+                    Some(json!({
+                        "label": note.get("label")?.as_str()?,
+                        "text": note.get("text")?.as_str()?,
+                        "instruction_sha256": note.pointer("/instruction/sha256"),
+                        "operation_id": operation_id,
+                        "at": comment.at,
+                    }))
+                })
+                .collect(),
+        ))
+    }
+
     /// Publish evidence before its receipt under the caller's task write lock.
     /// A failed mutation can leave an unreferenced artifact, never a receipt
     /// pointing at evidence that has not been persisted. Replays use the same

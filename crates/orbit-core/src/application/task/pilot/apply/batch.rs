@@ -94,6 +94,16 @@ pub(crate) fn apply(
                 .collect::<BTreeMap<_, _>>()
         })
         .unwrap_or_default();
+    let pilot_notes = source
+        .as_ref()
+        .map(|source| {
+            crate::application::pilot_note::admitted_pilot_notes_at(
+                &runtime.paths().repo_root,
+                runtime.pilot_note_settings(),
+                &source.source_revision,
+            )
+        })
+        .unwrap_or_default();
     let context = ApplyContext {
         runtime,
         action,
@@ -108,6 +118,7 @@ pub(crate) fn apply(
         pilot_crew: pilot_crew.as_deref(),
         round,
         partition_draws: &partition_draws,
+        pilot_notes: &pilot_notes,
     };
     let mut applied = Applied::default();
     let mut partition_decisions = partitions

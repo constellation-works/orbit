@@ -299,6 +299,7 @@ fn record(input: &Map<String, Value>, shown: Shown) -> CommandOut {
             let _ = writeln!(out, "  {}", comment_line(comment));
         }
     }
+    out.push_str(&pilot_notes_block(task.get("pilot_notes")));
     let context_files = list("context_files");
     if !context_files.is_empty() {
         let _ = writeln!(out, "{} {}", bold("Context:"), context_files.join(", "));
@@ -607,6 +608,38 @@ fn artifact_label(artifact: &Value) -> String {
         .and_then(Value::as_u64)
         .unwrap_or_default();
     format!("{} ({}, {size} bytes)", part("path"), part("media_type"))
+}
+
+/// The `Pilot notes:` block under the pilot's summary: one label and its text
+/// per note, empty when the assessment has none. A note is a model's text, so
+/// control characters other than newline and tab never reach the terminal.
+fn pilot_notes_block(notes: Option<&Value>) -> String {
+    let mut out = String::new();
+    let notes = notes
+        .and_then(Value::as_array)
+        .map_or(&[][..], Vec::as_slice);
+    if notes.is_empty() {
+        return out;
+    }
+    let _ = writeln!(out, "{}", bold("Pilot notes:"));
+    for note in notes {
+        let part = |key: &str| note.get(key).and_then(Value::as_str).unwrap_or_default();
+        let text: String = part("text")
+            .chars()
+            .filter(|character| !character.is_control() || matches!(character, '\n' | '\t'))
+            .collect();
+        let mut lines = text.lines();
+        let _ = writeln!(
+            out,
+            "  - {}: {}",
+            part("label"),
+            lines.next().unwrap_or_default()
+        );
+        for line in lines {
+            let _ = writeln!(out, "    {line}");
+        }
+    }
+    out
 }
 
 fn comment_line(comment: &TaskComment) -> String {

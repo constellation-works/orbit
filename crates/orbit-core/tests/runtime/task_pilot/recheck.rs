@@ -29,7 +29,7 @@ fn assessment(task_id: &str) -> Value {
 }
 
 impl Workspace {
-    fn recheck_task(&self, title: &str) -> Task {
+    pub(super) fn recheck_task(&self, title: &str) -> Task {
         self.runtime
             .add_task(TaskAddParams {
                 title: title.into(),
@@ -42,7 +42,7 @@ impl Workspace {
             .unwrap()
     }
 
-    fn prepare_with(&self, task_id: &str, extra: Value) -> Value {
+    pub(super) fn prepare_with(&self, task_id: &str, extra: Value) -> Value {
         let mut input = json!({
             "task_ids": [task_id], "workspace_path": self.repo, "base_branch": "main",
         });
@@ -52,7 +52,7 @@ impl Workspace {
         self.action("prepare_task_pilot", input)
     }
 
-    fn apply_tasks(&self, prepared: &Value, tasks: Vec<Value>) -> Value {
+    pub(super) fn apply_tasks(&self, prepared: &Value, tasks: Vec<Value>) -> Value {
         let ids: Vec<_> = tasks.iter().map(|task| task["task_id"].clone()).collect();
         self.action(
             "apply_task_pilot_results",
@@ -63,16 +63,8 @@ impl Workspace {
         )
     }
 
-    /// Pilot `task` in full with a holding utility finding.
-    fn held(&self, task: &Task) -> Value {
-        let prepared = self.prepare_with(&task.id, json!({}));
-        let applied = self.apply_tasks(&prepared, vec![assessment(&task.id)]);
-        assert_eq!(applied["applied_count"], 1, "{applied}");
-        prepared
-    }
-
     /// The newest task-pilot receipt: its operation id and audit.
-    fn latest_receipt(&self, task_id: &str) -> (String, Value) {
+    pub(super) fn latest_receipt(&self, task_id: &str) -> (String, Value) {
         let comments = self.runtime.get_task_comments(task_id).unwrap();
         let comment = comments
             .iter()
@@ -84,6 +76,14 @@ impl Workspace {
             receipt.operation_id.to_string(),
             super::pilot_audit(&self.runtime, task_id, comment),
         )
+    }
+
+    /// Pilot `task` in full with a holding utility finding.
+    fn held(&self, task: &Task) -> Value {
+        let prepared = self.prepare_with(&task.id, json!({}));
+        let applied = self.apply_tasks(&prepared, vec![assessment(&task.id)]);
+        assert_eq!(applied["applied_count"], 1, "{applied}");
+        prepared
     }
 
     fn update(&self, task_id: &str, params: TaskUpdateParams) {

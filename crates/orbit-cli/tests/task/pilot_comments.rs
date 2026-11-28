@@ -156,6 +156,62 @@ fn task_show_summarizes_pilot_comments_without_changing_json_or_fallback() {
     );
 }
 
+fn task_show_prints_pilot_notes_under_the_pilot_summary() {
+    let fixture = Fixture::new();
+    let id = fixture.json(&["task", "list", "--json"])[0]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let assessment = json!({
+        "disposition": "selectors", "confidence": "high", "recommended_crew": "fixture-crew",
+        "recommended_complexity": "medium", "assessment_rationale": "Readable rationale",
+        "notes": [{
+            "label": "review_focus",
+            "text": "Read the retry loop first.\nThen the lock order.\u{1b}[31m",
+            "instruction": {"path": "docs/focus.md", "revision": "r", "sha256": "ab".repeat(32)},
+        }],
+    });
+    let receipt = format!(
+        "operation_id={}\n{}",
+        "c".repeat(64),
+        json!({"assessment": assessment, "complexity_before": "low"})
+    );
+    let before = fixture.json(&["task", "show", &id, "--json"]);
+    assert!(before.get("pilot_notes").is_none(), "{before}");
+    fixture
+        .command(&["task", "update", &id, "--comment", &receipt, "--json"])
+        .env("ORBIT_ACTOR", "task-pilot")
+        .assert()
+        .success();
+    let output = fixture
+        .command(&["task", "show", &id])
+        .env("NO_COLOR", "1")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let output = String::from_utf8(output).unwrap();
+    let block = output.split_once("Pilot notes:\n").unwrap().1;
+    assert!(
+        block.starts_with(
+            "  - review_focus: Read the retry loop first.\n    Then the lock order.[31m\n"
+        ),
+        "{block}"
+    );
+    assert!(!output.contains('\u{1b}'), "{output}");
+    assert!(
+        output.find("Comments:") < output.find("Pilot notes:"),
+        "{output}"
+    );
+    let shown = fixture.json(&["task", "show", &id, "--json"]);
+    assert_eq!(shown["pilot_notes"][0]["label"], "review_focus", "{shown}");
+    assert_eq!(
+        shown["pilot_notes"][0]["instruction_sha256"],
+        "ab".repeat(32)
+    );
+}
+
 #[test]
 fn pilot_comment_rendering() {
     for (name, check) in [
@@ -166,6 +222,10 @@ fn pilot_comment_rendering() {
         (
             "task_show_summarizes_pilot_comments_without_changing_json_or_fallback",
             task_show_summarizes_pilot_comments_without_changing_json_or_fallback as fn(),
+        ),
+        (
+            "task_show_prints_pilot_notes_under_the_pilot_summary",
+            task_show_prints_pilot_notes_under_the_pilot_summary as fn(),
         ),
     ] {
         tracing::info!(case = name, "CLI contract row");

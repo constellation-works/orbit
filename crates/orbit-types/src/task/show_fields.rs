@@ -8,7 +8,7 @@
 //! host-local crew enrichments (`resolved_crew`, `crew_model`,
 //! `crew_unresolved`, `os_requirement`, `placement_wait`) still need a
 //! runtime fetch; the
-//! `pilot_warnings` enrichment reads the latest pilot audit sidecar; the
+//! `pilot_warnings` and `pilot_notes` enrichments read the latest pilot audit sidecar; the
 //! remaining fields are projected from the record itself.
 
 use std::collections::BTreeMap;
@@ -77,6 +77,7 @@ define_task_show_projection_fields!(
     "experiments",
     "readiness",
     "pilot_warnings",
+    "pilot_notes",
     "open_decisions",
     "final_recovery",
     "completion_hold",

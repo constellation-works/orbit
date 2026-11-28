@@ -23,8 +23,8 @@ mod write;
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use orbit_types::workflow::ActivityCrewDraw;
 use orbit_types::workflow::automation::members::PreparationPolicy;
+use orbit_types::workflow::{ActivityCrewDraw, PilotNoteInstruction};
 use serde_json::Value;
 
 use crate::OrbitRuntime;
@@ -66,6 +66,10 @@ struct ApplyContext<'a> {
     /// Each partition's resolved crew when the run drew a task-pilot
     /// `<crew>@auto` member, by partition index.
     partition_draws: &'a BTreeMap<u64, ActivityCrewDraw>,
+    /// The pilot-note instructions the run's prompt carried, resolved at the
+    /// prepared source revision as the pilot's dispatch resolved them. A
+    /// returned note under any other label is dropped.
+    pilot_notes: &'a [PilotNoteInstruction],
 }
 
 impl ApplyContext<'_> {

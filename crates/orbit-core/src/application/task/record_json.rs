@@ -79,6 +79,9 @@ impl OrbitRuntime {
                 object.insert("open_decisions".to_string(), open);
             }
         }
+        if let Some(notes) = self.pilot_notes_readout(&row.task.id, &row.comments, observational) {
+            object.insert("pilot_notes".into(), notes);
+        }
         if let Some(url) = self.task_permalink_url(&row.task.id) {
             object.insert("url".to_string(), Value::String(url));
         }
@@ -327,6 +330,19 @@ pub(crate) fn task_show_field_json_with_row(
                 comments,
                 &|id: &str| task_is_done(runtime, status_by_id, id),
             )))
+        }
+        "pilot_notes" => {
+            let comments_owned;
+            let comments: &[orbit_types::task::TaskComment] = match row {
+                Some(row) => &row.comments,
+                None => {
+                    comments_owned = runtime.get_task_comments(&task.id)?;
+                    &comments_owned
+                }
+            };
+            Ok(runtime
+                .pilot_notes_readout(&task.id, comments, false)
+                .unwrap_or(Value::Null))
         }
         "os_requirement" => Ok(TaskOsReadout::new(runtime)?.requirement(task)),
         "placement_wait" => Ok(TaskOsReadout::new(runtime)?

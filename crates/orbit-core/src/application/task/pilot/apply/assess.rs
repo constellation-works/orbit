@@ -38,6 +38,9 @@ pub(super) fn assess_with(
             "note": format!("warning: dropped self-reference {task_id} from blocked_by"),
         }));
     }
+    // Notes add to the assessment and decide nothing: each is checked and kept
+    // or dropped on its own, and no outcome here depends on one.
+    crate::application::task::pilot::note::settle_notes(&mut assessment, context.pilot_notes);
     let recommended = validate_recommendations(action, task_id, &assessment)
         .map_err(refused(task_id, "invalid"))?;
     let complexity = resolve_applied_complexity(recommended, snapshot.complexity);
