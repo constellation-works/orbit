@@ -5,7 +5,7 @@ tags: [operations, health, doctor, dashboard, routines]
 paths: ["crates/orbit-core/src/app/doctor/mod.rs", "crates/orbit-core/src/application/job/run/reconcile.rs"]
 related_features: [orbit-core, activity-job, routines]
 related_artifacts: [ORB-10005, ORB-10070, ORB-10473, ORB-10501, ORB-10558, ORB-10986, ORB-11791, ORB-12109, ORB-12223, ORB-12244, ORB-12968]
-last_validated: 2026-11-23
+last_validated: 2026-11-27
 ---
 
 # Check Orbit Health
@@ -37,6 +37,13 @@ normally report a row on failure; runtime/store startup failures can prevent a r
 Default database checks read the header and schema ledger without scanning data pages.
 Use `orbit doctor --deep` after a restore or when corruption is suspected to also run
 SQLite `PRAGMA quick_check`; it reads the entire store and can take much longer on a cold cache.
+
+For machine-readable checks, `orbit doctor --json` and `--format json` keep
+their top-level array of check rows. Count rows with `status: "error"` as
+failures and `status: "warning"` as warnings. `--format ndjson` emits those
+rows followed by a summary record with numeric `failures` and `warnings`
+fields. On a healthy or warning-only run all three structured modes write nothing
+to stderr; when a check fails they write the one-line count to stderr.
 
 | Check | What it reports | Status and next step |
 |---|---|---|

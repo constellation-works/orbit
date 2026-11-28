@@ -29,6 +29,12 @@ struct RenderFixtureOutput {
     stderr: String,
 }
 
+/// Directory searched before the host `PATH`. It holds only the provider CLI
+/// stubs a test installs, so a fixture never depends on the host's agent CLIs.
+fn provider_stub_dir(fixture: &WorkCheckout) -> std::path::PathBuf {
+    fixture.temp.path().join("provider-stubs")
+}
+
 fn command(fixture: &WorkCheckout) -> assert_cmd::Command {
     let mut command = cargo_bin_cmd!("orbit");
     test_env::clear_inherited_authority(|name| {
@@ -38,7 +44,24 @@ fn command(fixture: &WorkCheckout) -> assert_cmd::Command {
     command.env("HOME", &fixture.home);
     command.env("USERPROFILE", &fixture.home);
     command.env_remove("ORBIT_FORMAT");
+    let mut path = vec![provider_stub_dir(fixture)];
+    if let Some(host) = std::env::var_os("PATH") {
+        path.extend(std::env::split_paths(&host));
+    }
+    command.env("PATH", std::env::join_paths(path).expect("join PATH"));
     command
+}
+
+/// Install an executable `name` that exits 0 in the fixture's provider stub
+/// directory. `workspace init` enables a provider's crews only when its CLI is
+/// on PATH, so a healthy fixture must install the CLI rather than inherit it.
+#[cfg(unix)]
+fn install_provider_stub(fixture: &WorkCheckout, name: &str) {
+    let dir = provider_stub_dir(fixture);
+    mkdir(&dir);
+    let path = dir.join(name);
+    put(&path, "#!/bin/sh\nexit 0\n");
+    set_mode(&path, 0o755);
 }
 fn run(fixture: &WorkCheckout, args: &[&str]) -> Output {
     if args.first() == Some(&"doctor") {
@@ -70,8 +93,14 @@ fn doctor(fixture: &WorkCheckout, extra: &[&str]) -> Output {
     cmd.output().expect("doctor report")
 }
 fn rows(output: &Output) -> Vec<Value> {
-    let parsed = serde_json::from_slice(&output.stdout);
-    parsed.unwrap_or_else(|error| panic!("doctor JSON: {error}; {output:?}"))
+    let parsed: Value = serde_json::from_slice(&output.stdout)
+        .unwrap_or_else(|error| panic!("doctor JSON: {error}; {output:?}"));
+    let checks = parsed
+        .as_array()
+        .or_else(|| parsed.get("checks").and_then(Value::as_array));
+    checks
+        .unwrap_or_else(|| panic!("doctor JSON checks are not an array: {parsed}; {output:?}"))
+        .clone()
 }
 fn row<'a>(rows: &'a [Value], name: &str) -> &'a Value {
     let found = rows.iter().find(|row| row["check"] == name);
@@ -2192,13 +2221,25 @@ fn severity_order(text: &str) -> (bool, bool) {
     }
     (warn, ok_after)
 }
-/// ORB-16960: count on stderr, severity order, `--problems` filters human rows, JSON stays full.
+
+/// ORB-16960: counts, severity order, `--problems` filters human rows, JSON stays full.
 #[test]
 fn doctor_prints_summary_count_orders_by_severity_and_filters_problems() {
     if in_child("doctor::doctor_prints_summary_count_orders_by_severity_and_filters_problems") {
         return;
     }
     let f = WorkCheckout::new();
+    run_ok(
+        &f,
+        &[
+            "workspace",
+            "init",
+            "--name",
+            "doctor-summary-fixture",
+            "--ship-mode",
+            "local",
+        ],
+    );
     let is_summary = |line: &str| line.contains(" failure(s), ") && line.ends_with(" warning(s).");
     // 1. Plain stdout stays tab-separated records; the count is on stderr.
     let plain = run(&f, &["doctor", "--format", "plain"]);
@@ -2210,8 +2251,12 @@ fn doctor_prints_summary_count_orders_by_severity_and_filters_problems() {
         "summary must not be a plain stdout record: {stdout}"
     );
     assert!(
-        utf8(plain.stderr).lines().any(is_summary),
-        "summary must be on stderr"
+        utf8(plain.stderr.clone())
+            .lines()
+            .next()
+            .is_some_and(is_summary),
+        "summary must be first on stderr: {}",
+        utf8(plain.stderr.clone())
     );
     // 2. Introduce a warning via a dangling skill symlink.
     let base = f.work.join(".orbit/skills");
@@ -2226,8 +2271,11 @@ fn doctor_prints_summary_count_orders_by_severity_and_filters_problems() {
         "table stdout must start with header: {first}"
     );
     assert!(
-        utf8(table_out.stderr).lines().any(is_summary),
-        "table path must report count on stderr"
+        utf8(table_out.stderr)
+            .lines()
+            .next()
+            .is_some_and(is_summary),
+        "table path must report count first on stderr"
     );
     // Row ordering in plain output: failures, then warnings, then ok rows.
     let plain_warn = run(&f, &["doctor", "--format", "plain"]);
@@ -2235,6 +2283,13 @@ fn doctor_prints_summary_count_orders_by_severity_and_filters_problems() {
     assert!(
         !plain_str.lines().any(is_summary),
         "summary must stay off plain stdout: {plain_str}"
+    );
+    assert!(
+        utf8(plain_warn.stderr)
+            .lines()
+            .next()
+            .is_some_and(is_summary),
+        "warning summary must remain first on plain stderr"
     );
     let (seen_warn, seen_ok_after) = severity_order(&plain_str);
     #[cfg(unix)]
@@ -2251,8 +2306,55 @@ fn doctor_prints_summary_count_orders_by_severity_and_filters_problems() {
             assert!(problem, "--problems only errors/warnings: {line}");
         }
     }
-    // 4. --json with and without --problems returns the full array.
-    let normal = rows(&run(&f, &["doctor", "--json"]));
+    // 4. Structured formats keep stderr clean and expose the summary counts.
+    let json_out = run(&f, &["doctor", "--json"]);
+    assert!(
+        json_out.status.success(),
+        "warning-only doctor: {json_out:?}"
+    );
+    assert!(json_out.stderr.is_empty(), "--json stderr: {json_out:?}");
+    let document: Value = serde_json::from_slice(&json_out.stdout).expect("doctor JSON array");
+    assert!(document.is_array(), "doctor JSON shape changed: {document}");
+    let normal = rows(&json_out);
+    let failures = normal.iter().filter(|row| row["status"] == "error").count();
+    let warnings = normal
+        .iter()
+        .filter(|row| row["status"] == "warning")
+        .count();
+
+    let format_json = run(&f, &["doctor", "--format", "json"]);
+    assert!(
+        format_json.status.success(),
+        "warning-only doctor: {format_json:?}"
+    );
+    assert!(
+        format_json.stderr.is_empty(),
+        "--format json stderr: {format_json:?}"
+    );
+    let format_document: Value =
+        serde_json::from_slice(&format_json.stdout).expect("doctor --format json array");
+    assert!(
+        format_document.is_array(),
+        "doctor --format json shape changed: {format_document}"
+    );
+
+    let ndjson = run(&f, &["doctor", "--format", "ndjson"]);
+    assert!(ndjson.status.success(), "warning-only doctor: {ndjson:?}");
+    assert!(ndjson.stderr.is_empty(), "ndjson stderr: {ndjson:?}");
+    let mut records = utf8(ndjson.stdout)
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).expect("doctor ndjson record"))
+        .collect::<Vec<_>>();
+    let trailer = records.pop().expect("doctor ndjson summary trailer");
+    assert_eq!(trailer["summary"]["failures"], failures);
+    assert_eq!(trailer["summary"]["warnings"], warnings);
+    assert_eq!(
+        trailer["summary"]["text"],
+        format!("{failures} failure(s), {warnings} warning(s).")
+    );
+    assert_eq!(records.len(), normal.len());
+
+    // --problems still returns all diagnostic rows in the JSON envelope.
     let problems_json = rows(&run(&f, &["doctor", "--problems", "--json"]));
     let same_len = normal.len() == problems_json.len();
     assert!(same_len, "--problems --json must return all rows");
@@ -2272,6 +2374,8 @@ fn stdout_trailers_go_to_stderr_for_doctors_and_migrate() {
         return;
     }
     let f = WorkCheckout::new();
+    #[cfg(unix)]
+    install_provider_stub(&f, "claude");
     run_ok(
         &f,
         &[
@@ -2360,13 +2464,18 @@ fn stdout_trailers_go_to_stderr_for_doctors_and_migrate() {
         "doctor healthy prose must not be on stdout"
     );
     let doctor_stderr = utf8(doctor_plain.stderr.clone());
-    if doctor_stderr.contains("0 failure(s), 0 warning(s).") {
-        has(&doctor_stderr, "Workspace healthy.");
-        let doctor_json = run(&f, &["doctor", "--format", "json"]);
-        let parsed: Value = serde_json::from_slice(&doctor_json.stdout).expect("doctor JSON");
-        assert!(parsed.is_array(), "doctor JSON shape: {parsed}");
-        has(&utf8(doctor_json.stderr.clone()), "Workspace healthy.");
-    }
+    assert!(
+        doctor_stderr.contains("0 failure(s), 0 warning(s)."),
+        "fixture should be healthy: {doctor_stderr}"
+    );
+    has(&doctor_stderr, "Workspace healthy.");
+    let doctor_json = run(&f, &["doctor", "--format", "json"]);
+    let parsed: Value = serde_json::from_slice(&doctor_json.stdout).expect("doctor JSON");
+    assert!(parsed.is_array(), "doctor JSON shape: {parsed}");
+    assert!(
+        doctor_json.stderr.is_empty(),
+        "doctor JSON stderr: {doctor_json:?}"
+    );
     // ORB-11597: --fix repair counts stay structured rows with the notice on stderr.
     let fix = doctor(&f, &["--fix-retired-config-keys"]);
     let fix_rows = rows(&fix);
