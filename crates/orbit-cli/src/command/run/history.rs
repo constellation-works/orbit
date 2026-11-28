@@ -1,6 +1,7 @@
 use orbit_core::app::run::FailureRow;
 
-use clap::Args;
+use clap::builder::{PossibleValuesParser, TypedValueParser};
+use clap::{Args, ValueEnum};
 use orbit_core::Core;
 use orbit_core::app::run::{Command, exec};
 use orbit_core::app::run::{
@@ -33,8 +34,14 @@ pub struct RunHistoryArgs {
     #[arg(long = "task")]
     pub task_id: Option<String>,
 
-    /// Filter to any of these comma-separated run states
-    #[arg(long, value_delimiter = ',', value_parser = parse_run_state)]
+    /// Filter to runs with any of these comma-separated states
+    #[arg(
+        long,
+        value_delimiter = ',',
+        value_parser = run_state_parser(),
+        hide_possible_values = true,
+        help = run_state_help()
+    )]
     pub state: Vec<JobRunState>,
 
     /// Only runs created at or after this RFC 3339 time or relative duration (24h, 7d)
@@ -81,10 +88,24 @@ impl ExecuteCore for RunHistoryArgs {
     }
 }
 
-// Use the wire-state parser rather than Clap's enum help, which includes
-// implementation notes from the persisted domain type.
-fn parse_run_state(raw: &str) -> Result<JobRunState, String> {
-    raw.parse()
+// Keep the canonical wire values while omitting variant notes from CLI help.
+fn run_state_values() -> Vec<String> {
+    JobRunState::value_variants()
+        .iter()
+        .filter_map(|state| state.to_possible_value())
+        .map(|value| value.get_name().to_owned())
+        .collect::<Vec<_>>()
+}
+
+fn run_state_help() -> String {
+    format!(
+        "Filter to comma-separated run states ({})",
+        run_state_values().join(", ")
+    )
+}
+
+fn run_state_parser() -> impl TypedValueParser<Value = JobRunState> {
+    PossibleValuesParser::new(run_state_values()).try_map(|raw| raw.parse::<JobRunState>())
 }
 
 pub(crate) fn run_history_payload(
