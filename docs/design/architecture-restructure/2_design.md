@@ -388,7 +388,7 @@ orbit-store/src/
 
 ## 8. Environment
 
-**At design time.** `crates/orbit-common/src/env_vars.rs` declared 136 names with meaning, default and matching flag. A golden test generated the reference in `docs/CONFIG.md` for STD-01 §R25. Across 12 crates, 232 `env::var` calls and 15 `env::vars` calls read directly from the process. Of the single-variable reads, 144 used a declared constant and the others used a local constant or computed name.
+**At design time.** `crates/orbit-common/src/env_vars.rs` declared 136 names with meaning, default and matching flag. A golden test generated the [environment reference](../../config/environment.md), then part of the single-page configuration reference, for STD-01 §R25. Across 12 crates, 232 `env::var` calls and 15 `env::vars` calls read directly from the process. Of the single-variable reads, 144 used a declared constant and the others used a local constant or computed name.
 
 **Implemented** [ORB-28365] to [ORB-28371]. Resolved configuration carries the startup snapshot into the runtime's base layer. Root discovery, engine launcher and Git policy, tool dispatch, and the publication Git runner receive the snapshot or values resolved from it. The architecture ratchet held the remaining direct process-environment calls while conversion was in flight; the Clippy gate below now enforces the production boundary [ORB-28371]. Follow-ups: calls that fetch the whole environment instead of receiving a value are ratcheted [ORB-28646], and the CLI entry resolves the root, worker invocation and actor once [ORB-28647].
 

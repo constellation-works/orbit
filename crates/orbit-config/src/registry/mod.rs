@@ -185,7 +185,7 @@ pub struct ConfigKeyDescriptor {
     ///
     /// One sentence of at most 100 characters. Accepted values are in
     /// `allowed`, the built-in default comes from the snapshot, and longer
-    /// explanation is in `detail` or `docs/CONFIG.md`.
+    /// explanation is in `detail` or `docs/config/README.md`.
     pub description: &'static str,
     /// Further explanation a detail view shows under `description`.
     pub detail: Option<&'static str>,

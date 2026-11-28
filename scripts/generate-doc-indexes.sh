@@ -142,31 +142,37 @@ design_entry_doc() {
   printf '%s\n' "$candidate"
 }
 
-render_guide_rows() {
-  local directory="$1"
-  local excluded="${2:-}"
-  local file
+render_guide_row() {
+  local file="$1"
   local title
   local summary
   local relative
 
+  if ! is_versioned "$file"; then
+    return
+  fi
+
+  title="$(first_h1 "$file")"
+  title="${title:-$(basename "$file" .md)}"
+  summary="$(frontmatter_value "$file" summary)"
+  if [[ -z "$summary" ]]; then
+    summary="$(first_body_paragraph "$file")"
+  fi
+
+  relative="${file#"$docs_dir/"}"
+  printf '| [%s](./%s) | %s |\n' \
+    "$(markdown_escape "$title")" \
+    "$relative" \
+    "$(markdown_escape "$summary")"
+}
+
+render_guide_rows() {
+  local directory="$1"
+  local excluded="${2:-}"
+  local file
+
   while IFS= read -r file; do
-    if ! is_versioned "$file"; then
-      continue
-    fi
-
-    title="$(first_h1 "$file")"
-    title="${title:-$(basename "$file" .md)}"
-    summary="$(frontmatter_value "$file" summary)"
-    if [[ -z "$summary" ]]; then
-      summary="$(first_body_paragraph "$file")"
-    fi
-
-    relative="${file#"$docs_dir/"}"
-    printf '| [%s](./%s) | %s |\n' \
-      "$(markdown_escape "$title")" \
-      "$relative" \
-      "$(markdown_escape "$summary")"
+    render_guide_row "$file"
   done < <(find "$directory" -maxdepth 1 -type f -name '*.md' ! -path "$docs_dir/INDEX.md" ! -name "${excluded:-.}" | sort)
 }
 
@@ -386,7 +392,8 @@ render_index() {
     printf '### Guides\n\n'
     printf '| Guide | Purpose |\n'
     printf '| --- | --- |\n'
-    render_guide_rows "$docs_dir"
+    render_guide_row "$docs_dir/config/README.md"
+    render_guide_rows "$docs_dir" CONFIG.md
     printf '\n### Principles\n\n'
     printf 'Stances Orbit holds across features, with the reason and the cost, one page each under\n'
     printf '`docs/principles/`. Admission and page shape: [principle conventions](./principles/CONVENTIONS.md).\n\n'

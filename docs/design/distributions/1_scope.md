@@ -2,7 +2,7 @@
 title: "Scope: Distributions and workspace presets"
 owner: claude
 created_date: 2026-10-27
-updated_date: 2026-11-15
+updated_date: 2026-11-27
 last_validated: 2026-11-24
 status: Implemented
 stage: shipped
@@ -109,7 +109,7 @@ routines, a list policy is the durable per-name opt-out; there is no separate ro
 delete record.
 
 `orbit workspace show` reports the effective policies and applied preset. `orbit doctor`
-does not report an excluded default as missing. See [Configuration](../../CONFIG.md)
+does not report an excluded default as missing. See [Configuration](../../config/README.md)
 for the operator-facing reference.
 
 ### Workspace presets

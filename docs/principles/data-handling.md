@@ -77,7 +77,7 @@ command you ran or a crew you configured.
 
 Most Orbit work is done by agent CLIs — for example Claude Code, Codex, Gemini,
 Copilot, Grok, Antigravity, and Muse (the Cursor, Pi, and OpenCode lanes were
-[retired](../CONFIG.md#retired-providers)) — running as
+[retired](../config/providers.md#retired-providers)) — running as
 subprocesses. Those processes talk to their own
 providers with their own credentials under their own terms of service. Orbit
 does not proxy, log, or inspect that traffic beyond the stdout/stderr it
@@ -99,7 +99,7 @@ One specific worth knowing:
 
 | Surface | Default | Notes |
 | --- | --- | --- |
-| Dashboard (`orbit web serve`) | Binds `127.0.0.1` | Reach a remote workspace with `orbit web connect`, which tunnels over SSH, or front it with Tailscale Serve: a `Host` in `machine.web.trusted_hosts` (no port or `:443`) is admitted only with exactly one `Tailscale-User-Login` listed in `machine.web.trusted_logins`. Safe requests, including shell navigation and API reads, may omit `Origin`; when present it must match the `Host` (`https://<host>`). API writes (`POST`, `PUT`, `PATCH` or `DELETE`) require that matching `Origin` ([CONFIG.md](../CONFIG.md#dashboard-over-tailscale-serve)). |
+| Dashboard (`orbit web serve`) | Binds `127.0.0.1` | Reach a remote workspace with `orbit web connect`, which tunnels over SSH, or front it with Tailscale Serve: a `Host` in `machine.web.trusted_hosts` (no port or `:443`) is admitted only with exactly one `Tailscale-User-Login` listed in `machine.web.trusted_logins`. Safe requests, including shell navigation and API reads, may omit `Origin`; when present it must match the `Host` (`https://<host>`). API writes (`POST`, `PUT`, `PATCH` or `DELETE`) require that matching `Origin` ([configuration reference](../config/machine.md#dashboard-over-tailscale-serve)). |
 | MCP server (`orbit mcp serve`) | Local stdio | Remote access (`--mode remote`) is a byte-transparent SSH stdio proxy; authorization is by the SSH identity you configure. |
 | MCP TCP listener (`orbit mcp listen`) | Loopback-bound TCP socket | A wider bind must be requested explicitly with `--allow-non-loopback`. A connection is accepted only when the peer's user id is the server's; a different user, or a remote TCP client with no local user id, is refused before any message is read. |
 | Lease listener | Off, not configurable | Path leases are not configurable [ORB-22808]: no command starts the listener and Orbit Web serves no lease intake socket. The retained code would run as a dedicated listener user, serve only the lease routes and `/healthz`, each lease request authenticated by a bearer lease token, and forward operations to Orbit Web over a local Unix socket, refusing `0.0.0.0` or `::` without TLS or a declared proxy. |
@@ -120,7 +120,7 @@ One specific worth knowing:
   provider runtime declares it needs, or an `env` entry of the crew that agent
   runs as. A benignly named credential such as `DATABASE_URL` does not reach an
   agent by accident. See
-  [CONFIG.md — `[execution.env]`](../CONFIG.md#executionenv--the-agent-subprocess-environment).
+  [Configuration — `[execution.env]`](../config/execution.md#executionenv--the-agent-subprocess-environment).
 - **Audit three grant surfaces, not one.** The shared `[execution.env].pass`
   list is one. The others are the global crew `env` entries and the provider's
   own credential store. A crew `env` entry reaches only that crew's agents and can
@@ -197,7 +197,7 @@ project security reporting.
 ## Related
 
 - [SECURITY.md](../../SECURITY.md) — reporting vulnerabilities; what is in scope.
-- [CONFIG.md](../CONFIG.md) — provider credentials, the subprocess environment
+- [configuration reference](../config/README.md) — provider credentials, the subprocess environment
   allowlist, sandbox profiles.
 - [state-and-backup](../runbooks/state-and-backup.md) — the complete state
   inventory.

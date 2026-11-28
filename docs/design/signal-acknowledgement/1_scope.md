@@ -2,7 +2,7 @@
 title: "Scope: Acknowledge a recurring signal as expected"
 owner: claude
 created_date: 2026-11-23
-updated_date: 2026-11-24
+updated_date: 2026-11-27
 last_validated: 2026-11-24
 status: Accepted
 stage: designing
@@ -22,7 +22,7 @@ existing state and has no acknowledgement table
 its vision left acknowledge and snooze open
 ([3_vision.md](../operator-attention/3_vision.md#1-open-questions), question 1). Two
 narrow switches already exist: `execution.env.login_auth` mutes the unset-credential warning
-for a provider that keeps its own login ([CONFIG.md](../../CONFIG.md)), and `orbit host
+for a provider that keeps its own login ([configuration reference](../../config/README.md)), and `orbit host
 offline --reason … [--until …]` lists a deliberately offline host once under the attention
 envelope's `acknowledged` field instead of as `host_unhealthy` (ORB-27669). Doctor rows have
 a stable `check_name`; drain and ship warnings are named fields of `SubmissionNotices`.

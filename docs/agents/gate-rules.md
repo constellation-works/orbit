@@ -8,7 +8,7 @@ The full text behind the `## Gates` and `## Local Rust CodeQL` bullets of the ro
 - Before handing off a diff, run `make ci-guards` and `cargo fmt --all -- --check`. Also run `rustfmt --check --edition <crate edition> <path>…` for changed test `.rs` files. For changed root-workspace crates, run `make ci-lint-affected` as the pre-handoff lint check (production, all-target and rustdoc wrapper checks per changed crate; see [Validation and CI](../development/validation-and-ci.md#validation-and-ci)); for `desktop/`, run strict Cargo Clippy.
 - When an edit changes a generated row of `docs/INDEX.md` or the feature board in `docs/design/FEATURES.md` (indexed frontmatter, first heading or summary), run `make docs-index` and `scripts/generate-doc-indexes.sh --check`, and commit the generated changes with the source.
 - `no-diff-expected` tasks run no workspace gates or validation commands and attach no `no-diff.json` or validation logs; run only what the brief requires.
-- `skip-validation` and `skip-review` skip local validation (including docs-index) and review only while every changed path matches `workflow.light_delivery_paths`; any other path voids both. Only filing or an operator sets them. See [CONFIG.md](../CONFIG.md#light-delivery-skip-review-and-skip-validation).
+- `skip-validation` and `skip-review` skip local validation (including docs-index) and review only while every changed path matches `workflow.light_delivery_paths`; any other path voids both. Only filing or an operator sets them. See [configuration reference](../config/workflow-tags.md#light-delivery-skip-review-and-skip-validation).
 
 ## Local Rust CodeQL
 

@@ -18,7 +18,7 @@ Orbit is a local-first Rust coding-agent runtime. `CLAUDE.md` imports this file;
 - For [breaking changes](RELEASING.md#versioning), the implementer tags the task `breaking-change` and adds one execution-summary line `Breaking: <x removed → use y>`. The reviewer confirms both for release tooling to derive the version bump and changelog bullet.
 - Update affected docs in the code PR. Stale docs block review.
 - Edit `AGENTS.md` only to add, revise or remove an affected rule, command or pointer. Delete or rewrite rules whose subject disappears. Give new features their own docs.
-- Never list `docs/CONFIG.md` in a task's `context_files`: shared reference doc; the implementer updates it in the same PR.
+- Keep incidental updates to the shared reference under `docs/config/` out of a task's `context_files`. The implementer updates those pages in the same PR.
 - The `doc-duties` auto-task validates root `AGENTS.md`, `CONTRIBUTING.md`, `SECURITY.md`, `ARCHITECTURE.md` and `RELEASING.md`; keep their `last_validated` frontmatter.
 - At handoff list commands as passed, failed or not run. Never say "tested" or count unavailable checks as passes.
 
@@ -30,7 +30,7 @@ Reserve `main` for release merges and hotfixes. Target every task PR at the dev 
 
 - Local full-suite checks are optional. Required PR checks (Check/Clippy/Test, Test shards 1–3) cover format, lint, goldens and the full suite. Fix failures in the PR. Don't run `make ci`, `ci-fast`, `ci-lint`, `goldens` or `ci-test-affected` as blanket gates. Run what the change needs: affected tests and `make goldens` when CLI help, MCP text or other golden surfaces change (`UPDATE=1` regenerates; review the diff). See [dev docs](docs/development/validation-and-ci.md#validation-and-ci).
 - Anchor focused `cargo test -p <crate> …` on `-p orbit-cli` so they share one workspace feature set and reuse the cached build.
-- Pre-handoff checks, the `docs/INDEX.md` rule and `no-diff-expected`: [gate rules, Gates](docs/agents/gate-rules.md#gates). Light-delivery tags: [CONFIG.md](docs/CONFIG.md#light-delivery-skip-review-and-skip-validation).
+- Pre-handoff checks, the `docs/INDEX.md` rule and `no-diff-expected`: [gate rules, Gates](docs/agents/gate-rules.md#gates). Light-delivery tags: [configuration reference](docs/config/workflow-tags.md#light-delivery-skip-review-and-skip-validation).
 - Cargo gates sharing a target directory run sequentially; overlapping ones need separate `CARGO_TARGET_DIR`s; a rebuilt `target/debug/orbit` breaks generation-bound fixtures (F2026-10-118).
 
 ## Code

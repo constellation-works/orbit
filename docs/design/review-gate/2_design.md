@@ -58,7 +58,7 @@ on for claimed leaves from selected machines while leaving the owner's own
 deliveries and unlisted machines unaffected. It is owner-side delivery
 policy, not machine authentication; it is redundant when
 `review.timing` is already `before_landing` and cannot be combined with
-`before_pr`. The [configuration reference](../../CONFIG.md) documents
+`before_pr`. The [configuration reference](../../config/review.md#review-and-operation--automatic-review) documents
 the list's validation and claim behavior.
 
 After-landing review is carried out by the workspace's shipped
@@ -1269,7 +1269,7 @@ with every distinct finding and validation record — (none, a wrong attempt,
 another contract version, or an unreadable report is `incomplete`), commits every
 uncommitted change as the one reviewer commit (§3.1) authored
 `orbit[<reviewer model>] <reviewer@orbit.invalid>` (`orbit <reviewer@orbit.invalid>`
-when the model is unknown; the [commit-message standard](../../CONFIG.md#the-commit-message-standard))
+when the model is unknown; the [commit-message standard](../../config/delivery.md#the-commit-message-standard))
 with the Orbit committer and the `Orbit-Review-Attempt` and `Orbit-Review-Crew` trailers, widens the
 tasks' selectors with an exact `file:` entry for every repaired path they do
 not cover, declared in a finding or not, with one `context_files_widened`
@@ -1546,7 +1546,7 @@ A reviewer may forget to name owed evidence, or report a check as passed
 when its host could not have run it. To close that gap, the workspace
 declares what a claimed leaf owes, and Orbit derives the requirement instead of
 reading it from the report. Each `[[review.host_evidence]]` rule
-([config](../../CONFIG.md#owed-host-evidence)) names a `kind` (`codeql` or
+([config](../../config/review.md#owed-host-evidence)) names a `kind` (`codeql` or
 `host_sandbox_test`), a display `name`, workspace-relative `paths` globs,
 optional task `tags`, an `os`, the exact `command` and the result `artifact`.
 The owner captures the rules in the review contract each claim carries. A rule
@@ -1930,7 +1930,7 @@ the dashboard shows it under **Held for review** and in the task history.
 **Worked example.** Orbit's own workspace holds CI workflows, release and
 installer files, store migrations, sandbox and credential code, and `xhard`
 tasks; the rules are listed in
-[CONFIG.md](../../CONFIG.md#completionhold--keep-risky-completions-in-review).
+[configuration reference](../../config/review.md#completionhold--keep-risky-completions-in-review).
 The on-call applies them to the owner's workspace config after this ships.
 
 **Out of scope.** Approval tiers, a model-based risk classifier, and automatic
@@ -2004,7 +2004,7 @@ A UI change's reviewer on the forge sees attached screenshots in the body
 that `pr_open` writes. A `ui`-tagged task's body carries an optional
 `## Screenshots` section built from the
 task's `screenshots/<view>-<theme>-<width>[-before|-after].<ext>` artifacts
-([CONFIG.md](../../CONFIG.md#delivery-templates-pr-commit-and-branch)).
+([configuration reference](../../config/delivery.md#delivery-templates-pr-commit-and-branch)).
 When no screenshots are publishable, the section contains
 `No screenshots attached.` and is never a missing required section; the
 configured missing section policy does not draft or refuse the PR for it.

@@ -2,7 +2,7 @@
 title: Path Leases — Design
 owner: claude
 created_date: 2026-10-25
-updated_date: 2026-11-20
+updated_date: 2026-11-27
 last_validated: 2026-11-06
 status: Draft
 feature: path-leases
@@ -40,7 +40,7 @@ are implemented; preemption remains later work. §1 is what exists today and wha
   [index.rs](../../../crates/orbit-runtime/src/stored/locks/index.rs)). Admission for local waves and
   owner pull reads the same index.
 - **Path policy.** `workflow.unlocked_context_paths` takes no lock and `workflow.generated_paths`
-  regenerates a conflicting file at landing ([CONFIG.md](../../CONFIG.md)). The conflict budget
+  regenerates a conflicting file at landing ([configuration reference](../../config/README.md)). The conflict budget
   proposes `workflow.exclusive_context_paths` and per-path holder caps.
 - **Landed paths.** Codebase facts record the paths each landed task changed
   ([scan.rs](../../../crates/orbit-core/src/app/codebase/fact/scan.rs)).
@@ -625,7 +625,7 @@ only reader of forwarding headers; malformed chains use the TCP peer for rejecti
 per 300 seconds; IPv6 /64; 60 token reads and 20 token writes/minute; 2 streams and 8 in-flight
 requests/token; 64 connections; 16 in-flight requests globally; 65536 body bytes; 5 seconds
 for headers/TLS handshake and 10 seconds for the handler/body read; 4096 tracked keys including
-two reserved overflow identities. Configured ranges and settings are in [CONFIG](../../CONFIG.md#path-leases).
+two reserved overflow identities. Configured ranges and settings are in [configuration reference](../../config/workflow.md#path-leases).
 Live budgets are never evicted at capacity; new addresses and new tokens share distinct
 conservative overflow keys. Idle keys are reclaimed during periodic maintenance.
 

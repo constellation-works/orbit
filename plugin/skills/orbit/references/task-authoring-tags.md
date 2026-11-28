@@ -62,7 +62,7 @@ optional PR screenshots section).
 A workspace can map any tag to a repository file per role
 (implement, review, recovery) under `[workflow.tag_instructions.<tag>]`,
 replace a shipped default, or switch one off ([tag instructions in the published
-configuration reference](https://github.com/constellation-works/orbit/blob/main/docs/CONFIG.md#workflowtag_instructionstag--extra-instructions-for-tagged-tasks)).
+configuration reference](https://github.com/constellation-works/orbit/blob/main/docs/config/workflow-tags.md#workflowtag_instructionstag--extra-instructions-for-tagged-tasks)).
 QA sweeps are implement tasks tagged `qa-sweep`, so that tag's implement file
 instructs QA.
 

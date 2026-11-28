@@ -128,7 +128,7 @@ as `review_gate_blocked`, `review_abandoned`, `review_timeout_incomplete` and
 
 A task filed with `skip-review`, or given it by an operator, gets no review at
 any timing while its candidate stays within `workflow.light_delivery_paths`
-([light delivery](../CONFIG.md#light-delivery-skip-review-and-skip-validation)).
+([light delivery](../config/workflow-tags.md#light-delivery-skip-review-and-skip-validation)).
 Every path the candidate changes since its pinned base must match, and every
 task it delivers must carry the tag. A candidate that includes a
 `security-state-review` task still requires an approval of its exact head.
@@ -667,7 +667,7 @@ partial failures are never replayed on the base or accepted as known red.
 
 A confirmed claim whose candidate failures are all failed tests the base
 fails too is known red, by the rule required validation applies
-([configuration](../CONFIG.md#a-red-base-is-held-not-blocked)): the candidate
+([configuration](../config/workflow-validation.md#a-red-base-is-held-not-blocked)): the candidate
 run completed without a timeout or supervisor stop, printed no sandbox
 deferral notice and names at least
 one failure. The candidate introduced none of them, so the task is not held.
@@ -1106,7 +1106,7 @@ handoff output must show acceptance for the same final candidate. For
 
 - [Review gate design](../design/review-gate/2_design.md) — verdicts, the
   two-commit shape, revalidation, budgets, and coverage.
-- [CONFIG.md](../CONFIG.md) — the `[review]` keys, `workflow.purpose_crews.review` and `workflow.purpose_crews.pre_landing_review`.
+- [Review configuration](../config/review.md#review-and-operation--automatic-review) and [purpose crew pools](../config/crews.md#purpose-crew-pools).
 - [Claimed-review artifacts](./claimed-review-artifacts.md) — the follower
   reviewer's coordinator route, its smoke procedure and rollout record.
 - [Recover stuck job runs](./stuck-job-runs.md) — runs that never reached the

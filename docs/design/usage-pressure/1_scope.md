@@ -10,16 +10,16 @@ type: design
 summary: "Scope: weight crew pool draws by how much of each provider account's usage window would expire unused, so Orbit spends the capacity that is about to reset before the capacity that is not"
 tags: [usage-pressure, crews, crew-pools, provider-limits, admission]
 created_date: 2026-10-23
-updated_date: 2026-11-20
+updated_date: 2026-11-27
 last_validated: 2026-11-20
 ---
 
 # Scope: usage-pressure crew selection
 
-Status: phases 1–4 (pressure view, task draws, shared pool draws and pull drains) ([`workflow.crew_selection`](../../CONFIG.md#usage-pressure-draws)) implemented.
+Status: phases 1–4 (pressure view, task draws, shared pool draws and pull drains) ([`workflow.crew_selection`](../../config/crews.md#usage-pressure-draws)) implemented.
 The phase-1 task [ORB-17769] records Daniel's approval of this scope on 2026-10-23;
 all four implementation phases are done, so its document status is Implemented.
-Bearing: [provider usage limits](../../CONFIG.md#provider-usage-limits) already record every
+Bearing: [provider usage limits](../../config/crews.md#provider-usage-limits) already record every
 window a provider reports ([ORB-14695] failures, [ORB-14696] post-run readings, [ORB-17644] Muse)
 and gate crews that reach a threshold ([ORB-14697]). Weighted complexity and purpose pools
 (`workflow.<complexity>_complexity_crews`, `workflow.purpose_crews.*`) choose among the crews

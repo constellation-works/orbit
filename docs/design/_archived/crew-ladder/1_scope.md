@@ -2,7 +2,7 @@
 title: "Scope: crew ladder"
 owner: claude
 created_date: 2026-10-29
-updated_date: 2026-11-07
+updated_date: 2026-11-27
 last_validated: 2026-11-07
 status: Deprecated
 feature: crew-ladder
@@ -30,7 +30,7 @@ it does well "and eventually settle to its optimal level. Or perhaps we should a
 
 Bearing: which crews may run a tier is the operator's pool configuration
 (`workflow.<tier>_complexity_crews`, `workflow.type_complexity_crews.<type>.<tier>`,
-[CONFIG.md › pools](../../../CONFIG.md#automatic-crew-pools-by-complexity)). Inside a pool,
+[crew pools](../../../config/crews.md#automatic-crew-pools-by-complexity)). Inside a pool,
 [usage pressure](../../usage-pressure/1_scope.md) and
 [crew performance](../crew-performance/1_scope.md) scale member weights, and admission writes
 the drawn crew and its `crew_source` back to the task. A crew is a model, a provider and an
