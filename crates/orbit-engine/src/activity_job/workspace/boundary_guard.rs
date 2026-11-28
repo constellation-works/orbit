@@ -220,7 +220,8 @@ impl WorktreeBoundaryGuard {
             primary_before,
             primary_baseline,
             claimed_paths: confined_claim
-                .then(|| super::claimed_primary_move::task_paths(task_ctx)),
+                .then(|| super::claimed_primary_move::task_paths(task_ctx))
+                .flatten(),
             rebase_recovery: None,
             activity: String::new(),
             audit: None,

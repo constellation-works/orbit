@@ -16,19 +16,24 @@ fn claimed_primary_move_holds_only_when_confined_and_disjoint() {
         module_path!(),
         "claimed_primary_move_holds_only_when_confined_and_disjoint",
         || {
-            for (confined, whole_repo, primary_path) in [
-                (true, false, "unrelated.txt"),
-                (true, false, "README.md"),
-                (true, true, "unrelated.txt"),
-                (false, false, "unrelated.txt"),
+            for (confined, task_selector, primary_path) in [
+                (true, None, "unrelated.txt"),
+                (true, None, "README.md"),
+                (true, Some("dir:."), "unrelated.txt"),
+                (
+                    true,
+                    Some("module:orbit_engine::activity_job::workspace::boundary_guard"),
+                    "module.rs",
+                ),
+                (false, None, "unrelated.txt"),
             ] {
-                check_primary_move(confined, whole_repo, primary_path);
+                check_primary_move(confined, task_selector, primary_path);
             }
         },
     );
 }
 
-fn check_primary_move(confined: bool, whole_repo: bool, primary_path: &str) {
+fn check_primary_move(confined: bool, task_selector: Option<&str>, primary_path: &str) {
     let task_id = "T-PRIMARY-MOVE";
     let run_id = "jrun-claimed-primary-move";
     let (fixture, host, checkout) = Fixture::with_checkout(task_id, run_id);
@@ -44,9 +49,11 @@ fn check_primary_move(confined: bool, whole_repo: bool, primary_path: &str) {
     git(&fixture.repo, &["checkout", super::BASE]);
 
     let mut host = fixture.with_provider(&host, "");
-    if whole_repo {
+    if let Some(task_selector) = task_selector {
         host.publish_task_context = true;
-        host.edit_task(task_id, |task| task.context_files.push("dir:.".to_string()));
+        host.edit_task(task_id, |task| {
+            task.context_files.push(task_selector.to_string());
+        });
     }
     host.worker = Some(WorkerInvocation {
         owner_machine_id: "owner".to_string(),
@@ -117,7 +124,7 @@ fn check_primary_move(confined: bool, whole_repo: bool, primary_path: &str) {
         "retained candidate\n"
     );
 
-    if confined && !whole_repo && primary_path == "unrelated.txt" {
+    if confined && task_selector.is_none() && primary_path == "unrelated.txt" {
         let outcome = outcome.expect("a confined, disjoint primary move holds the run");
         assert!(!outcome.success);
         let code = outcome.failure_code.expect("typed hold code");
@@ -132,7 +139,7 @@ fn check_primary_move(confined: bool, whole_repo: bool, primary_path: &str) {
     } else {
         let error = outcome.expect_err("a conflicting or unconfined primary move fails the run");
         let diagnostic = integrity_diagnostic(&error, "primary_checkout_drift");
-        if confined {
+        if confined && task_selector == Some("dir:.") {
             assert_eq!(diagnostic["conflicting_paths"], json!([primary_path]));
         }
     }

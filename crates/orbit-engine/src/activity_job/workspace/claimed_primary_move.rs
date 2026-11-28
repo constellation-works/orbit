@@ -51,14 +51,17 @@ impl WorktreeBoundaryGuard {
     }
 }
 
-pub(super) fn task_paths(task_ctx: Option<&Value>) -> Vec<PathBuf> {
-    task_ctx
-        .and_then(|task| task.get("context_files"))
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(Value::as_str)
-        .filter_map(|selector| anchor_path(selector).ok())
+pub(super) fn task_paths(task_ctx: Option<&Value>) -> Option<Vec<PathBuf>> {
+    let Some(task_ctx) = task_ctx else {
+        return Some(Vec::new());
+    };
+    let Some(context_files) = task_ctx.get("context_files") else {
+        return Some(Vec::new());
+    };
+    context_files
+        .as_array()?
+        .iter()
+        .map(|selector| anchor_path(selector.as_str()?).ok())
         .collect()
 }
 
