@@ -110,6 +110,17 @@ impl PluginTestArgs {
             "{configuration}\nRequested grants: {}.",
             report.requested_grants
         );
+        // Names the failing cases. The summary shows it, and a nonzero exit
+        // records it on the audit row, so the row says what failed.
+        let failure_line = || {
+            format!(
+                "{} of {} conformance test(s) failed against Orbit {}: {}",
+                report.failures().len(),
+                report.results.len(),
+                report.orbit_version,
+                report.failures().join(", ")
+            )
+        };
         let summary = if let Some(deferral) = &report.deferral {
             // Each notice leads its own line: the validation step and the
             // deferral handoff read them by prefix.
@@ -130,13 +141,7 @@ impl PluginTestArgs {
                 report.certification_note
             )
         } else {
-            format!(
-                "{grant_line}\n{} of {} conformance test(s) failed against Orbit {}: {}",
-                report.failures().len(),
-                report.results.len(),
-                report.orbit_version,
-                report.failures().join(", ")
-            )
+            format!("{grant_line}\n{}", failure_line())
         };
         let updated = report
             .results
@@ -184,11 +189,13 @@ impl PluginTestArgs {
         // suite deferred to a host replay exits 0 with its notices; only a
         // gate run that asked for a validation summary can defer.
         let exit_code = report.exit_code();
-        Ok(
-            Payload::blocks(doc, vec![Block::table(table), Block::text(summary)])
-                .with_exit_code(exit_code)
-                .into(),
-        )
+        let payload = Payload::blocks(doc, vec![Block::table(table), Block::text(summary)]);
+        let payload = if exit_code == 0 {
+            payload
+        } else {
+            payload.with_audit_message(failure_line())
+        };
+        Ok(payload.with_exit_code(exit_code).into())
     }
 }
 
