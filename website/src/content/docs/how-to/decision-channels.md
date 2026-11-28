@@ -48,7 +48,7 @@ Over MCP the same call is `orbit.decision` action `raise`.
 | `--question` | One or two sentences, at most 600 characters. |
 | `--options` | A JSON array of two to four objects, each with a one-line `label`, a one-line `consequence` and a `recommended` boolean. Exactly one option is recommended. |
 | `risk_tier` (per option, optional) | `routine`, `reversible`, `irreversible`, `authority` or `spend`. Omitted means `unknown`. Any other value refuses the raise. The request takes the highest tier among its options, and `unknown` ranks above `spend`. |
-| `--topic` (optional) | A structured topic or a corpus rule ID. If it names a current rule the operator has set to auto, the request is answered from that rule at once and recorded as a precedent, not a human answer. |
+| `--topic` (optional) | A structured topic or corpus rule ID. See [Precedent for repeated decisions](#precedent-for-repeated-decisions) for the auto-answer conditions. An identical open question reuses the existing request unchanged. |
 
 A workspace holds at most 20 open agent-raised requests, and one filer at most
 5. Past either cap the raise is refused.
@@ -68,8 +68,12 @@ its human crew since the raise, the answer is refused and the request stays open
 
 ### Precedent for repeated decisions
 
-A corpus rule lets the operator answer a kind of decision once. Later raises
-with that topic are answered from the rule. These commands are CLI only:
+A corpus rule lets the operator answer a kind of decision once. A precedent
+answers an eligible newly raised request only when its topic matches the exact
+qualified rule (`topic/rule`) or a unique bare rule ID, the rule is current and
+operator-approved for auto-answer (`auto`), and its answer chooses one of the
+request's offered options. Re-raising an identical open question returns the
+existing request unchanged. These commands are CLI only:
 
 | Command | Effect |
 |---|---|
