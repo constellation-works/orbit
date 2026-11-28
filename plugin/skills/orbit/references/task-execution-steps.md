@@ -121,10 +121,12 @@ execution envelope. It is absent when empty and is not an `orbit.task.show`
 field.
 
 When the envelope lists it, the delivery pipeline runs those commands
-on the final candidate after base synchronization; for a diff, leave them to it
-and run focused checks plus every required check the list omits. A clean no-op
-or already-landed handoff skips that validation, so it still runs every
-required check.
+on the final candidate after base synchronization. For a diff, leave them to it,
+except the pre-handoff checks the workspace guide requires for a diff (such as
+`make ci-guards`): run those before handoff even when the list names them, and
+run focused checks plus every required check the list omits. A pre-handoff run
+does not count as pipeline final validation. A clean no-op or already-landed
+handoff skips that validation, so it still runs every required check.
 
 For a task tagged `no-diff-expected`, in owner or claimed mode,
 run no workspace gates or required validation commands and attach no
