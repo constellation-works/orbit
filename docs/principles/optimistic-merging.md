@@ -1,7 +1,7 @@
 ---
 type: context
 summary: "Optimistic Merging: Orbit's preferred delivery mode. Merge fast, review after landing, keep the queue draining"
-last_validated: 2026-11-25
+last_validated: 2026-11-27
 tags: [delivery, review, throughput, scheduling, philosophy]
 related_features: [review-gate, auto-tasks, routines, activity-job, distributed-drain]
 ---
@@ -14,7 +14,7 @@ Public write-up: [Delivery philosophy: optimistic merging](https://danieljhk.com
 
 ## Why: throughput
 
-Orbit schedules declared file footprints by conflict-free availability. A task with a nonempty `context_files` footprint can be admitted when those selectors do not overlap active reservations; selector-free tasks have no file reservation. Reservations protect the declared footprint through landing.
+Orbit schedules declared file footprints by conflict-free availability, as [declared footprints](declared-footprints.md) sets out: a task with a nonempty `context_files` footprint is admitted when its selectors do not overlap active reservations, and a selector-free task has no file reservation.
 
 A long review gate keeps a declared file reservation held while nothing is changing. Every queued task with an overlapping declared footprint waits, concurrency drops, and the queue stalls behind review latency rather than implementation time.
 
@@ -32,7 +32,7 @@ With after-landing review, the required checks pass before merge, then the footp
 Optimistic merging moves control earlier, to admission, rather than removing it.
 
 - **Filing is not starting.** New tasks land in `proposed`. Moving a task to `backlog` is a separate approval.
-- **Declare a footprint for file reservations.** Tasks should carry `context_files` before backlog admission. Orbit still admits selector-free backlog tasks in some paths, but an empty context holds no file lock. Each parallel run gets its own worktree; declared footprints reserve overlapping files so those tasks do not run at the same time.
+- **Declare a footprint for file reservations.** Tasks should carry `context_files` before backlog admission ([why and limits](declared-footprints.md#in-practice)). Orbit still admits selector-free backlog tasks in some paths, but an empty context holds no file lock. Each parallel run gets its own worktree.
 
 ## What fast delivery does not give up
 
