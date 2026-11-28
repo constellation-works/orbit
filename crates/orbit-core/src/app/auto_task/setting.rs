@@ -102,166 +102,166 @@ pub(crate) struct BundledFileOverrides {
     pub stale_shipped_body: bool,
 }
 
-impl OrbitRuntime {
-    fn auto_task_settings_dir(&self) -> std::path::PathBuf {
-        auto_tasks_dir(&self.paths().local_dir)
-    }
+fn auto_task_settings_dir(rt: &OrbitRuntime) -> std::path::PathBuf {
+    auto_tasks_dir(&rt.paths().local_dir)
+}
 
-    /// The managed body of shipped default `name`: its file still holds the
-    /// bytes the manifest records Orbit writing. `None` for a fork, a
-    /// user-authored definition, or an untracked file.
-    fn managed_auto_task_body(&self, name: &str) -> Result<Option<AutoTaskDefinition>, OrbitError> {
-        if rendered_bundled_body(name, self.workspace_base_branch()).is_none() {
-            return Ok(None);
-        }
-        let dir = self.auto_task_settings_dir();
-        let Some(digest) = manifest_digest(&dir, name)? else {
-            return Ok(None);
-        };
-        let path = definition_file(&dir, name);
-        let raw = fs::read_to_string(&path)
-            .map_err(|error| OrbitError::Io(format!("read {}: {error}", path.display())))?;
-        if sha256_hex(raw.as_bytes()) != digest {
-            return Ok(None);
-        }
-        parse_auto_task_yaml(&raw).map(Some)
+/// The managed body of shipped default `name`: its file still holds the
+/// bytes the manifest records Orbit writing. `None` for a fork, a
+/// user-authored definition, or an untracked file.
+fn managed_auto_task_body(
+    rt: &OrbitRuntime,
+    name: &str,
+) -> Result<Option<AutoTaskDefinition>, OrbitError> {
+    if rendered_bundled_body(name, rt.workspace_base_branch()).is_none() {
+        return Ok(None);
     }
+    let dir = auto_task_settings_dir(rt);
+    let Some(digest) = manifest_digest(&dir, name)? else {
+        return Ok(None);
+    };
+    let path = definition_file(&dir, name);
+    let raw = fs::read_to_string(&path)
+        .map_err(|error| OrbitError::Io(format!("read {}: {error}", path.display())))?;
+    if sha256_hex(raw.as_bytes()) != digest {
+        return Ok(None);
+    }
+    parse_auto_task_yaml(&raw).map(Some)
+}
 
-    /// Persist an edited effective definition. Called under the cursor lock.
-    ///
-    /// A shipped default whose body is still managed keeps that body: when
-    /// the edit differs from it only in settings fields, only the settings
-    /// table changes. Any body edit forks the file, as does every edit to a
-    /// fork or a user-authored definition; the file then holds the whole
-    /// effective definition and its settings entry is dropped, so the file
-    /// alone is authoritative.
-    pub(super) fn persist_auto_task_edit(
-        &self,
-        definition: &AutoTaskDefinition,
-    ) -> Result<(), OrbitError> {
-        let dir = self.auto_task_settings_dir();
-        let mut table = load_settings_table(&dir).map_err(settings_error)?;
-        if let Some(body) = self.managed_auto_task_body(&definition.name)? {
-            let overrides = split_overrides(&body, definition);
-            if overrides.body_fields.is_empty() {
-                // The entry stays even with no override left: its edit stamp
-                // records that an operator configured the definition.
-                let mut settings = overrides.settings;
-                settings.updated_by = definition.updated_by.clone();
-                settings.updated_at = definition.updated_at.clone();
-                table.insert(definition.name.clone(), settings);
-                return write_settings_table(&dir, &table);
+/// Persist an edited effective definition. Called under the cursor lock.
+///
+/// A shipped default whose body is still managed keeps that body: when
+/// the edit differs from it only in settings fields, only the settings
+/// table changes. Any body edit forks the file, as does every edit to a
+/// fork or a user-authored definition; the file then holds the whole
+/// effective definition and its settings entry is dropped, so the file
+/// alone is authoritative.
+pub(super) fn persist_auto_task_edit(
+    rt: &OrbitRuntime,
+    definition: &AutoTaskDefinition,
+) -> Result<(), OrbitError> {
+    let dir = auto_task_settings_dir(rt);
+    let mut table = load_settings_table(&dir).map_err(settings_error)?;
+    if let Some(body) = managed_auto_task_body(rt, &definition.name)? {
+        let overrides = split_overrides(&body, definition);
+        if overrides.body_fields.is_empty() {
+            // The entry stays even with no override left: its edit stamp
+            // records that an operator configured the definition.
+            let mut settings = overrides.settings;
+            settings.updated_by = definition.updated_by.clone();
+            settings.updated_at = definition.updated_at.clone();
+            table.insert(definition.name.clone(), settings);
+            return write_settings_table(&dir, &table);
+        }
+    }
+    super::crud::write_auto_task(rt, definition)?;
+    if table.remove(&definition.name).is_some() {
+        write_settings_table(&dir, &table)?;
+    }
+    Ok(())
+}
+
+/// Drop the settings entry of a definition that no longer exists or is
+/// being created anew, so stale settings never apply to it.
+pub(super) fn drop_auto_task_settings(rt: &OrbitRuntime, name: &str) -> Result<(), OrbitError> {
+    let dir = auto_task_settings_dir(rt);
+    let mut table = load_settings_table(&dir).map_err(settings_error)?;
+    if table.remove(name).is_some() {
+        write_settings_table(&dir, &table)?;
+    }
+    Ok(())
+}
+
+/// How definition `name` is layered: managed, forked or user-authored
+/// body, its settings entry, and for a fork the fields that differ from
+/// the bundled default.
+pub fn auto_task_layering(rt: &OrbitRuntime, name: &str) -> Result<AutoTaskLayering, OrbitError> {
+    let (root, path) = super::read::auto_task_read_source(rt, name)?
+        .ok_or_else(|| super::read::auto_task_missing(rt, name, true))?;
+    let dir = auto_tasks_dir(&root);
+    let table = load_settings_table(&dir).map_err(settings_error)?;
+    let settings = table.get(name).cloned();
+    let Some(rendered) = rendered_bundled_body(name, rt.workspace_base_branch()) else {
+        return Ok(AutoTaskLayering {
+            body: AutoTaskBody::UserAuthored,
+            settings,
+            forked_fields: Vec::new(),
+            settings_fields: Vec::new(),
+            stale_contract: None,
+        });
+    };
+    let on_disk = fs::read_to_string(&path)
+        .map_err(|error| OrbitError::Io(format!("read {}: {error}", path.display())))?;
+    let tracked = manifest_digest(&dir, name)?;
+    let layering = match classify_bundled_file(
+        &rendered,
+        &on_disk,
+        tracked.as_ref(),
+        settings.as_ref(),
+        rt.workspace_base_branch(),
+    )? {
+        None => AutoTaskLayering {
+            body: AutoTaskBody::Managed,
+            settings,
+            forked_fields: Vec::new(),
+            settings_fields: Vec::new(),
+            stale_contract: None,
+        },
+        Some(classified) => {
+            let stale_contract = parse_auto_task_yaml(&on_disk)
+                .ok()
+                .map(|mut effective| {
+                    if let Some(entry) = &settings {
+                        entry.apply(&mut effective);
+                    }
+                    effective
+                })
+                .and_then(|effective| {
+                    bundled_run_failure_definition(rt.workspace_base_branch())
+                        .and_then(|bundled| stale_run_failure_contract(&effective, &bundled))
+                });
+            let settings_fields = classified.overrides.settings.field_names();
+            AutoTaskLayering {
+                body: AutoTaskBody::Forked,
+                settings,
+                forked_fields: classified.overrides.body_fields,
+                settings_fields,
+                stale_contract,
             }
         }
-        self.write_auto_task(definition)?;
-        if table.remove(&definition.name).is_some() {
-            write_settings_table(&dir, &table)?;
-        }
-        Ok(())
-    }
+    };
+    Ok(layering)
+}
 
-    /// Drop the settings entry of a definition that no longer exists or is
-    /// being created anew, so stale settings never apply to it.
-    pub(super) fn drop_auto_task_settings(&self, name: &str) -> Result<(), OrbitError> {
-        let dir = self.auto_task_settings_dir();
-        let mut table = load_settings_table(&dir).map_err(settings_error)?;
-        if table.remove(name).is_some() {
-            write_settings_table(&dir, &table)?;
-        }
-        Ok(())
-    }
+/// The stale bundled contract of an effective definition, if any.
+pub fn stale_auto_task_contract(
+    rt: &OrbitRuntime,
+    definition: &AutoTaskDefinition,
+) -> Option<StaleAutoTaskContract> {
+    bundled_run_failure_definition(rt.workspace_base_branch())
+        .and_then(|bundled| stale_run_failure_contract(definition, &bundled))
+}
 
-    /// How definition `name` is layered: managed, forked or user-authored
-    /// body, its settings entry, and for a fork the fields that differ from
-    /// the bundled default.
-    pub fn auto_task_layering(&self, name: &str) -> Result<AutoTaskLayering, OrbitError> {
-        let (root, path) = self
-            .auto_task_read_source(name)?
-            .ok_or_else(|| self.auto_task_missing(name, true))?;
-        let dir = auto_tasks_dir(&root);
-        let table = load_settings_table(&dir).map_err(settings_error)?;
-        let settings = table.get(name).cloned();
-        let Some(rendered) = rendered_bundled_body(name, self.workspace_base_branch()) else {
-            return Ok(AutoTaskLayering {
-                body: AutoTaskBody::UserAuthored,
-                settings,
-                forked_fields: Vec::new(),
-                settings_fields: Vec::new(),
-                stale_contract: None,
-            });
-        };
-        let on_disk = fs::read_to_string(&path)
-            .map_err(|error| OrbitError::Io(format!("read {}: {error}", path.display())))?;
-        let tracked = manifest_digest(&dir, name)?;
-        let layering = match classify_bundled_file(
-            &rendered,
-            &on_disk,
-            tracked.as_ref(),
-            settings.as_ref(),
-            self.workspace_base_branch(),
-        )? {
-            None => AutoTaskLayering {
-                body: AutoTaskBody::Managed,
-                settings,
-                forked_fields: Vec::new(),
-                settings_fields: Vec::new(),
-                stale_contract: None,
-            },
-            Some(classified) => {
-                let stale_contract = parse_auto_task_yaml(&on_disk)
-                    .ok()
-                    .map(|mut effective| {
-                        if let Some(entry) = &settings {
-                            entry.apply(&mut effective);
-                        }
-                        effective
-                    })
-                    .and_then(|effective| {
-                        bundled_run_failure_definition(self.workspace_base_branch())
-                            .and_then(|bundled| stale_run_failure_contract(&effective, &bundled))
-                    });
-                let settings_fields = classified.overrides.settings.field_names();
-                AutoTaskLayering {
-                    body: AutoTaskBody::Forked,
-                    settings,
-                    forked_fields: classified.overrides.body_fields,
-                    settings_fields,
-                    stale_contract,
-                }
-            }
-        };
-        Ok(layering)
-    }
-
-    /// The stale bundled contract of an effective definition, if any.
-    pub fn stale_auto_task_contract(
-        &self,
-        definition: &AutoTaskDefinition,
-    ) -> Option<StaleAutoTaskContract> {
-        bundled_run_failure_definition(self.workspace_base_branch())
-            .and_then(|bundled| stale_run_failure_contract(definition, &bundled))
-    }
-
-    /// Hold minting a definition whose effective body omits its bundled
-    /// contract, naming the reconciliation instead of minting silently.
-    pub fn refuse_stale_auto_task_contract(
-        &self,
-        definition: &AutoTaskDefinition,
-    ) -> Result<(), OrbitError> {
-        let Some(stale) = self.stale_auto_task_contract(definition) else {
-            return Ok(());
-        };
-        Err(OrbitError::InvalidInput(format!(
-            "auto-task '{}' is held: its effective body omits the bundled contract \
-             ({}) (missing: {}); a scan minted from it would undercount \
-             host-distinct follower failures and must not be represented as \
-             reconciled; {}",
-            definition.name,
-            stale.contract,
-            stale.missing.join(", "),
-            stale.remediation
-        )))
-    }
+/// Hold minting a definition whose effective body omits its bundled
+/// contract, naming the reconciliation instead of minting silently.
+pub fn refuse_stale_auto_task_contract(
+    rt: &OrbitRuntime,
+    definition: &AutoTaskDefinition,
+) -> Result<(), OrbitError> {
+    let Some(stale) = stale_auto_task_contract(rt, definition) else {
+        return Ok(());
+    };
+    Err(OrbitError::InvalidInput(format!(
+        "auto-task '{}' is held: its effective body omits the bundled contract \
+         ({}) (missing: {}); a scan minted from it would undercount \
+         host-distinct follower failures and must not be represented as \
+         reconciled; {}",
+        definition.name,
+        stale.contract,
+        stale.missing.join(", "),
+        stale.remediation
+    )))
 }
 
 fn normalized_contract_text(text: &str) -> String {

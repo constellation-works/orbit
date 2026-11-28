@@ -10,7 +10,7 @@ doc_role: decisions
 type: design
 summary: Decision log for auto-task mint status, workspace-owned definitions, and direct clock-tick evaluation.
 tags: [auto-tasks]
-paths: ["crates/orbit-core/src/application/auto_tasks/**"]
+paths: ["crates/orbit-core/src/app/auto_task/**"]
 related_features: [auto-tasks, routines]
 related_artifacts: [ORB-12237, ORB-12698, ORB-12718]
 ---
@@ -85,7 +85,7 @@ change. Direct CLI worktree edits remain local candidate edits.
 ## Auto-task primitive: file-backed recurring task templates + one generic scheduler routine
 
 **Recorded:** 2026-07-12 02:58:04.684957Z · [ORB-10149], [ORB-10148]
-**Paths:** `crates/orbit-core/src/application/auto_tasks/**`
+**Paths:** `crates/orbit-core/src/app/auto_task/**`
 **Superseded in part by:** [Auto-task definitions are evaluated by the host tick, not fired by a routine](#auto-task-definitions-are-evaluated-by-the-host-tick-not-fired-by-a-routine) (the scheduler-routine half) and [Auto-task definitions are per-user checkout state, not git-versioned records](#auto-task-definitions-are-per-user-checkout-state-not-git-versioned-records) (the git-versioned half). The primitive (file-backed definitions, host-local cursors, catch-up collapse, dedupe, provenance, CRUD) stands.
 
 ### Context
@@ -106,7 +106,7 @@ Introduce auto-tasks as git-versioned YAML definitions under `.orbit/auto_tasks/
 ## A quiet integration branch skips the mint, and an unanswerable precondition does not
 
 **Recorded:** 2026-09-20 · [ORB-12698]
-**Paths:** `crates/orbit-automation/src/auto_tasks/scheduler/preconditions.rs`, `crates/orbit-core/src/application/auto_tasks/change_probe.rs`, `.orbit/auto_tasks/**`
+**Paths:** `crates/orbit-automation/src/auto_tasks/scheduler/preconditions.rs`, `crates/orbit-core/src/app/auto_task/change_probe.rs`, `.orbit/auto_tasks/**`
 
 ### Context
 
@@ -147,7 +147,7 @@ Some normal workflow tasks produce durable side effects through Orbit rather tha
 
 **Recorded:** 2026-08-08 19:11:08.591438Z · [ORB-10472]
 **Superseded for managed `orbit.auto_task.*` writes by:** [Broker managed auto-task writes to the host definition root](#broker-managed-auto-task-writes-to-the-host-definition-root). Definitions later became gitignored per-user state; direct CLI worktree edits remain local.
-**Paths:** `crates/orbit-core/src/application/auto_tasks/**`, `crates/orbit-engine/src/activity_job/workspace.rs`
+**Paths:** `crates/orbit-core/src/app/auto_task/**`, `crates/orbit-engine/src/activity_job/workspace.rs`
 
 ### Context
 Auto-task definition CRUD used the shared Orbit root even when a workflow executor was assigned a linked worktree. That let a refresh expose tracked dirt in the registered primary checkout while unrelated implementation guards were sampling it. The alternatives were to tolerate auto_tasks drift in the integrity guard or to make tracked definition mutation worktree-local.
@@ -183,7 +183,7 @@ All run budgets in Orbit config, auto-task definitions, job/activity assets, wor
 ## Auto-task definitions are evaluated by the host tick, not fired by a routine
 
 **Recorded:** 2026-09-12 · [ORB-12237]
-**Code anchors:** `crates/orbit-core/src/application/auto_tasks/scheduler.rs::run_auto_task_scheduler_at`, `crates/orbit-core/src/app/routine/sweep/tick.rs`
+**Code anchors:** `crates/orbit-core/src/app/auto_task/scheduler.rs::run_auto_task_scheduler_at`, `crates/orbit-core/src/app/routine/sweep/tick.rs`
 
 ### Context
 

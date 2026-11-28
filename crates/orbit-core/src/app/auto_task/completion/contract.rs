@@ -17,7 +17,7 @@ use crate::runtime::scripts::ScriptGrantState;
 /// How far a recorded proof is rechecked. Reading records is cheap enough for
 /// every pass; asking the adapter again is reserved for the admission fence.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(in crate::application::auto_tasks) enum ProofDepth {
+pub(in crate::app::auto_task) enum ProofDepth {
     Records,
     Adapter,
 }
@@ -53,7 +53,7 @@ pub(super) fn declared_contract(
 /// Why a step's contract cannot hold a result now: its contract does not
 /// resolve, its adapter is not granted, the pinned source moved, or an earlier
 /// proof it relies on no longer stands. `None` for an ordinary step.
-pub(in crate::application::auto_tasks) fn contract_admission_hold(
+pub(in crate::app::auto_task) fn contract_admission_hold(
     runtime: &OrbitRuntime,
     step: &StepContext,
     now: DateTime<Utc>,
@@ -127,7 +127,7 @@ fn source_freshness_hold(runtime: &OrbitRuntime, step: &StepContext) -> Option<S
 /// execution. A reused checkpoint is rechecked exactly like a fresh one, and a
 /// skipped or otherwise unaccepted contract step is not evidence. A branch of
 /// this step's own parallel block is left to its existing join rule.
-pub(in crate::application::auto_tasks) fn prior_proof_hold(
+pub(in crate::app::auto_task) fn prior_proof_hold(
     runtime: &OrbitRuntime,
     step: &StepContext,
     now: DateTime<Utc>,
@@ -260,7 +260,7 @@ fn frozen_contract(
 /// evidence, and the adapter's verdict now. Returns the receipt the step
 /// settles on, or why the result does not apply, in which case the step
 /// mints fresh evidence.
-pub(in crate::application::auto_tasks) fn reused_result(
+pub(in crate::app::auto_task) fn reused_result(
     runtime: &OrbitRuntime,
     step: &StepContext,
     record: &AutoTaskStepRecord,

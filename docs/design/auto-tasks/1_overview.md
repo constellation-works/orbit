@@ -12,7 +12,7 @@ doc_role: overview
 type: design
 summary: Dynamically-defined recurring task templates minted by the host clock tick — periodic work as data, not code.
 tags: [auto-tasks]
-paths: ["crates/orbit-core/src/application/auto_tasks/**"]
+paths: ["crates/orbit-core/src/app/auto_task/**"]
 related_features: [auto-tasks, routines]
 related_artifacts: [ORB-10149, ORB-10318, ORB-10348, ORB-10439, ORB-10446, ORB-10514, ORB-10549, ORB-10950, ORB-11054, ORB-11095, ORB-12931, ORB-12932, ORB-15327, ORB-18069, ORB-18124, ORB-18125, ORB-18126, ORB-18127, ORB-18128, ORB-18129, ORB-18134, ORB-20704]
 ---
@@ -78,7 +78,7 @@ becomes just the first definition.
   and reasons, plus `load_errors_total` and `load_errors_truncated`; these
   diagnostics are independent of item pagination and `cursor_state_error`.
   If no definition loads and any fails, the list fails closed.
-- **Listing documents** — `application/auto_tasks/projection.rs` owns the
+- **Listing documents** — `app/auto_task/projection.rs` owns the
   ordinary tool, CLI marker, bounded MCP and HTTP row profiles. These preserve
   each surface's existing field set: ordinary rows serialize the full definition;
   CLI rows add default inactive/skip markers after the audited tool call;
@@ -116,11 +116,11 @@ becomes just the first definition.
 | Definition schema | `crates/orbit-types/src/workflow/auto_task/definition.rs` | ORB-10149 |
 | Discovery (fail-closed) | `crates/orbit-automation/src/auto_tasks/loader.rs` | ORB-10149 |
 | Due-math + catch-up | `crates/orbit-automation/src/auto_tasks/schedule.rs` | ORB-10149 |
-| Host-local cursor | `crates/orbit-core/src/application/auto_tasks/state.rs` | ORB-10149 |
-| Scheduler pass | `crates/orbit-core/src/application/auto_tasks/scheduler.rs` | ORB-10149 |
-| CRUD (CLI + MCP shared) | `crates/orbit-core/src/application/auto_tasks/crud.rs` | ORB-10149 |
-| Manual mint (`mint`, CLI + MCP) | `crates/orbit-core/src/application/auto_tasks/crud.rs` | ORB-10439, ORB-10798 |
-| Operator settings over bundled bodies, fork migration | `crates/orbit-automation/src/auto_tasks/settings.rs`, `crates/orbit-core/src/application/auto_tasks/settings.rs` | ORB-14909 |
+| Host-local cursor | `crates/orbit-core/src/app/auto_task/state.rs` | ORB-10149 |
+| Scheduler pass | `crates/orbit-core/src/app/auto_task/scheduler.rs` | ORB-10149 |
+| CRUD (CLI + MCP shared) | `crates/orbit-core/src/app/auto_task/crud.rs` | ORB-10149 |
+| Manual mint (`mint`, CLI + MCP) | `crates/orbit-core/src/app/auto_task/crud.rs` | ORB-10439, ORB-10798 |
+| Operator settings over bundled bodies, fork migration | `crates/orbit-automation/src/auto_tasks/settings.rs`, `crates/orbit-core/src/app/auto_task/setting.rs` | ORB-14909 |
 | Retired scheduler routine migration template | `crates/orbit-core/assets/routines/retired/auto_task_scheduler.yaml` | ORB-12237 |
 | Default auto-task catalog | `crates/orbit-core/assets/auto_tasks/…` | ORB-10549, ORB-10550, ORB-10950 |
 
@@ -476,7 +476,7 @@ demotion proposal when the evidence is missing.
 `host-health` ships disabled, like every other shipped default: its bundled
 body is `enabled: false` (Daniel's direction of 2026-11-14, reversing the
 earlier ORB-21401 direction delivered by ORB-21596) [ORB-24934].
-`ENABLED_BY_DEFAULT_AUTO_TASKS` in `crates/orbit-core/src/application/auto_tasks/mod.rs`
+`ENABLED_BY_DEFAULT_AUTO_TASKS` in `crates/orbit-core/src/app/auto_task/mod.rs`
 is empty, and workspace sync refuses a bundled body whose `enabled` disagrees
 with that list, so no default ships enabled. Turn it on in a workspace with
 `orbit auto-task toggle host-health on`. Its earlier yield evidence is the

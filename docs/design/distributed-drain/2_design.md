@@ -1698,7 +1698,7 @@ reads pilot warning holds only.
 - **Retired provenance.** A seeded `blocked_task_triage` routine file is removed by
   `orbit workspace sync` when unedited; one that still loads is skipped as retired. The earlier
   `blocked-task-triage` auto-task introduced by [ORB-17245] stays retired provenance (`RETIRED_AUTO_TASK_FILES` in
-  `crates/orbit-core/src/application/auto_tasks/retired.rs`).
+  `crates/orbit-core/src/app/auto_task/retired.rs`).
 
 ### 7.3 Ship sweep
 

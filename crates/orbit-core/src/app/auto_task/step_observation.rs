@@ -376,7 +376,7 @@ fn definition_hold(
     now: DateTime<Utc>,
 ) -> Option<String> {
     let name = &step.checked.auto_task;
-    let definition = match runtime.auto_task_show(name) {
+    let definition = match super::crud::auto_task_show(runtime, name) {
         Ok(Some(definition)) => definition,
         Ok(None) => return Some(format!("auto-task `{name}` is missing")),
         Err(error) => return Some(format!("auto-task `{name}` is unreadable: {error}")),
@@ -475,7 +475,7 @@ pub(super) fn reuse_verdict(
         return Ok(ReuseVerdict::NoMatch);
     };
     let name = &step.checked.auto_task;
-    let receipt = match runtime.auto_task_accepted_history(name) {
+    let receipt = match super::scheduler::auto_task_accepted_history(runtime, name) {
         AutoTaskAcceptedHistory::Missing => return Ok(ReuseVerdict::NoMatch),
         AutoTaskAcceptedHistory::Unreadable(why) => {
             return Ok(ReuseVerdict::Held(format!(

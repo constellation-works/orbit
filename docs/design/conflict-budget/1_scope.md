@@ -46,7 +46,7 @@ static allow-list.
 
 On 2026-10-24 eleven `auto-task-catalog-2026-10-24` tasks entered ws_orbit's backlog. Each adds
 one shipped auto-task: a YAML file of its own, one line in the `DEFAULT_AUTO_TASK_FILES` list in
-`crates/orbit-core/src/application/auto_tasks/mod.rs`, and a regenerated
+`crates/orbit-core/src/app/auto_task/mod.rs`, and a regenerated
 `crates/orbit-core/assets/auto_tasks/body-history.json`. Their own files never overlap, yet they
 run one at a time, because all eleven declare those two shared files. The same happens wherever
 work fans into a registry, a generated index or a hub config such as
@@ -155,7 +155,7 @@ Worked example, ws_orbit's eleven catalog tasks at a daytime budget of 15 and th
 
 | Path | Class | p | c (agent-min) | risk |
 |---|---|---|---|---|
-| `crates/orbit-core/src/application/auto_tasks/mod.rs` | code | 0.6 | 6 | 3.6 |
+| `crates/orbit-core/src/app/auto_task/mod.rs` | code | 0.6 | 6 | 3.6 |
 | `crates/orbit-core/assets/auto_tasks/body-history.json` | generated | 1.0 | 2 | 2.0 |
 
 The second task's overlap risk is 1 × 5.6 and the third's 2 × 5.6 = 11.2; both admit. The

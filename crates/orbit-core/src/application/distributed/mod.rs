@@ -43,6 +43,8 @@ pub(crate) mod admission_checkpoint;
 mod admission_port;
 mod auth_failures;
 mod auth_recovery;
+
+mod auto_task_port;
 mod claimed_review;
 mod contract;
 mod entry;
@@ -65,6 +67,7 @@ mod work_fit;
 
 pub(in crate::application) use admission_port::DistributedAdmissionPort;
 pub(crate) use auth_failures::pilot_run_crew_from_draws;
+pub(crate) use auto_task_port::DistributedAutoTaskPort;
 pub use contract::{
     DeclaredCallerContract, OWNER_COMPLETION_POLICY, ensure_distributed_mutation_available,
     owner_binary_version,

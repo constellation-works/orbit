@@ -504,7 +504,7 @@ pub(super) fn crew_rows(runtime: &OrbitRuntime, values: &[EffectiveConfigValue])
         }
     }
     // Use the scheduler's listing to omit definitions parked by an inactive plugin.
-    match runtime.auto_task_listing(false) {
+    match crate::app::auto_task::auto_task_listing(runtime, false) {
         Ok(listed_tasks) => {
             for listed in listed_tasks {
                 let definition = listed.definition;

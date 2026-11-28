@@ -283,7 +283,9 @@ fn minted_tags(
     runtime: &OrbitRuntime,
     definition: &AutoTaskDefinition,
 ) -> Result<Vec<String>, OrbitError> {
-    Ok(runtime.auto_task_template_task_params(definition)?.tags)
+    Ok(crate::app::port::AutomationAutoTask(runtime)
+        .auto_task_template_task_params(definition)?
+        .tags)
 }
 
 /// Why no review task can be minted for `definition` under the current
@@ -403,7 +405,7 @@ pub(crate) fn after_landing_switch(
 fn after_landing_definition(
     runtime: &OrbitRuntime,
 ) -> Result<Option<AutoTaskDefinition>, OrbitError> {
-    Ok(runtime
+    Ok(crate::app::port::AutomationAutoTask(runtime)
         .listed_auto_task_definitions()?
         .into_iter()
         .find(|definition| definition.name == AFTER_LANDING_CONSUMER))

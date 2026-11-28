@@ -11,8 +11,8 @@ use orbit_common::protocol::yaml::parse_auto_task_yaml;
 use orbit_common::security::release::sha256_hex;
 use orbit_types::tool::{family_action_tool_names, is_tool_family_operation};
 
-use crate::application::auto_tasks::auto_tasks_dir;
-use crate::application::auto_tasks::settings::AUTO_TASK_ASSET_KIND;
+use crate::app::auto_task::AUTO_TASK_ASSET_KIND;
+use crate::app::auto_task::auto_tasks_dir;
 use crate::application::managed_assets::{
     MANAGED_ASSET_MANIFEST_FILE, ManagedAssetLayout, load_managed_asset_manifest,
     restore_managed_asset,

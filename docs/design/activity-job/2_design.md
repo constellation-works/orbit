@@ -1945,7 +1945,7 @@ skips. A job/step timeout retains children and evidence instead of cancelling
 workers or treating missing prerequisites as satisfied.
 
 The evaluator is `job_executor/auto_task.rs`; the owner adapter is
-`crates/orbit-core/src/application/auto_tasks/job_step.rs`. A wait releases execution
+`crates/orbit-core/src/app/auto_task/job_step.rs`. A wait releases execution
 resources while the same run stays active; the owner sweep wakes it, and replay
 restores bindings and succeeded siblings. Pending checkpoints fail closed before
 external effects. Layout migration 7 (`auto-task-job-checkpoints`) fences older writers.

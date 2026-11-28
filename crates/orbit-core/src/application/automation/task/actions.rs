@@ -32,7 +32,8 @@ pub(in crate::application::automation) fn mint(
     definition: &AutoTaskDefinition,
     attempt: &BatchAttempt,
 ) -> Result<String, OrbitError> {
-    let mut params = runtime.auto_task_template_task_params(definition)?;
+    let mut params =
+        crate::app::port::AutomationAutoTask(runtime).auto_task_template_task_params(definition)?;
     // [ORB-13896] After-landing review is reviewed by `workflow.purpose_crews.review`,
     // one crew drawn per batch when it is a pool [ORB-15195], from the members
     // whose executor can run under the task's `os:` tags.

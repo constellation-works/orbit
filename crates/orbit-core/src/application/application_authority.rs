@@ -1,6 +1,6 @@
 //! Built-in operations reached only after application consent admitted the call.
 
-use crate::application::auto_tasks::crud::{self, AutoTaskAddParams, AutoTaskUpdateParams};
+use crate::app::auto_task::{self, AutoTaskAddParams, AutoTaskUpdateParams};
 use crate::{OrbitRuntime, application::task::TaskUpdateParams};
 use orbit_common::OrbitError;
 use orbit_types::task::TaskStatus;
@@ -112,14 +112,17 @@ impl OrbitRuntime {
                 let _workspace = parsed.workspace;
                 let warnings = self.validate_required_tools(&parsed.template.required_tools)?;
                 let definition = {
-                    let _actor = crud::record_write_actor(actor);
-                    self.auto_task_add(AutoTaskAddParams {
-                        name: parsed.name,
-                        description: parsed.description,
-                        schedule: parsed.schedule,
-                        template: parsed.template,
-                        dedupe: parsed.dedupe,
-                    })?
+                    let _actor = auto_task::record_write_actor(actor);
+                    crate::app::auto_task::auto_task_add(
+                        self,
+                        AutoTaskAddParams {
+                            name: parsed.name,
+                            description: parsed.description,
+                            schedule: parsed.schedule,
+                            template: parsed.template,
+                            dedupe: parsed.dedupe,
+                        },
+                    )?
                 };
                 Ok(Some(auto_task_output(&definition, warnings)?))
             }
@@ -128,8 +131,9 @@ impl OrbitRuntime {
                 // Admitted by the ceiling and already checked. Not stored.
                 let _workspace = parsed.workspace;
                 let definition = {
-                    let _actor = crud::record_write_actor(actor);
-                    self.auto_task_update(
+                    let _actor = auto_task::record_write_actor(actor);
+                    crate::app::auto_task::auto_task_update(
+                        self,
                         &parsed.name,
                         AutoTaskUpdateParams {
                             enabled: parsed.enabled,
@@ -137,7 +141,11 @@ impl OrbitRuntime {
                         },
                     )?
                 };
-                let warnings = self.auto_task_update_tool_warnings(&definition, false)?;
+                let warnings = crate::app::auto_task::auto_task_update_tool_warnings(
+                    self,
+                    &definition,
+                    false,
+                )?;
                 let mut output = auto_task_output(&definition, warnings)?;
                 output["effective_enabled"] =
                     serde_json::json!(self.auto_task_enabled(&definition));

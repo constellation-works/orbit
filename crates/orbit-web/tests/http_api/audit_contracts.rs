@@ -1,6 +1,6 @@
 use super::support::{Fixture, isolated};
 use axum::http::{StatusCode, header};
-use orbit_core::application::auto_tasks::AutoTaskAddParams;
+use orbit_core::app::auto_task::AutoTaskAddParams;
 use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
 use orbit_types::task::TaskStatus;
 use orbit_types::task::{TaskComplexity, TaskPriority, TaskType};
@@ -49,14 +49,17 @@ fn toggle_denies_a_caller_without_operator_capability() {
                 let operator = fixture.server(true);
                 let created = operator.send("POST", create_url, request.clone());
                 assert_eq!(created.status(), StatusCode::CREATED);
-                let saved = fixture.runtime.auto_task_show("nightly").unwrap().unwrap();
+                let saved = orbit_core::app::auto_task::auto_task_show(&fixture.runtime, "nightly")
+                    .unwrap()
+                    .unwrap();
                 assert!(!saved.enabled);
                 assert_eq!(saved.schedule, params.schedule);
                 assert_eq!(saved.template, params.template);
                 assert_eq!(saved.description, params.description);
                 assert_eq!(saved.dedupe, params.dedupe);
 
-                let expected = fixture.runtime.auto_task_add(params).unwrap_err();
+                let expected = orbit_core::app::auto_task::auto_task_add(&fixture.runtime, params)
+                    .unwrap_err();
                 let refused = operator.send("POST", create_url, request);
                 assert_eq!(refused.status(), StatusCode::BAD_REQUEST);
                 assert_eq!(
@@ -64,7 +67,9 @@ fn toggle_denies_a_caller_without_operator_capability() {
                     expected.to_string()
                 );
                 assert_eq!(
-                    fixture.runtime.auto_task_show("nightly").unwrap().unwrap(),
+                    orbit_core::app::auto_task::auto_task_show(&fixture.runtime, "nightly")
+                        .unwrap()
+                        .unwrap(),
                     saved
                 );
             }
@@ -79,9 +84,7 @@ fn toggle_denies_a_caller_without_operator_capability() {
             assert_eq!(json["code"], "authorization_denied");
             assert_eq!(json["operation"], "auto_task.toggle");
             assert!(
-                !fixture
-                    .runtime
-                    .auto_task_show("nightly")
+                !orbit_core::app::auto_task::auto_task_show(&fixture.runtime, "nightly")
                     .unwrap()
                     .unwrap()
                     .enabled

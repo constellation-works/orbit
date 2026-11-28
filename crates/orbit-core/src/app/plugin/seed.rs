@@ -25,7 +25,7 @@ use orbit_tools::plugin::LoadedPlugin;
 use orbit_types::workflow::{AUTO_TASK_SCHEMA_VERSION, ROUTINE_SCHEMA_VERSION};
 use serde::{Deserialize, Serialize};
 
-use crate::application::auto_tasks::DEFAULT_AUTO_TASK_FILES;
+use crate::app::auto_task::DEFAULT_AUTO_TASK_FILES;
 use crate::runtime::plugin::definitions::{
     PluginDefinitionSet, provenance_header, seeded_definition_name,
 };

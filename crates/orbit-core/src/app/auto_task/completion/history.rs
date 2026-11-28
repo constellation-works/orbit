@@ -25,7 +25,7 @@ fn accepted_history_path(runtime: &OrbitRuntime) -> PathBuf {
 /// Advance a definition's accepted-result history. Only a settled record that
 /// carries a passed result reaches it, so a successful probe outcome, which the
 /// adapter never passes, cannot. Time only moves forward.
-pub(in crate::application::auto_tasks) fn record_accepted_result(
+pub(in crate::app::auto_task) fn record_accepted_result(
     runtime: &OrbitRuntime,
     definition: &str,
     result: &AutoTaskCompletionReceipt,
@@ -76,7 +76,7 @@ fn read_accepted_history_file(
 
 /// A definition's latest accepted result. History lives with the owner, so a
 /// replica checkout answers unreadable rather than a misleading missing.
-pub(in crate::application::auto_tasks) fn accepted_history(
+pub(in crate::app::auto_task) fn accepted_history(
     runtime: &OrbitRuntime,
     name: &str,
 ) -> AutoTaskAcceptedHistory {

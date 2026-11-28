@@ -59,42 +59,37 @@ impl AutoTaskListingProfile<'_> {
     }
 }
 
-impl OrbitRuntime {
-    /// Project one list row using the caller's explicit public contract.
-    pub fn project_auto_task_listing_row(
-        &self,
-        row: &AutoTaskListingRow,
-        profile: AutoTaskListingProfile<'_>,
-    ) -> Result<Value, OrbitError> {
-        let value = match profile {
-            AutoTaskListingProfile::Tool | AutoTaskListingProfile::Cli => {
-                let mut value = auto_task_definition_document(
-                    &row.listed,
-                    row.effective_enabled,
-                    row.skipped_reason.as_deref(),
-                )?;
-                value["last_fire"] =
-                    last_fire_json(self, &row.listed.definition, row.cursor.as_ref())?;
-                if let Some(stale) = self.stale_auto_task_contract(&row.listed.definition) {
-                    value["stale_contract"] = serde_json::to_value(&stale).map_err(|error| {
-                        OrbitError::Io(format!("encode stale contract: {error}"))
-                    })?;
-                }
-                if let Some(condition) = auto_task_condition_document(self, &row.listed.definition)
-                {
-                    value["condition"] = condition;
-                }
-                value
+/// Project one list row using the caller's explicit public contract.
+pub fn project_auto_task_listing_row(
+    rt: &OrbitRuntime,
+    row: &AutoTaskListingRow,
+    profile: AutoTaskListingProfile<'_>,
+) -> Result<Value, OrbitError> {
+    let value = match profile {
+        AutoTaskListingProfile::Tool | AutoTaskListingProfile::Cli => {
+            let mut value = auto_task_definition_document(
+                &row.listed,
+                row.effective_enabled,
+                row.skipped_reason.as_deref(),
+            )?;
+            value["last_fire"] = last_fire_json(rt, &row.listed.definition, row.cursor.as_ref())?;
+            if let Some(stale) =
+                super::setting::stale_auto_task_contract(rt, &row.listed.definition)
+            {
+                value["stale_contract"] = serde_json::to_value(&stale)
+                    .map_err(|error| OrbitError::Io(format!("encode stale contract: {error}")))?;
             }
-            AutoTaskListingProfile::BoundedMcp {
-                coordination_refusal,
-            } => bounded_listing_json(row, coordination_refusal),
-            AutoTaskListingProfile::Http { minted, now } => {
-                http_listing_json(self, row, minted, now)
+            if let Some(condition) = auto_task_condition_document(rt, &row.listed.definition) {
+                value["condition"] = condition;
             }
-        };
-        Ok(profile.project_auto_task_tool_document(value))
-    }
+            value
+        }
+        AutoTaskListingProfile::BoundedMcp {
+            coordination_refusal,
+        } => bounded_listing_json(row, coordination_refusal),
+        AutoTaskListingProfile::Http { minted, now } => http_listing_json(rt, row, minted, now),
+    };
+    Ok(profile.project_auto_task_tool_document(value))
 }
 
 fn bounded_listing_json(row: &AutoTaskListingRow, coordination_refusal: Option<&str>) -> Value {

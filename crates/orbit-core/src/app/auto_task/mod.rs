@@ -14,10 +14,89 @@
 //! the Auto-tasks panel's model; each of its writes is decided against its
 //! dashboard operation and leaves the one `dashboard.operations` row that
 //! write owes.
+//!
+//! Auto-tasks [ORB-10149]: dynamically-defined recurring task templates + one
+//! generic scheduler.
+//!
+//! Every periodic need in orbit used to be bespoke code (qa-sweep, ship-sweep,
+//! …). Auto-tasks replace that pattern with a primitive: a definition is a
+//! YAML record ([`loader`]) under `.orbit/auto_tasks/` with a schedule, an
+//! `enabled` toggle, a task template, and a dedupe policy. That directory is
+//! per-user state, not a repository artifact. A single generic scheduler
+//! (`scheduler`) fires the due, enabled definitions and mints tasks from
+//! their templates — periodic work becomes data, not code. The host scheduler
+//! tick runs the evaluator directly for each registered owner checkout.
+//!
+//! - [`loader`] — discover + parse definitions, fail-closed.
+//! - [`schedule`] — due-math (cron reuses the routine machinery; interval is
+//!   native), with catch-up collapse.
+//! - `state` — host-local, workspace-scoped last-fired cursors.
+//! - `scheduler` — the evaluator called by the host tick.
+//! - `change_probe` — the `skip_if_unchanged` precondition's evidence. The
+//!   `skip_unless_blocked_candidates` precondition reads the blocked-task
+//!   triage's candidate rule (`application::task::triage_candidacy`).
+//! - `retired` — shipped defaults a routine replaced, kept as provenance so
+//!   `orbit workspace sync` retires their seeded copies.
+//! - `demoted` — shipped defaults dropped for unproven yield, whose existing
+//!   copies `orbit workspace sync` keeps as workspace-local definitions.
+//! - `crud` — the shared add/list/show/update/mint domain surface.
+//! - `job_step` — `auto-task:` job steps: freeze, observe, keyed admission,
+//!   checkpoints, parking and the step-bound start guard (ORB-20158).
+//! - `toggle` — the one toggle command; the tool, the checked operator
+//!   control and the dashboard are its profiles.
+//! - `schedule_edit` — the one schedule edit command; the ordinary update
+//!   and the dashboard schedule editor are its profiles.
+//! - `listing` — whether each listed definition fires here, and when: the
+//!   one decision every list surface renders.
+//! - `projection` — list-row documents for the ordinary tool, CLI markers,
+//!   bounded MCP and HTTP, preserving each surface's field and text contract.
+//! - `delete` — audited delete, and restore of a deleted shipped default.
+//! - `setting` — operator settings layered over bundled bodies, and the
+//!   sync migration of settings-only forks.
+
+mod automation_port;
+
+mod body_history;
+
+mod change_probe;
+
+mod completion;
+
+mod crud;
 
 mod dashboard;
 
+mod delete;
+
+mod demoted;
+
+mod distributed_port;
+
+mod job_port;
+
+mod job_step;
+
+mod listing;
+
 mod operation;
+
+mod projection;
+
+mod read;
+
+mod retired;
+
+mod schedule_edit;
+
+mod scheduler;
+
+mod setting;
+
+mod state;
+
+mod step_observation;
+
+mod toggle;
 
 use orbit_common::OrbitError;
 use orbit_common::governance::auto_task::AutoTaskVerb;
@@ -27,19 +106,179 @@ use serde_json::Value;
 use super::exec::{self, App, DashboardOrigin, DashboardRow, Operation};
 use super::tool_call;
 pub use super::tool_call::Input;
-use crate::application::auto_tasks::delete::AutoTaskDeleteReport;
-pub use crate::application::auto_tasks::delete::{
-    AutoTaskDeleteProfile, project_auto_task_delete_receipt,
-};
-pub use crate::application::auto_tasks::loader::AutoTaskLoadError;
-pub use crate::application::auto_tasks::projection::AutoTaskListingProfile;
-pub use crate::application::auto_tasks::{
-    AutoTaskDeleteError, AutoTaskDeleteParams, AutoTaskDeleteRefusal, AutoTaskScheduleError,
-    AutoTaskScheduleOutcome, AutoTaskToggleError, AutoTaskToggleOutcome,
-};
 use crate::{Core, Task};
+use std::borrow::Cow;
+
+pub(crate) use automation_port::AutomationPort;
+#[cfg(feature = "test-support")]
+pub(crate) use completion::test_support as completion_test_support;
+pub(crate) use crud::record_write_actor;
+pub(crate) use demoted::release_demoted_auto_tasks;
+pub(crate) use distributed_port::DistributedPort;
+pub(crate) use job_port::JobPort;
+pub(crate) use job_step::{
+    admit_step, checkpoint_branch, checkpoint_step_record, observe_step, park_run,
+};
+pub(crate) use retired::{RETIRED_AUTO_TASK_FILES, RetiredAutoTask, retire_replaced_auto_tasks};
+pub(crate) use scheduler::run_auto_task_scheduler_with_cache;
+pub(crate) use setting::{
+    AUTO_TASK_ASSET_KIND, bundled_run_failure_definition, classify_bundled_file,
+    migrate_settings_only_forks,
+};
 
 // Surface re-exports: what the CLI, dashboard and composition name from this subject.
+pub use crud::{
+    AutoTaskAddParams, AutoTaskTemplatePatch, AutoTaskUpdateParams, auto_task_add,
+    auto_task_add_with_operator_grant, auto_task_list, auto_task_mint, auto_task_show,
+    auto_task_update, auto_task_update_tool_warnings,
+};
+pub use delete::{
+    AutoTaskDeleteError, AutoTaskDeleteParams, AutoTaskDeleteProfile, AutoTaskDeleteRefusal,
+    AutoTaskDeleteReport, auto_task_delete, auto_task_delete_command, auto_task_restore,
+    project_auto_task_delete_receipt,
+};
+pub use listing::{
+    AutoTaskListing, AutoTaskListingRow, AutoTaskSkip, auto_task_listing_state,
+    auto_task_listing_state_lenient,
+};
+pub use loader::{
+    AutoTaskCollection, AutoTaskLoadError, LoadedAutoTask, auto_tasks_dir, collect_auto_tasks,
+    definition_path,
+};
+pub use orbit_automation::auto_tasks::loader;
+pub use orbit_automation::auto_tasks::schedule;
+pub use projection::{AutoTaskListingProfile, project_auto_task_listing_row};
+pub use schedule::{AutoTaskDueDecision, decide_due, validate_schedule};
+pub use schedule_edit::{
+    AutoTaskScheduleError, AutoTaskScheduleOutcome, AutoTaskScheduleProfile,
+    auto_task_schedule_command,
+};
+pub use scheduler::{
+    AutoTaskFireReport, AutoTaskSchedulerOutcome, ListedAutoTask, SchedulerOptions,
+    auto_task_accepted_history, auto_task_inactive_plugin, auto_task_listing, listed_auto_task,
+    open_auto_task_instance, open_auto_task_instances_from_tasks, run_auto_task_scheduler_at,
+};
+pub use setting::{
+    AutoTaskBody, AutoTaskLayering, RUN_FAILURE_DEDUP_CONTRACT, RUN_FAILURE_DEDUP_PARAGRAPH,
+    StaleAutoTaskContract, adopt_bundled_run_failure_contract, auto_task_layering,
+    refuse_stale_auto_task_contract, stale_auto_task_contract, stale_run_failure_contract,
+};
+pub use state::{AutoTaskCursor, AutoTaskCursorState, cursor_state_path, cursor_store};
+pub use toggle::{
+    AutoTaskToggleError, AutoTaskToggleOutcome, AutoTaskToggleProfile, auto_task_toggle,
+    auto_task_toggle_command,
+};
+
+/// Shipped defaults whose bundled body is `enabled: true`. Every default
+/// currently ships disabled, and workspace sync refuses a bundled body that
+/// breaks this. An operator's `orbit auto-task toggle` (the settings table)
+/// or a forked body still decides for a workspace.
+pub(crate) const ENABLED_BY_DEFAULT_AUTO_TASKS: &[&str] = &[];
+
+/// Default definitions embedded in the Orbit binary and materialized into a
+/// workspace on initialization. Defaults are deliberately inert: users must
+/// explicitly mint one or enable it through the existing auto-task surface.
+/// No default ships enabled: [`ENABLED_BY_DEFAULT_AUTO_TASKS`] is empty.
+/// A default a later release dropped moves to
+/// [`retired::RETIRED_AUTO_TASK_FILES`] when something replaced it, or to
+/// `orbit_config::DEMOTED_DEFAULT_AUTO_TASKS` when it had not proven its
+/// yield (its bundled body then lives in [`REFERENCE_AUTO_TASK_FILES`] only
+/// when a consumer still needs it). A definition joins this list only after it
+/// has proven its yield as a workspace-local definition
+/// (`docs/design/auto-tasks/1_overview.md`).
+pub(crate) const DEFAULT_AUTO_TASK_FILES: &[(&str, &str)] = &[
+    (
+        "agent-guidance-audit",
+        include_str!("../../../assets/auto_tasks/agent-guidance-audit.yaml"),
+    ),
+    (
+        "auto-task-yield-review",
+        include_str!("../../../assets/auto_tasks/auto-task-yield-review.yaml"),
+    ),
+    (
+        "architecture-audit",
+        include_str!("../../../assets/auto_tasks/architecture-audit.yaml"),
+    ),
+    (
+        "code-health-sweep",
+        include_str!("../../../assets/auto_tasks/code-health-sweep.yaml"),
+    ),
+    (
+        "delivery-code-review",
+        include_str!("../../../assets/auto_tasks/delivery-code-review.yaml"),
+    ),
+    (
+        "dependency-freshness",
+        include_str!("../../../assets/auto_tasks/dependency-freshness.yaml"),
+    ),
+    (
+        "code-review",
+        include_str!("../../../assets/auto_tasks/code-review.yaml"),
+    ),
+    (
+        "comment-hygiene",
+        include_str!("../../../assets/auto_tasks/comment-hygiene.yaml"),
+    ),
+    (
+        "doc-duties",
+        include_str!("../../../assets/auto_tasks/doc-duties.yaml"),
+    ),
+    (
+        "escape-to-guard",
+        include_str!("../../../assets/auto_tasks/escape-to-guard.yaml"),
+    ),
+    (
+        "friction-curation",
+        include_str!("../../../assets/auto_tasks/friction-curation.yaml"),
+    ),
+    (
+        "full-code-review",
+        include_str!("../../../assets/auto_tasks/full-code-review.yaml"),
+    ),
+    (
+        "host-health",
+        include_str!("../../../assets/auto_tasks/host-health.yaml"),
+    ),
+    (
+        "path-risk-review",
+        include_str!("../../../assets/auto_tasks/path-risk-review.yaml"),
+    ),
+    (
+        "qa-full-sweep",
+        include_str!("../../../assets/auto_tasks/qa-full-sweep.yaml"),
+    ),
+    (
+        "qa-sweep",
+        include_str!("../../../assets/auto_tasks/qa-sweep.yaml"),
+    ),
+    (
+        "regression-label-audit",
+        include_str!("../../../assets/auto_tasks/regression-label-audit.yaml"),
+    ),
+    (
+        "security-review",
+        include_str!("../../../assets/auto_tasks/security-review.yaml"),
+    ),
+];
+
+/// Bundled bodies of demoted defaults that stay available as reference copies
+/// without being seeded. A demoted default's workspace copy keeps its file; the
+/// bundled body here serves only the bundled-contract checks and the adopt path
+/// (`setting::bundled_run_failure_definition`,
+/// `setting::stale_run_failure_contract`, `update --adopt-bundled-contract`).
+/// Seeding and sync read [`DEFAULT_AUTO_TASK_FILES`] alone, so nothing here is
+/// ever seeded. Each name here is also in
+/// `orbit_config::DEMOTED_DEFAULT_AUTO_TASKS`.
+pub(crate) const REFERENCE_AUTO_TASK_FILES: &[(&str, &str)] = &[(
+    "run-failure-patterns",
+    include_str!("../../../assets/auto_tasks/run-failure-patterns.yaml"),
+)];
+
+/// Placeholder the shipped delivery definitions carry for the workspace's
+/// integration branch. Seeding renders it to the registered base branch, so a
+/// `main`-based workspace never inherits a literal `agent-main` that no tick
+/// can baseline against.
+pub(crate) const BASE_BRANCH_PLACEHOLDER: &str = "__ORBIT_BASE_BRANCH__";
 
 /// What the auto-task app can be asked to do.
 pub enum Command {
@@ -222,3 +461,16 @@ impl App for AutoTaskApp {
 pub fn exec(core: &Core, command: Command) -> Result<Outcome, crate::Error> {
     exec::run::<AutoTaskApp>(core, command)
 }
+
+/// Render one embedded default against the workspace's base branch. Defaults
+/// without the placeholder are returned as shipped.
+pub(crate) fn render_default_auto_task<'a>(content: &'a str, base_branch: &str) -> Cow<'a, str> {
+    if content.contains(BASE_BRANCH_PLACEHOLDER) {
+        Cow::Owned(content.replace(BASE_BRANCH_PLACEHOLDER, base_branch))
+    } else {
+        Cow::Borrowed(content)
+    }
+}
+
+#[cfg(test)]
+mod tests;

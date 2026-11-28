@@ -5,7 +5,7 @@
 use std::fs;
 
 use chrono::{Duration, Utc};
-use orbit_core::application::auto_tasks::AutoTaskAddParams;
+use orbit_core::app::auto_task::AutoTaskAddParams;
 use orbit_core::application::automation::{consumer_key, evaluate_auto_task};
 use orbit_types::task::{TaskPriority, TaskStatus, TaskType};
 use orbit_types::workflow::automation::{AcceptedCoverage, BatchState};
@@ -57,8 +57,9 @@ fn listing_reports_last_fire_outcomes_from_scheduler_cursors() {
     let fixture = Fixture::new();
     let runtime = open_runtime(&fixture);
     for name in ["fired", "skipped", "never"] {
-        runtime
-            .auto_task_add(AutoTaskAddParams {
+        orbit_core::app::auto_task::auto_task_add(
+            &runtime,
+            AutoTaskAddParams {
                 name: name.into(),
                 description: "last fire listing fixture".into(),
                 schedule: AutoTaskSchedule::every_minutes(60),
@@ -76,13 +77,13 @@ fn listing_reports_last_fire_outcomes_from_scheduler_cursors() {
                     status: TaskStatus::Backlog,
                 },
                 dedupe: DedupePolicy::Always,
-            })
-            .unwrap();
+            },
+        )
+        .unwrap();
     }
-    let task = runtime.auto_task_mint("fired").unwrap();
+    let task = orbit_core::app::auto_task::auto_task_mint(&runtime, "fired").unwrap();
     let task_id = task.id.to_string();
-    let cursor_path =
-        orbit_core::application::auto_tasks::cursor_state_path(&runtime.paths().state_dir);
+    let cursor_path = orbit_core::app::auto_task::cursor_state_path(&runtime.paths().state_dir);
     let baseline_at = (Utc::now() - Duration::hours(2)).to_rfc3339();
     let fired_at = (Utc::now() - Duration::hours(1)).to_rfc3339();
     let skipped_at = Utc::now().to_rfc3339();
@@ -161,8 +162,9 @@ fn listing_reports_last_fire_from_a_delivery_admission() {
     let runtime = open_runtime(&fixture);
 
     // A stale interval-era cursor naming another definition's task.
-    runtime
-        .auto_task_add(AutoTaskAddParams {
+    orbit_core::app::auto_task::auto_task_add(
+        &runtime,
+        AutoTaskAddParams {
             name: "stale-source".into(),
             description: "stale cursor fixture".into(),
             schedule: AutoTaskSchedule::every_minutes(60),
@@ -180,11 +182,11 @@ fn listing_reports_last_fire_from_a_delivery_admission() {
                 status: TaskStatus::Backlog,
             },
             dedupe: DedupePolicy::Always,
-        })
-        .unwrap();
-    let stale_task = runtime.auto_task_mint("stale-source").unwrap();
-    let cursor_path =
-        orbit_core::application::auto_tasks::cursor_state_path(&runtime.paths().state_dir);
+        },
+    )
+    .unwrap();
+    let stale_task = orbit_core::app::auto_task::auto_task_mint(&runtime, "stale-source").unwrap();
+    let cursor_path = orbit_core::app::auto_task::cursor_state_path(&runtime.paths().state_dir);
     let baseline_at = (Utc::now() - Duration::hours(3)).to_rfc3339();
     let stale_at = (Utc::now() - Duration::hours(2)).to_rfc3339();
     fs::create_dir_all(cursor_path.parent().unwrap()).unwrap();
@@ -211,7 +213,9 @@ fn listing_reports_last_fire_from_a_delivery_admission() {
 
     let older_id = land_and_evaluate(&fixture, &runtime, "older delivery\n")
         .expect("the first delivery mints a review task");
-    let definition = runtime.auto_task_show(CONSUMER).unwrap().unwrap();
+    let definition = orbit_core::app::auto_task::auto_task_show(&runtime, CONSUMER)
+        .unwrap()
+        .unwrap();
     let key = consumer_key(&runtime, "auto-task", CONSUMER).unwrap();
     let store = runtime.sqlite_store().unwrap();
     let state = store
@@ -437,8 +441,9 @@ fn bounded_listing_marks_unprojectable_rows_unavailable_without_failing() {
             AutoTaskSchedule::cron("0 0 30 2 *"),
         ),
     ] {
-        runtime
-            .auto_task_add(AutoTaskAddParams {
+        orbit_core::app::auto_task::auto_task_add(
+            &runtime,
+            AutoTaskAddParams {
                 name: name.into(),
                 description: "listing fixture".into(),
                 schedule,
@@ -456,10 +461,11 @@ fn bounded_listing_marks_unprojectable_rows_unavailable_without_failing() {
                     status: TaskStatus::Backlog,
                 },
                 dedupe: DedupePolicy::SkipIfOpen,
-            })
-            .unwrap();
+            },
+        )
+        .unwrap();
     }
-    let cursor = orbit_core::application::auto_tasks::cursor_state_path(&runtime.paths().state_dir);
+    let cursor = orbit_core::app::auto_task::cursor_state_path(&runtime.paths().state_dir);
     let baseline = (Utc::now() - Duration::minutes(10)).to_rfc3339();
     fs::create_dir_all(cursor.parent().unwrap()).unwrap();
     fs::write(
@@ -566,7 +572,7 @@ fn bounded_listing_reports_malformed_definition() {
         )
         .unwrap();
     }
-    let cursor = orbit_core::application::auto_tasks::cursor_state_path(&runtime.paths().state_dir);
+    let cursor = orbit_core::app::auto_task::cursor_state_path(&runtime.paths().state_dir);
     fs::create_dir_all(cursor.parent().unwrap()).unwrap();
     fs::write(cursor, "{broken").unwrap();
     let input =
@@ -656,8 +662,9 @@ fn listing_profiles_preserve_documents_and_bounded_text() {
         ),
     ] {
         definitions.push(
-            runtime
-                .auto_task_add(AutoTaskAddParams {
+            orbit_core::app::auto_task::auto_task_add(
+                &runtime,
+                AutoTaskAddParams {
                     name: name.into(),
                     description: text.into(),
                     schedule,
@@ -675,8 +682,9 @@ fn listing_profiles_preserve_documents_and_bounded_text() {
                         status: TaskStatus::Proposed,
                     },
                     dedupe: DedupePolicy::Always,
-                })
-                .unwrap(),
+                },
+            )
+            .unwrap(),
         );
     }
     let plain = runtime

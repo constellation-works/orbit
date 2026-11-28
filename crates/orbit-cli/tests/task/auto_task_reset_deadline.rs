@@ -8,10 +8,8 @@ use std::{
 };
 
 use chrono::Utc;
-use orbit_core::application::{
-    auto_tasks::AutoTaskDeleteParams,
-    automation::{consumer_key, evaluate_auto_task, reset_auto_task},
-};
+use orbit_core::app::auto_task::AutoTaskDeleteParams;
+use orbit_core::application::automation::{consumer_key, evaluate_auto_task, reset_auto_task};
 use orbit_types::workflow::automation::recovery::ResetRequest;
 
 use crate::{
@@ -217,11 +215,14 @@ fn reset_and_delete_recover_after_fetch_exhausts_source_deadline() {
     evaluate_auto_task(&runtime, &definition, false, Utc::now()).unwrap();
     git(&fixture, &["update-ref", &pin, "HEAD"]);
     let removed = with_fetch_timeout(&fixture, 2, || {
-        runtime.auto_task_delete(AutoTaskDeleteParams {
-            name: definition.name.clone(),
-            reason: Some("Delete after fetch deadline".into()),
-            force: true,
-        })
+        orbit_core::app::auto_task::auto_task_delete(
+            &runtime,
+            AutoTaskDeleteParams {
+                name: definition.name.clone(),
+                reason: Some("Delete after fetch deadline".into()),
+                force: true,
+            },
+        )
     })
     .expect("delete must retain a usable post-reset ref-cleanup budget");
     let teardown = removed.consumer.unwrap();
@@ -234,7 +235,11 @@ fn reset_and_delete_recover_after_fetch_exhausts_source_deadline() {
             .unwrap()
             .is_none()
     );
-    assert!(runtime.auto_task_show(&definition.name).unwrap().is_none());
+    assert!(
+        orbit_core::app::auto_task::auto_task_show(&runtime, &definition.name)
+            .unwrap()
+            .is_none()
+    );
     assert!(git(&fixture, &["for-each-ref", &pin]).is_empty());
     let recoveries = store
         .read()

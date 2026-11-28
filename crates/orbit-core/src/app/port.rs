@@ -4,6 +4,10 @@
 //! and the higher app implementing it. Each binding exposes the implementor
 //! under its port name and asserts at compile time that it satisfies the trait.
 
+pub(crate) use super::auto_task::{
+    AutomationPort as AutomationAutoTask, DistributedPort as DistributedAutoTask,
+    JobPort as JobAutoTask,
+};
 pub(crate) use super::evolution::TaskPort as TaskEvolution;
 pub(crate) use super::experiment::{
     DistributedPort as DistributedExperiment, JobPort as JobExperiment,
@@ -14,8 +18,9 @@ pub(crate) use super::resident::TaskPort as TaskResident;
 pub(crate) use super::routine::ResidentRoutineStatus;
 use crate::app::resident::ResidentRoutineStatusPort;
 use crate::app::{agent, codebase};
-use crate::application::distributed::DistributedExperimentPort;
-use crate::application::job::JobExperimentPort;
+use crate::application::automation::AutomationAutoTaskPort;
+use crate::application::distributed::{DistributedAutoTaskPort, DistributedExperimentPort};
+use crate::application::job::{JobAutoTaskPort, JobExperimentPort};
 use crate::application::review::ReviewCandidateSizePort;
 use crate::application::tag_instructions::TagInstructionExperimentPort;
 use crate::application::task::{
@@ -43,6 +48,16 @@ const _: () = {
     binds_job_experiment::<JobExperiment<'_>>();
     binds_tag_instruction_experiment::<TagInstructionExperiment<'_>>();
     binds_task_experiment::<TaskExperiment<'_>>();
+};
+
+const _: () = {
+    const fn binds_automation_auto_task<T: AutomationAutoTaskPort>() {}
+    const fn binds_distributed_auto_task<T: DistributedAutoTaskPort>() {}
+    const fn binds_job_auto_task<T: JobAutoTaskPort>() {}
+
+    binds_automation_auto_task::<AutomationAutoTask<'_>>();
+    binds_distributed_auto_task::<DistributedAutoTask<'_>>();
+    binds_job_auto_task::<JobAutoTask<'_>>();
 };
 
 // Compile-time proof that each bound implementor satisfies its port trait.

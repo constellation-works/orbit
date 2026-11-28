@@ -6,7 +6,7 @@
 //!
 //! - Tasks, jobs, and delivery: `task`, `task_bundle`, `job`, `workflow`,
 //!   `landing`, `review`, `operator_input`.
-//! - Automation: `auto_tasks`, `automation`, `workspace_auto`,
+//! - Automation: `automation`, `workspace_auto`,
 //!   `sweep_filing`, `seeding_policy`.
 //! - Agents and runs: `executor`, `vision_probe`, `statistics`.
 //! - Tool names: `tool_name_migration`.
@@ -18,7 +18,6 @@
 
 pub(crate) mod admission;
 mod application_authority;
-pub mod auto_tasks;
 pub mod automation;
 pub(crate) mod backlog_forecast;
 pub mod change_watch;

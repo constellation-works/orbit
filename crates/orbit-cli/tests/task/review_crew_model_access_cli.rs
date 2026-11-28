@@ -299,7 +299,9 @@ fn a_pool_whose_every_model_is_refused_holds_the_batch_until_the_refusal_clears(
     );
 
     // Ticks keep the batch and cursor exactly as they were.
-    let definition = runtime.auto_task_show(CONSUMER).unwrap().unwrap();
+    let definition = orbit_core::app::auto_task::auto_task_show(&runtime, CONSUMER)
+        .unwrap()
+        .unwrap();
     let held = evaluate_auto_task(&runtime, &definition, false, Utc::now())
         .expect("a held batch does not fail the tick");
     assert_eq!(held.reason, "stalled: crew_os_ineligible");
@@ -487,7 +489,9 @@ fn a_linux_tagged_model_refusal_resumes_for_a_crew_that_passes_both_filters() {
         r#"["muse-wonder", "muse-alias", "haiku"]"#,
     );
     let runtime = open_runtime(&fixture);
-    let definition = runtime.auto_task_show(CONSUMER).unwrap().unwrap();
+    let definition = orbit_core::app::auto_task::auto_task_show(&runtime, CONSUMER)
+        .unwrap()
+        .unwrap();
     let held = evaluate_auto_task(&runtime, &definition, false, Utc::now())
         .expect("an OS-ineligible replacement does not fail the tick");
     assert_eq!(held.reason, "stalled: crew_os_ineligible");

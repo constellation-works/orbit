@@ -648,12 +648,12 @@ pub(super) fn resolve_target(
     name: &str,
     now: DateTime<Utc>,
 ) -> Result<Option<(AutoTaskDefinition, FrozenAutoTaskTarget)>, OrbitError> {
-    let Some((_, path)) = runtime.auto_task_read_source(name)? else {
+    let Some((_, path)) = super::read::auto_task_read_source(runtime, name)? else {
         return Ok(None);
     };
     let bytes = std::fs::read(&path)
         .map_err(|error| OrbitError::Io(format!("read {}: {error}", path.display())))?;
-    let Some(definition) = runtime.auto_task_show(name)? else {
+    let Some(definition) = super::crud::auto_task_show(runtime, name)? else {
         return Ok(None);
     };
     let source = serde_json::to_string(&definition)

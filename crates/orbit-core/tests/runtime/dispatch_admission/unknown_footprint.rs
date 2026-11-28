@@ -310,7 +310,7 @@ fn comment_hygiene_is_prepared_before_admission() {
     )
     .unwrap();
     write_files(&repo, &["src/checked.rs", "src/other.rs"]);
-    let minted = runtime.auto_task_mint("comment-hygiene").unwrap();
+    let minted = orbit_core::app::auto_task::auto_task_mint(&runtime, "comment-hygiene").unwrap();
     assert_eq!(
         minted.status,
         TaskStatus::Proposed,
