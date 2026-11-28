@@ -161,9 +161,10 @@ Orbit process inherited.
    enforces modify rules but does not enforce profile read rules, including
    `denyRead`. It replaces host `/tmp`, `/dev` and `/proc` with sandbox views:
    `/tmp` is a private tmpfs, and `/dev` and `/proc` are fresh namespace views.
-   It then mounts selected host paths back over them, such as paths named by
-   modify rules and Git metadata, and applies fixed credential and
-   runtime-directory masks and any explicit caller-provided masks. Host paths
+   The plan may selectively mount host paths into the sandbox at their planned
+   destinations, such as paths named by modify rules and Git metadata, and
+   applies fixed credential and runtime-directory masks and any explicit
+   caller-provided masks. Host paths
    outside `/tmp`, `/dev` and `/proc` stay readable unless masked, and host
    files under `/tmp` are hidden unless a mount restores them. Do not rely on
    `denyRead` to protect other secrets on Linux.
