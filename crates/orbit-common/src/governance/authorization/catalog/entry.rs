@@ -300,6 +300,16 @@ pub const DASHBOARD_PLUGIN_DISABLE: GovernedOperation = GovernedOperation {
     rationale: "disabling a plugin removes its tools and scheduled contributions",
 };
 
+/// Run a plugin page's action: a mutating tool the page names under
+/// `actions`, after the operator confirmed it in a dialog the dashboard drew
+/// outside the page's frame (plugin-pages design §3).
+pub const DASHBOARD_PLUGIN_PAGE_ACTION: GovernedOperation = GovernedOperation {
+    id: "plugin.page_action",
+    surface: OperationSurface::Dashboard,
+    allowed: &[McpCapability::Operator],
+    rationale: "a page action runs a plugin's mutating tool with the operator's authority",
+};
+
 /// Grant a workspace script at the digest the operator reviewed, from the
 /// dashboard Scripts view (script steps §2, route 2).
 pub const DASHBOARD_SCRIPT_GRANT: GovernedOperation = GovernedOperation {

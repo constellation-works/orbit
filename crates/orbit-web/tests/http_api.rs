@@ -106,6 +106,10 @@ mod permalink;
 #[cfg(unix)]
 mod plugin_page;
 
+#[path = "http_api/plugin_page_action.rs"]
+#[cfg(unix)]
+mod plugin_page_action;
+
 #[path = "http_api/plugins.rs"]
 #[cfg(unix)]
 mod plugins;

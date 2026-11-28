@@ -280,6 +280,7 @@ pub(super) fn dashboard_caller(
             .map(str::to_string),
         workspace: workspace.map(str::to_string),
         machine_name: machine_name.to_string(),
+        session: None,
     }
 }
 

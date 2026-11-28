@@ -12,7 +12,9 @@ use orbit_tools::plugin::{LoadedPlugin, load_plugin_dir, resolve_declared_progra
 use orbit_types::plugin::{parse_stored_grants, resolve_grant_selection};
 
 use crate::OrbitRuntime;
-use crate::runtime::plugin::grants::{recorded_program_paths, witnessed_program_paths};
+use crate::runtime::plugin::grants::{
+    PageActionConsent, recorded_page_actions, recorded_program_paths, witnessed_program_paths,
+};
 
 use super::super::inspect::PluginSummary;
 use super::super::seed::{PluginSeedOutcome, seed_plugin_definitions};
@@ -139,6 +141,14 @@ fn enable_plugin_checked(
             )));
         }
     }
+    // An enable from the CLI consents to the page actions it names; the
+    // dashboard's re-enable keeps the list last consented to, so an action a
+    // changed manifest added stays inactive until the CLI enable records it.
+    let page_actions = if preserve_consent {
+        recorded_page_actions(&runtime.global_root(), name)
+    } else {
+        declared_page_actions(&plugin)
+    };
     let contributions = apply_enabled_contributions(runtime, &install_path, options.force)?;
     let warn_against: &[String] = record_grants.as_deref().unwrap_or_default();
     let mut warnings = unrequested_grant_warnings(&plugin, warn_against);
@@ -154,6 +164,7 @@ fn enable_plugin_checked(
         true,
         record_grants.as_deref(),
         Some(&programs),
+        Some(&page_actions),
     )?;
 
     Ok(PluginEnableResult {
@@ -162,6 +173,18 @@ fn enable_plugin_checked(
         skills: contributions.skills,
         warnings,
     })
+}
+
+/// The page actions `plugin`'s manifest names, as an enabling command
+/// records consent to them.
+pub(in crate::app::plugin) fn declared_page_actions(plugin: &LoadedPlugin) -> PageActionConsent {
+    plugin
+        .manifest
+        .spec
+        .web
+        .as_ref()
+        .map(orbit_types::plugin::PluginWebSection::declared_actions)
+        .unwrap_or_default()
 }
 
 /// Resolve `plugin`'s `requires.programs` for an enabling command, against

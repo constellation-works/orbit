@@ -423,8 +423,36 @@ impl PluginManifest {
                         tool_field,
                         format!(
                             "page '{id}' names tool '{verb}', which is `execution_kind: \
-                             mutating`; a page may only call `read_only` tools"
+                             mutating`; `tools` lists only `read_only` tools; list it under the page's `actions`"
                         ),
+                    ));
+                }
+            }
+            let mut actions = std::collections::BTreeSet::new();
+            for (action_index, verb) in page.actions.iter().enumerate() {
+                let action_field = format!("{field}.actions[{action_index}]");
+                let Some(tool) = self.spec.tools.iter().find(|tool| tool.name == *verb) else {
+                    return Err(PluginManifestError::new(
+                        action_field,
+                        format!(
+                            "page '{id}' names action '{verb}', which this plugin does not \
+                             declare; an action is one of its own plugin's tools"
+                        ),
+                    ));
+                };
+                if tool.execution_kind != PluginExecutionKind::Mutating {
+                    return Err(PluginManifestError::new(
+                        action_field,
+                        format!(
+                            "page '{id}' names action '{verb}', which is `execution_kind: \
+                             read_only`; list it under the page's `tools`"
+                        ),
+                    ));
+                }
+                if !actions.insert(verb.as_str()) {
+                    return Err(PluginManifestError::new(
+                        action_field,
+                        format!("page '{id}' lists action '{verb}' more than once"),
                     ));
                 }
             }

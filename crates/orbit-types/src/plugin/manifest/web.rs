@@ -41,6 +41,18 @@ pub struct PluginWebSection {
     pub pages: Vec<PluginWebPage>,
 }
 
+impl PluginWebSection {
+    /// Page id → its `actions`, for every page that names one: the list an
+    /// enabling command asks consent for.
+    pub fn declared_actions(&self) -> std::collections::BTreeMap<String, Vec<String>> {
+        self.pages
+            .iter()
+            .filter(|page| !page.actions.is_empty())
+            .map(|page| (page.id.clone(), page.actions.clone()))
+            .collect()
+    }
+}
+
 /// One dashboard panel (§4.7): the output of a `read_only` tool, drawn by
 /// the generic renderer named in `render`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -151,6 +163,11 @@ pub struct PluginWebPage {
     /// Verbs of this plugin's `read_only` tools the page may call.
     #[serde(default)]
     pub tools: Vec<String>,
+    /// Verbs of this plugin's mutating tools the page may ask to run. Each
+    /// run needs the operator session, the operator's consent to this list
+    /// at enable, and a confirmation the dashboard draws outside the frame.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actions: Vec<String>,
 }
 
 impl PluginWebPage {

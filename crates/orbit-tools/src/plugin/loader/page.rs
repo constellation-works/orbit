@@ -107,6 +107,8 @@ pub struct LoadedPluginPage {
     pub title: String,
     /// Verbs of this plugin's `read_only` tools the page may call.
     pub tools: Vec<String>,
+    /// Verbs of this plugin's mutating tools the page may ask to run.
+    pub actions: Vec<String>,
     /// The bridge version the page was written for, when it names one.
     pub kit: Option<u32>,
     /// The page's files and digest, or why they could not be read. The
@@ -171,6 +173,7 @@ pub(super) fn resolve_pages(
             id: page.id.clone(),
             title: page.label().to_string(),
             tools: page.tools.clone(),
+            actions: page.actions.clone(),
             kit: page.kit,
             bundle,
         });

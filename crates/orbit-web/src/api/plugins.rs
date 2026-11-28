@@ -11,6 +11,11 @@
 //!   under its frame policy (plugin-pages design §2).
 //! * `POST /api/plugins/<ns>/pages/<page>/call` — one call the page makes
 //!   to a `read_only` tool it declares (plugin-pages design §3).
+//! * `POST /api/plugins/<ns>/pages/<page>/actions/confirm` — check one
+//!   action the page asks for and issue the one-time confirmation the
+//!   dashboard's dialog sends back; nothing runs.
+//! * `POST /api/plugins/<ns>/pages/<page>/actions/run` — run that action
+//!   once, with the confirmation, after the operator confirmed it.
 //!
 //! A panel source is always a `read_only` tool: the manifest cannot declare
 //! a panel over a mutating one (`orbit plugin validate` refuses it, naming
@@ -18,7 +23,10 @@
 //! That is what makes a panel safe to serve to any dashboard session while
 //! the dashboard's mutations still require an operator session. A page
 //! call is held to the same rule, plus the page's own `tools` list and the
-//! tool's input schema, all checked before anything runs.
+//! tool's input schema, all checked before anything runs. An action needs
+//! the operator session at both steps, and the run spends a confirmation
+//! issued for exactly its plugin, page, tool and input; every run request,
+//! refused or run, has an audit row carrying the web session.
 
 use std::ffi::OsStr;
 use std::path::Path as FsPath;
@@ -29,13 +37,15 @@ use axum::response::{IntoResponse, Json, Response};
 use orbit_common::OrbitError;
 use orbit_common::governance::authorization::{DASHBOARD_PLUGIN_DISABLE, DASHBOARD_PLUGIN_ENABLE};
 use orbit_core::Core;
-use orbit_core::app::plugin::{Command, DashboardScope, DashboardToggle, Outcome, exec};
+use orbit_core::app::plugin::{
+    Command, DashboardScope, DashboardToggle, Outcome, PageActionRun, exec,
+};
 use orbit_core::app::plugin::{PluginSummary, PluginSummaryJsonProfile, plugin_summary_json};
 use serde_json::{Value, json};
 
 use super::routines::{action_capability, authorization_denied};
 use super::{blocking, not_found, validate_id};
-use crate::plugin_page::CallRefused;
+use crate::plugin_page::{ActionBinding, CallRefused, ConfirmationRefused};
 use crate::state::{DashboardState, PluginPanelWs, WsCore};
 
 /// Maximum serialized tool output retained or returned for one panel.
@@ -303,6 +313,152 @@ pub(super) async fn call_page(
                 crate::plugin_page::PAGE_CALL_CONCURRENCY
             ),
         ),
+    }
+}
+
+/// The tool and input a page action request names.
+fn action_request(body: &Value) -> Result<(String, Value), Box<Response>> {
+    let Some(tool) = body.get("tool").and_then(Value::as_str).map(str::to_string) else {
+        return Err(Box::new(page_refusal(
+            StatusCode::BAD_REQUEST,
+            "input_invalid",
+            "a page action names its `tool`".to_string(),
+        )));
+    };
+    let input = match body.get("input") {
+        None | Some(Value::Null) => Value::Object(Default::default()),
+        Some(input) => input.clone(),
+    };
+    Ok((tool, input))
+}
+
+pub(super) async fn confirm_page_action(
+    State(state): State<DashboardState>,
+    workspace: PluginPanelWs,
+    Path((namespace, page)): Path<(String, String)>,
+    Json(body): Json<Value>,
+) -> Response {
+    for (label, value) in [("plugin", &namespace), ("page", &page)] {
+        if let Err(message) = validate_id(value) {
+            return super::bad_request(format!("{label} {message}"));
+        }
+    }
+    let (tool, input) = match action_request(&body) {
+        Ok(request) => request,
+        Err(response) => return *response,
+    };
+    let core = workspace.core.clone();
+    let checked = {
+        let (namespace, page, tool, input) =
+            (namespace.clone(), page.clone(), tool.clone(), input.clone());
+        tokio::task::spawn_blocking(move || {
+            exec(
+                &core,
+                Command::CheckPageAction {
+                    namespace,
+                    page,
+                    tool,
+                    input,
+                },
+            )
+        })
+        .await
+    };
+    let action = match checked {
+        Ok(Ok(Outcome::PageAction(action))) => *action,
+        Ok(Ok(_)) => unreachable!("plugin page action check returned an unrelated outcome"),
+        Ok(Err(OrbitError::AuthorizationDenied(denial))) => return authorization_denied(*denial),
+        Ok(Err(error)) => return page_error(&error),
+        Err(error) => return page_panicked(error),
+    };
+    let binding = ActionBinding {
+        runtime: workspace.runtime_identity(),
+        namespace,
+        page,
+        tool,
+        input,
+    };
+    match state.plugin_pages().issue_confirmation(binding) {
+        Ok(confirmation) => Json(json!({
+            "confirmation": confirmation,
+            "expires_in_ms": crate::plugin_page::ACTION_CONFIRMATION_TTL.as_millis(),
+            "plugin": action.plugin,
+            "version": action.version,
+            "page": action.page,
+            "page_title": action.page_title,
+            "tool": action.tool,
+            "description": action.description,
+            "input": action.input,
+        }))
+        .into_response(),
+        Err(ConfirmationRefused::Busy) => page_refusal(
+            StatusCode::TOO_MANY_REQUESTS,
+            "busy",
+            format!(
+                "{} action confirmations are waiting for the operator; answer one first",
+                crate::plugin_page::ACTION_CONFIRMATION_LIMIT
+            ),
+        ),
+        Err(ConfirmationRefused::Unavailable(message)) => super::server_error(
+            OrbitError::Execution(format!("action confirmation: {message}")),
+        ),
+    }
+}
+
+pub(super) async fn run_page_action(
+    State(state): State<DashboardState>,
+    workspace: PluginPanelWs,
+    Path((namespace, page)): Path<(String, String)>,
+    Json(body): Json<Value>,
+) -> Response {
+    for (label, value) in [("plugin", &namespace), ("page", &page)] {
+        if let Err(message) = validate_id(value) {
+            return super::bad_request(format!("{label} {message}"));
+        }
+    }
+    let (tool, input) = match action_request(&body) {
+        Ok(request) => request,
+        Err(response) => return *response,
+    };
+    // Spent before anything else, so a confirmation is good for one request
+    // whatever that request turns out to be.
+    let confirmation = state.plugin_pages().redeem_confirmation(
+        body.get("confirmation").and_then(Value::as_str),
+        &ActionBinding {
+            runtime: workspace.runtime_identity(),
+            namespace: namespace.clone(),
+            page: page.clone(),
+            tool: tool.clone(),
+            input: input.clone(),
+        },
+    );
+    let confirmed = confirmation.is_ok();
+    let run = PageActionRun {
+        namespace,
+        page,
+        tool,
+        input,
+        confirmation,
+        session: Some(state.web_session_id().to_string()),
+        host: state
+            .env()
+            .hostname()
+            .and_then(OsStr::to_str)
+            .map(str::to_string),
+    };
+    let core = workspace.core.clone();
+    let result =
+        tokio::task::spawn_blocking(move || exec(&core, Command::RunPageAction(Box::new(run))))
+            .await;
+    match result {
+        Ok(Ok(Outcome::ToolOutput(output))) => Json(bounded_panel_response(output)).into_response(),
+        Ok(Ok(_)) => unreachable!("plugin page action returned an unrelated outcome"),
+        Ok(Err(OrbitError::AuthorizationDenied(denial))) => authorization_denied(*denial),
+        Ok(Err(OrbitError::PolicyDenied(message))) if !confirmed => {
+            page_refusal(StatusCode::FORBIDDEN, "confirmation_refused", message)
+        }
+        Ok(Err(error)) => page_error(&error),
+        Err(error) => page_panicked(error),
     }
 }
 

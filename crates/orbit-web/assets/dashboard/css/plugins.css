@@ -221,3 +221,19 @@
     padding: var(--space-12);
   }
 }
+
+/* A page action's confirmation, drawn by the dashboard outside the frame. */
+.plugin-action-dialog { width: min(520px, calc(100vw - var(--space-32))); margin: auto; padding: 0; }
+.plugin-action-facts {
+  display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: var(--space-6) var(--space-12);
+  margin: 0; font-size: var(--text-sm);
+}
+.plugin-action-facts dt { color: var(--fg-dim); }
+.plugin-action-facts dd { margin: 0; color: var(--fg); overflow-wrap: anywhere; }
+.plugin-action-description, .plugin-action-note { margin: 0; color: var(--fg-soft); font-size: var(--text-sm); overflow-wrap: anywhere; }
+.plugin-action-label { margin: 0; color: var(--fg-dim); font-size: var(--text-sm); }
+.plugin-action-input {
+  margin: 0; max-height: 14rem; overflow: auto; padding: var(--space-8) var(--space-10);
+  border: 1px solid var(--border); border-radius: var(--radius-2xs); background: var(--bg);
+  color: var(--fg); font-size: var(--text-xs); white-space: pre-wrap; overflow-wrap: anywhere;
+}

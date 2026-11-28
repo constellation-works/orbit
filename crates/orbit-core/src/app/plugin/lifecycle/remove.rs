@@ -118,7 +118,7 @@ pub fn remove_plugin(
     // every discovery link into this namespace's install family; deleting the
     // tree first would leave those links dangling with no plugin row left for
     // doctor to inspect.
-    set_enabled(runtime, name, false, None, None)?;
+    set_enabled(runtime, name, false, None, None, None)?;
     unlink_namespace_skills(runtime, name)?;
 
     // Keep the row available for a retry if state removal fails. All path

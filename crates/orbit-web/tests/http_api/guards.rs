@@ -180,6 +180,10 @@ fn body(path: &str) -> Value {
         }),
         "/auto-tasks/mint" => json!({"name":"missing","acknowledge_unconditional":true}),
         "/workflows/auto" => json!({"for_duration":"1m","complete":false}),
+        "/plugins/{namespace}/pages/{page}/actions/confirm"
+        | "/plugins/{namespace}/pages/{page}/actions/run" => {
+            json!({"tool":"mutate","input":{"value":1}})
+        }
         _ => json!({
             "title":"guard fixture", "description":"HTTP guard check", "scope":"host",
             "expected_candidate_commit":"a", "expected_base_commit":"b",

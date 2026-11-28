@@ -25,6 +25,8 @@ pub struct DashboardOrigin {
     pub workspace: Option<String>,
     /// The machine the browser acted from; empty when the request names none.
     pub machine_name: String,
+    /// The web session the request arrived on, when the row records one.
+    pub session: Option<String>,
 }
 
 /// The `dashboard.operations` row a governed dashboard write declares.

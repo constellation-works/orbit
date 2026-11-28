@@ -12,6 +12,7 @@
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, PoisonError};
+use std::time::{Duration, Instant};
 
 use axum::body::Bytes;
 use base64::Engine as _;
@@ -30,6 +31,14 @@ pub(crate) const KIT_V1_STYLE: &str = include_str!("../assets/plugin-kit/v1/kit.
 /// Executions one page may have running at once, across identical-call
 /// sharing; a call over it is refused with `busy`.
 pub(crate) const PAGE_CALL_CONCURRENCY: usize = 4;
+
+/// How long a confirmation the dashboard obtained for an action stays
+/// usable: long enough for the operator to read the dialog.
+pub(crate) const ACTION_CONFIRMATION_TTL: Duration = Duration::from_secs(300);
+
+/// Unused confirmations this server holds at once; a request over it is
+/// refused with `busy` until one is used or expires.
+pub(crate) const ACTION_CONFIRMATION_LIMIT: usize = 32;
 
 /// The frame policy of design §2 before its `script-src` hashes.
 const POLICY_HEAD: &str = "sandbox allow-scripts; default-src 'none'; script-src";
@@ -78,6 +87,30 @@ struct Calls {
     running: HashMap<(usize, String, String), usize>,
 }
 
+/// What one action confirmation was issued for. It is good for one request
+/// naming exactly this runtime, plugin, page, tool and input.
+#[derive(PartialEq)]
+pub(crate) struct ActionBinding {
+    pub(crate) runtime: usize,
+    pub(crate) namespace: String,
+    pub(crate) page: String,
+    pub(crate) tool: String,
+    pub(crate) input: Value,
+}
+
+struct Confirmation {
+    binding: ActionBinding,
+    issued: Instant,
+}
+
+/// Why an action confirmation was not issued.
+pub(crate) enum ConfirmationRefused {
+    /// [`ACTION_CONFIRMATION_LIMIT`] confirmations are outstanding.
+    Busy,
+    /// The system random source failed.
+    Unavailable(String),
+}
+
 /// Per-server page documents and page-call executions.
 #[derive(Default)]
 pub(crate) struct PageServing {
@@ -86,6 +119,8 @@ pub(crate) struct PageServing {
     /// holds at most one document per declared page.
     documents: Mutex<Documents>,
     calls: Mutex<Calls>,
+    /// Unused one-time action confirmations, by their random token.
+    confirmations: Mutex<HashMap<String, Confirmation>>,
 }
 
 impl PageServing {
@@ -166,6 +201,65 @@ impl PageServing {
                 "plugin page call ended without a result".to_string(),
             )))
         }))
+    }
+
+    /// Issue a one-time confirmation for `binding`: a random token the
+    /// dashboard sends back with the action once the operator confirmed it.
+    pub(crate) fn issue_confirmation(
+        &self,
+        binding: ActionBinding,
+    ) -> Result<String, ConfirmationRefused> {
+        let token = orbit_common::security::token::random_hex(32)
+            .map_err(|error| ConfirmationRefused::Unavailable(error.to_string()))?;
+        let mut confirmations = self
+            .confirmations
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        confirmations.retain(|_, held| held.issued.elapsed() < ACTION_CONFIRMATION_TTL);
+        if confirmations.len() >= ACTION_CONFIRMATION_LIMIT {
+            return Err(ConfirmationRefused::Busy);
+        }
+        confirmations.insert(
+            token.clone(),
+            Confirmation {
+                binding,
+                issued: Instant::now(),
+            },
+        );
+        Ok(token)
+    }
+
+    /// Spend `token` for `binding`. The token is gone after this call
+    /// whatever it answers, so it is never good twice. `Err` names why it
+    /// does not confirm this request.
+    pub(crate) fn redeem_confirmation(
+        &self,
+        token: Option<&str>,
+        binding: &ActionBinding,
+    ) -> Result<(), String> {
+        let Some(token) = token.filter(|token| !token.is_empty()) else {
+            return Err(
+                "an action runs only with the confirmation the dashboard obtains when \
+                        the operator confirms it"
+                    .to_string(),
+            );
+        };
+        let held = self
+            .confirmations
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(token);
+        match held {
+            None => Err("the action's confirmation is unknown or already used".to_string()),
+            Some(held) if held.issued.elapsed() >= ACTION_CONFIRMATION_TTL => {
+                Err("the action's confirmation expired; confirm the action again".to_string())
+            }
+            Some(held) if held.binding != *binding => Err(
+                "the action's confirmation was issued for another plugin, page, tool or input"
+                    .to_string(),
+            ),
+            Some(_) => Ok(()),
+        }
     }
 
     fn finish(&self, key: &CallKey, bound: &(usize, String, String)) {

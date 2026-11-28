@@ -5,6 +5,7 @@
    through the dashboard that frames it:
 
      page -> dashboard  {v: 1, id, call: "<tool>", input: {...}}
+     page -> dashboard  {v: 1, id, act: "<tool>", input: {...}}
      dashboard -> page  {v: 1, id, ok: true, output}
                         {v: 1, id, ok: false, error: {code, message}}
      dashboard -> page  {v: 1, init: {theme, host, workspace, operator, query}}
@@ -67,6 +68,17 @@
       return new Promise(function (resolve, reject) {
         pending.set(id, { resolve: resolve, reject: reject });
         send({ id: id, call: String(tool), input: input === undefined ? {} : input });
+      });
+    },
+    /* Ask to run one of this plugin's mutating tools the page names under
+       `actions`. The dashboard shows the operator a confirmation outside
+       this frame; the promise rejects with code `cancelled` when they
+       decline, and resolves with the tool's output once it ran. */
+    act: function (tool, input) {
+      var id = String(nextId++);
+      return new Promise(function (resolve, reject) {
+        pending.set(id, { resolve: resolve, reject: reject });
+        send({ id: id, act: String(tool), input: input === undefined ? {} : input });
       });
     },
     /* Resolves with {theme, host, workspace, operator, query} once the

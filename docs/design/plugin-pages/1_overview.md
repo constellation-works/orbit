@@ -28,6 +28,8 @@ with the dashboard's authority. The operator approved the design on 2026-11-27
 built ([ORB-29534]). The server writes an active page as one document under its frame policy
 and runs the read-only tool calls it declares ([ORB-29536]), and the dashboard renders enabled
 pages as sub-tabs under Plugins inside the sandboxed frame with its bridge relay ([ORB-29537]).
+A page runs one of its plugin's mutating tools only as an action the operator consented to
+at enable and confirms in a dialog the dashboard draws outside the frame ([ORB-29539]).
 
 ## 1. Motivation
 
@@ -74,12 +76,13 @@ rest of the plugin standard are unchanged, and plugins still add no top-level de
 | Bundle | The page's built static files: `index.html` for the markup, and the scripts and styles the manifest lists. Its digest is recorded at install |
 | Frame | The sandboxed frame the dashboard draws the page in. It has a unique origin and no network, and it fetches nothing after its own document |
 | Bridge | The `postMessage` exchange by which a page asks the dashboard to call one of its declared tools |
+| Action | A page's request to run one of its plugin's mutating tools, run only after the operator confirms it in a dialog the dashboard draws |
 | Kit | A script and a stylesheet Orbit serves, which wrap the bridge and carry the dashboard's look |
 
 ## 3. At a Glance
 
 The table maps each concern to the design section that owns it and the phase that delivers
-it. Phase 1 (the first four rows) is built.
+it. Phase 1 (the first four rows) and phase 3 are built.
 
 | Concern | Design section | Phase |
 |---|---|---|
@@ -89,7 +92,7 @@ it. Phase 1 (the first four rows) is built.
 | Where the operator finds a page | [Surfaces](./2_design.md#4-surfaces) | 1 |
 | Pages of a host reached through this dashboard | [Other hosts](./2_design.md#5-other-hosts) | 2 |
 | Why Orbit starts no server for a page | [Why no server per plugin](./2_design.md#6-why-no-server-per-plugin) | — |
-| A page that changes something | [Phasing](./2_design.md#8-phasing) | 3 |
+| A page that changes something | [The bridge](./2_design.md#3-the-bridge) | 3 |
 | The Scribe and Formation pages | [Phasing](./2_design.md#8-phasing) | 4 |
 
 ## 4. Decided at approval
@@ -126,7 +129,7 @@ approved its replacement on 2026-11-27 ([ORB-29573]), recorded as a third decisi
 - [ORB-29536] — serves a page under the frame policy and runs its tool calls.
 - [ORB-29537] — adds the Plugins sub-tabs, the page frame and the bridge relay.
 - [ORB-29538] — shows another host's pages through the forwarder.
-- [ORB-29539] — adds actions behind a dashboard-drawn confirmation.
+- [ORB-29539] — added actions behind consent and a dashboard-drawn confirmation.
 - [ORB-29573] — revised the page contract to one document after the engine measurement.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

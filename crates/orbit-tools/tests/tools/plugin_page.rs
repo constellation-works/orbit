@@ -120,6 +120,18 @@ fn a_valid_page_loads_with_its_files_and_digest() {
 }
 
 #[test]
+fn a_page_names_mutating_tools_only_under_actions() {
+    let temp = example_with_pages(&VALID_PAGE.replace(
+        "tools: [status]",
+        "tools: [status]\n        actions: [maintain]",
+    ));
+    let plugin = load_plugin_dir(temp.path()).expect("loads");
+    validate_loaded_plugin(&plugin, &PluginValidationPolicy::host_default()).expect("valid");
+    assert_eq!(plugin.pages[0].tools, ["status"]);
+    assert_eq!(plugin.pages[0].actions, ["maintain"]);
+}
+
+#[test]
 fn validate_refuses_each_unsafe_page_by_name() {
     let mutate = |pages: &str, edit: &dyn Fn(&tempfile::TempDir)| {
         let temp = example_with_pages(pages);
@@ -140,6 +152,30 @@ fn validate_refuses_each_unsafe_page_by_name() {
             "a mutating tool",
             mutate(&with_tools("tools: [maintain]"), &none),
             "read_only",
+        ),
+        (
+            "an action of another plugin",
+            mutate(
+                &with_tools("tools: [status]\n        actions: [other.maintain]"),
+                &none,
+            ),
+            "names action 'other.maintain', which this plugin does not declare",
+        ),
+        (
+            "a read-only tool listed as an action",
+            mutate(
+                &with_tools("tools: [status]\n        actions: [status]"),
+                &none,
+            ),
+            "list it under the page's `tools`",
+        ),
+        (
+            "an action listed twice",
+            mutate(
+                &with_tools("tools: [status]\n        actions: [maintain, maintain]"),
+                &none,
+            ),
+            "lists action 'maintain' more than once",
         ),
         (
             "a missing index.html",
