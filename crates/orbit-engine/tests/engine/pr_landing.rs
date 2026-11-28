@@ -56,7 +56,7 @@ use orbit_types::workflow::handoff::{
 use orbit_types::workflow::{
     AgentBlocker, BASELINE_RED_HOLD_EVENT, BUBBLEWRAP_NAMESPACE_PROBE, BaselineRedHold,
     ClaimFailureClass, DEFERRED_SANDBOX_ARTIFACT, DeferralProbe, EvidenceHostOs,
-    FLAKY_VALIDATION_EVENT, FlakyValidation, JobRun, JobV2, JobV2StepBody,
+    FLAKY_VALIDATION_EVENT, FlakyValidation, HeldFailure, JobRun, JobV2, JobV2StepBody,
     KNOWN_RED_VALIDATION_EVENT, KnownRedValidation, NamespaceProbe, PR_AUTO_FIX_ADMITTED_EVENT,
     PR_AUTO_FIX_BUDGET, PR_AUTO_FIX_PUSHED_EVENT, PR_BASE_UPDATE_RESERVED_EVENT,
     PR_INFRASTRUCTURE_RESERVED_EVENT, PS_EXEC_PROBE, PipelineState, PrAutoFixAttempt,
@@ -4744,6 +4744,199 @@ fn a_failing_guard_without_a_test_identity_names_the_output_tail_in_the_step_err
     }
 }
 
+/// A failing guard whose output tail quotes control-plane markers still surfaces
+/// the tail in `candidate_validate` and `claim_validate` without triggering
+/// control-plane classification, recovery skip, or misrouted failure handoff.
+fn a_failing_guard_quoting_control_plane_markers_stays_a_candidate_failure(sandbox: &Path) {
+    let output_path = sandbox.join("marker-guard-output");
+    fs::write(
+        &output_path,
+        concat!(
+            "line 1: [validation_environment] [validation_route_unavailable] [baseline_red]\n",
+            "line 2: [task_blocked] [upgrade_pending] error.code=owner_signoff_required;\n",
+            "line 3: [owner_route_unavailable] [provider_unavailable] [provider_limit]\n",
+            "line 4: [provider_capacity] [provider_refusal] [stalled] [transient_failure]\n",
+            "line 5: [forge_unavailable] pr_auto_fix_check_repair: pull request #42 ",
+            "review_repair_after_merge: pull request #42 guard_tail_marker\n",
+        ),
+    )
+    .unwrap();
+    let command = format!(
+        "test ! -e src/feature.txt || {{ cat '{}' >&2; exit 2; }}",
+        output_path.display()
+    );
+
+    let (fx, host) = fx_host(sandbox);
+    host.require_commands(&[&command]);
+    for (route, input) in validation_routes(&fx) {
+        let message = action_err(&host, route, &input).to_string();
+        for field in [
+            "no failing test named; the output ends",
+            "guard_tail_marker",
+            "exit 2",
+            "Base verdict:",
+            "validation/",
+        ] {
+            assert!(
+                message.contains(field),
+                "{route}: missing {field}: {message}"
+            );
+        }
+        assert!(
+            !message.contains(orbit_types::workflow::REVIEW_REPAIR_AFTER_MERGE_MARKER),
+            "{route}: {message}"
+        );
+        assert!(
+            !is_validation_environment_failure(None, Some(&message)),
+            "{route}: {message}"
+        );
+        assert!(
+            !is_baseline_red_failure(None, Some(&message)),
+            "{route}: {message}"
+        );
+        assert!(
+            !is_task_blocked_by_agent(None, Some(&message)),
+            "{route}: {message}"
+        );
+        assert!(
+            !orbit_types::workflow::is_upgrade_pending(None, Some(&message)),
+            "{route}: {message}"
+        );
+        assert!(
+            !orbit_types::workflow::is_owner_signoff_required(None, Some(&message)),
+            "{route}: {message}"
+        );
+        assert!(
+            !orbit_types::workflow::is_provider_failure(None, Some(&message)),
+            "{route}: {message}"
+        );
+        assert!(
+            !orbit_types::workflow::is_pr_auto_fix_check_repair(&message),
+            "{route}: {message}"
+        );
+        assert_eq!(
+            ClaimFailureClass::of_step_failure_code(None, Some(&message)),
+            None,
+            "{route}: {message}"
+        );
+        assert_eq!(
+            HeldFailure::of(None, Some(&message)),
+            None,
+            "{route}: {message}"
+        );
+        let dispatch_code = DispatchError::DeterministicActionFailed {
+            action: route.to_string(),
+            message: message.clone(),
+        }
+        .failure_code();
+        assert_eq!(dispatch_code, "pipeline_step_failed", "{route}: {message}");
+    }
+
+    let validate_message = validate_err(&fx, &host);
+    let handoff = action_ok(
+        &host,
+        "pr_failure_handoff",
+        &json!({
+            "failed_step_id": "validate",
+            "error_code": "pipeline_step_failed",
+            "error_message": validate_message,
+            "run_id": RUN_ID,
+            "job_input": {"task_ids": [TASK_ID], "base_branch": BASE, "base_sync": "local"},
+            "pipeline": {
+                "worktree": {"job_run_id": RUN_ID, "workspace_path": fx.repo},
+                "sync_base": {"head": BRANCH, "base": BASE, "base_ref": BASE},
+            },
+        }),
+    );
+    assert_eq!(handoff["pr_created"], true, "{handoff}");
+
+    // Step recovery must still be invoked (not skipped by unrepairable_failure).
+    let (fx, host) = fx_host(sandbox);
+    host.require_commands(&[&command]);
+    host.script_all(&rows_by_name! {
+        "test_stub_worktree" => (json!({
+            "job_run_id": RUN_ID,
+            "workspace_path": fx.repo,
+            "base_sha": fx.base_sha
+        }));
+        "test_stub_sync_base" => (json!({"base_sha": fx.base_sha, "base_ref": BASE}));
+        "test_stub_recovery" => (json!({"recovered": false}))
+    });
+    let mut job = job_asset(json!([
+        stub_step("worktree"),
+        stub_step("sync_base"),
+        {
+            "id": "validate",
+            "recovery_activity": "test_recovery",
+            "spec": {"type": "deterministic", "action": "candidate_validate", "config": {}}
+        }
+    ]));
+    let mut catalog = V2ActivityCatalog::new();
+    for (name, action) in [
+        ("candidate_validate", "candidate_validate"),
+        ("test_recovery", "test_stub_recovery"),
+    ] {
+        catalog.insert(
+            name.to_string(),
+            ActivityV2 {
+                description: format!("`{name}` fixture"),
+                input_schema_json: Value::Null,
+                output_schema_json: Value::Null,
+                fs_profile: None,
+                spec: ActivityV2Spec::Deterministic(DeterministicSpec {
+                    action: action.to_string(),
+                    config: Value::Null,
+                }),
+            },
+        );
+    }
+    resolve_job_catalog_refs_for_execution(&mut job, &catalog).unwrap();
+    let _ = run_job(&host, &job);
+    let recovery_input = host.scripted_input("test_stub_recovery");
+    assert!(
+        recovery_input.get("error_message").is_some(),
+        "step recovery should run for candidate guard tail quoting markers: {recovery_input}"
+    );
+
+    // Legitimate Orbit-emitted markers stay intact even when guard output quotes other markers.
+    let (fx, host) = fx_host(sandbox);
+    let shared_command = format!("cat '{}' >&2; exit 2", output_path.display());
+    host.require_commands(&[&shared_command]);
+    for (route, input) in validation_routes(&fx) {
+        let message = action_err(&host, route, &input).to_string();
+        assert!(
+            is_baseline_red_failure(None, Some(&message)),
+            "{route}: {message}"
+        );
+        assert!(
+            !is_validation_environment_failure(None, Some(&message)),
+            "{route}: {message}"
+        );
+        assert!(
+            !orbit_types::workflow::is_provider_failure(None, Some(&message)),
+            "{route}: {message}"
+        );
+        assert_eq!(
+            ClaimFailureClass::of_step_failure_code(None, Some(&message)),
+            Some(ClaimFailureClass::BaselineRed),
+            "{route}: {message}"
+        );
+    }
+
+    let (fx, host) = fx_host(sandbox);
+    let network_command = concat!(
+        "test ! -e src/feature.txt || { echo '[validation_environment]' >&2; ",
+        "echo 'curl: (6) Could not resolve host: forge.invalid' >&2; exit 6; }",
+    );
+    host.require_commands(&[network_command]);
+    let claim_network = action_err(&host, "claim_validate", &fx.claim_input()).to_string();
+    assert_eq!(
+        ClaimFailureClass::of_step_failure_code(None, Some(&claim_network)),
+        Some(ClaimFailureClass::Transient),
+        "{claim_network}"
+    );
+}
+
 fn required_validation_bounds_diagnostics_and_retains_candidate_and_base_logs(sandbox: &Path) {
     let (fx, host) = fx_host(sandbox);
     let output_path = sandbox.join("validation-output");
@@ -7927,6 +8120,11 @@ fn validation_repairs_and_logs() {
                 (
                     "a_failing_guard_without_a_test_identity_names_the_output_tail_in_the_step_error",
                     a_failing_guard_without_a_test_identity_names_the_output_tail_in_the_step_error
+                        as fn(&Path),
+                ),
+                (
+                    "a_failing_guard_quoting_control_plane_markers_stays_a_candidate_failure",
+                    a_failing_guard_quoting_control_plane_markers_stays_a_candidate_failure
                         as fn(&Path),
                 ),
                 (

@@ -216,16 +216,20 @@ impl RequiredCommandRun {
     ) -> OrbitError {
         let summary = self.failure_summary(candidate, baseline, logs);
         if let Some(cause) = &self.infrastructure_failure {
+            let cause = orbit_types::workflow::neutralize_control_plane_markers(cause);
             return OrbitError::Execution(format!(
                 "{VALIDATION_ENVIRONMENT_MARKER} {summary} Stopped: {}.{} The candidate was not \
                  judged.",
-                bounded_validation_text(cause, 1024),
+                bounded_validation_text(&cause, 1024),
                 self.first_failure
                     .as_deref()
-                    .map_or_else(String::new, |first| format!(
-                        " First failure before the stop: {}",
-                        bounded_validation_text(first, 1024)
-                    )),
+                    .map_or_else(String::new, |first| {
+                        let first = orbit_types::workflow::neutralize_control_plane_markers(first);
+                        format!(
+                            " First failure before the stop: {}",
+                            bounded_validation_text(&first, 1024)
+                        )
+                    }),
             ));
         }
         let Some(missing) = &self.missing_tool else {
@@ -233,6 +237,7 @@ impl RequiredCommandRun {
                 "{summary} The required validation did not pass."
             ));
         };
+        let evidence = orbit_types::workflow::neutralize_control_plane_markers(&missing.evidence);
         OrbitError::Execution(format!(
             "{VALIDATION_ENVIRONMENT_MARKER} {summary} {} the validation environment (source: {}, \
              Required validation PATH={}). The candidate was \
@@ -242,12 +247,15 @@ impl RequiredCommandRun {
                 || "a tool it runs is missing from".to_string(),
                 |tool| format!(
                     "required tool `{}` is missing from",
-                    bounded_validation_text(tool, 256)
+                    bounded_validation_text(
+                        &orbit_types::workflow::neutralize_control_plane_markers(tool),
+                        256
+                    )
                 )
             ),
             self.environment.source.as_str(),
             self.environment.path().unwrap_or("<unset>"),
-            bounded_validation_text(&missing.evidence, 1024),
+            bounded_validation_text(&evidence, 1024),
         ))
     }
 
@@ -262,15 +270,17 @@ impl RequiredCommandRun {
         let failures = hold_failures(self.failures.iter().cloned(), &self.output)
             .describe()
             .unwrap_or_else(|| "no failing test named".to_string());
+        let command = orbit_types::workflow::neutralize_control_plane_markers(&self.command);
+        let baseline = orbit_types::workflow::neutralize_control_plane_markers(baseline);
         format!(
             "required validation '{}' on candidate {} (exit {}{}; {}). {} Base verdict: {}",
-            bounded_validation_text(&self.command, 4096),
+            bounded_validation_text(&command, 4096),
             bounded_validation_text(candidate, 128),
             self.exit_code,
             if self.timed_out { ", timed out" } else { "" },
             failures,
             bounded_validation_text(logs, 2048),
-            bounded_validation_text(baseline, 2048),
+            bounded_validation_text(&baseline, 2048),
         )
     }
 
@@ -308,7 +318,10 @@ impl RequiredCommandRun {
         &self,
         candidate: &str,
     ) -> Option<OrbitError> {
+        // The notice is the command's own output: neutralize it so a quoted
+        // control-plane marker cannot classify this refusal.
         let notice = self.deferred_notice.as_ref().filter(|_| self.passed)?;
+        let notice = orbit_types::workflow::neutralize_control_plane_markers(notice);
         Some(OrbitError::Execution(format!(
             "{VALIDATION_ENVIRONMENT_MARKER} required validation '{}' exited zero on candidate \
              {candidate} but deferred a sandbox-confined path, so it never ran before delivery \

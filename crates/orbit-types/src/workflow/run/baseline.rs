@@ -26,6 +26,7 @@
 //! task and the pull request record those tests as known red
 //! ([`KnownRedValidation`]).
 
+use super::diagnostic;
 use super::failure_classification_text;
 use crate::identity::lower_hex;
 use crate::task::{TaskDecision, TaskHistoryEntry};
@@ -180,7 +181,13 @@ impl BaselineRedFailures {
                 .identities
                 .iter()
                 .take(DESCRIBED_FAILURES)
-                .map(|identity| format!("`{}`", identity.strip_prefix("test ").unwrap_or(identity)))
+                .map(|identity| {
+                    let display = identity.strip_prefix("test ").unwrap_or(identity);
+                    format!(
+                        "`{}`",
+                        diagnostic::neutralize_control_plane_markers(display)
+                    )
+                })
                 .collect::<Vec<_>>()
                 .join(", ");
             let more = self.identities.len().saturating_sub(DESCRIBED_FAILURES) + self.omitted;
@@ -195,7 +202,7 @@ impl BaselineRedFailures {
                 "no failing test named; the output ends {}",
                 self.tail
                     .iter()
-                    .map(|line| format!("`{line}`"))
+                    .map(|line| format!("`{}`", diagnostic::neutralize_control_plane_markers(line)))
                     .collect::<Vec<_>>()
                     .join(" / ")
             )
@@ -383,7 +390,7 @@ fn output_tail(output: &str) -> Vec<String> {
         .collect::<Vec<_>>();
     lines[lines.len().saturating_sub(BASELINE_RED_TAIL_LINES)..]
         .iter()
-        .map(|line| bounded_line(line))
+        .map(|line| bounded_line(&diagnostic::neutralize_control_plane_markers(line)))
         .collect()
 }
 

@@ -11,6 +11,7 @@ mod steering;
 
 pub use auto_task::*;
 pub use drain::*;
+pub(super) use failure::OWNER_SIGNOFF_REQUIRED_DIAGNOSTIC_TOKEN;
 pub use failure::*;
 pub use pipeline::*;
 pub use recovery::*;

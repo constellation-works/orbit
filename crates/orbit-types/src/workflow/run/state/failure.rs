@@ -120,7 +120,8 @@ pub const LOOP_EXHAUSTED_ERROR_CODE: &str = "loop_exhausted";
 /// `error.code=` fragment the step diagnostic writes for
 /// [`OWNER_SIGNOFF_REQUIRED_ERROR_CODE`], including the semicolon that
 /// closes the code. A handoff that sees only the step message matches this.
-const OWNER_SIGNOFF_REQUIRED_DIAGNOSTIC_TOKEN: &str = "error.code=owner_signoff_required;";
+pub(in crate::workflow::run) const OWNER_SIGNOFF_REQUIRED_DIAGNOSTIC_TOKEN: &str =
+    "error.code=owner_signoff_required;";
 
 /// Token a step failure carries when a resumed published delivery's deferred
 /// footprint was still held by another task when its wait expired. The

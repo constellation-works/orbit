@@ -679,12 +679,13 @@ fn claim_failure<H: ReviewGate + HostEnvironment + RuntimeHostProcessEnvironment
     // Still unable to reach the network after its retries, the command said
     // nothing about the candidate [ORB-14257].
     if let Some(network) = &run.network_evidence {
+        let network = orbit_types::workflow::neutralize_control_plane_markers(network);
         return Err(OrbitError::Execution(format!(
             "{TRANSIENT_FAILURE_MARKER} {} Could not reach the network after {} retries ({}); \
              the candidate was not judged.",
             run.failure_summary(commit, verdict, &evidence),
             run.network_retries,
-            bounded_validation_text(network, 1024)
+            bounded_validation_text(&network, 1024)
         )));
     }
     Err(candidate_failure(run, commit, check.as_ref(), &evidence))

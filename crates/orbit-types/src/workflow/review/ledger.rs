@@ -14,6 +14,11 @@ use super::{ReviewBudget, ReviewConsumption, ReviewVerdict};
 /// [`ReviewGateRefusal::Abandoned`](super::ReviewGateRefusal::Abandoned).
 pub const REVIEW_ABANDONED_MARKER: &str = "review_abandoned:";
 
+/// Lead of the recipe a merged pull request's preserved before-landing review
+/// repair names. The failure handoff routes a step error that carries it to the
+/// repair's blocked hold, so child output must never reach it unneutralized.
+pub const REVIEW_REPAIR_AFTER_MERGE_MARKER: &str = "review_repair_after_merge:";
+
 /// What a before-landing review refusal says about its pull request: it
 /// awaits a recorded decision, so the run that refused it is held, not failed
 /// [ORB-15202].
