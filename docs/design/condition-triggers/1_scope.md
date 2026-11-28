@@ -721,7 +721,7 @@ reflexive approval.
 
 The chain-depth and self-exclusion checks rely on provenance that Orbit already
 writes: the `auto-task:<name>` tag (`template_params`,
-`crates/orbit-core/src/application/auto_tasks/scheduler.rs`), plus the new
+`crates/orbit-core/src/app/auto_task/scheduler.rs`), plus the new
 `condition_fired` event.
 
 **Rejected alternative.** Static loop proof across all definitions. Actions run

@@ -6,7 +6,7 @@
 //! Pool and crew names are fixture policy.
 
 use chrono::{Duration, Utc};
-use orbit_core::application::auto_tasks::AutoTaskAddParams;
+use orbit_core::app::auto_task::AutoTaskAddParams;
 use orbit_core::runtime::JobRuns;
 use orbit_core::runtime::OrbitRuntime;
 use orbit_engine::Recovery;
@@ -124,8 +124,9 @@ impl Fixture {
         complexity: TaskComplexity,
         crew: Option<&str>,
     ) -> orbit_types::task::Task {
-        self.runtime
-            .auto_task_add(AutoTaskAddParams {
+        orbit_core::app::auto_task::auto_task_add(
+            &self.runtime,
+            AutoTaskAddParams {
                 name: name.into(),
                 description: "System work fixture".into(),
                 schedule: AutoTaskSchedule::every_minutes(60),
@@ -143,9 +144,10 @@ impl Fixture {
                     status: TaskStatus::Backlog,
                 },
                 dedupe: DedupePolicy::SkipIfOpen,
-            })
-            .unwrap();
-        self.runtime.auto_task_mint(name).unwrap()
+            },
+        )
+        .unwrap();
+        orbit_core::app::auto_task::auto_task_mint(&self.runtime, name).unwrap()
     }
 }
 

@@ -60,7 +60,9 @@ pub(crate) fn with_accepted_history(
     let Some(definition) = definition.filter(|definition| definition.completion.is_some()) else {
         return facts;
     };
-    match runtime.auto_task_completion_history(&definition.name) {
+    match crate::app::port::AutomationAutoTask(runtime)
+        .auto_task_completion_history(&definition.name)
+    {
         AutoTaskAcceptedHistory::Latest(receipt) => {
             facts.last_succeeded_at = Some(receipt.accepted_at)
         }
@@ -101,17 +103,18 @@ fn accepted_history_of(runtime: &OrbitRuntime, name: &str) -> AcceptedHistoryFac
         last_succeeded_at: None,
         unavailable: Some(why),
     };
-    let definition = match runtime.validated_auto_task_definition(name) {
-        Ok(Some(definition)) => definition,
-        Ok(None) => return unavailable(format!("no auto-task `{name}` is defined here")),
-        Err(error) => return unavailable(format!("auto-task `{name}` does not load: {error}")),
-    };
+    let definition =
+        match crate::app::port::AutomationAutoTask(runtime).validated_auto_task_definition(name) {
+            Ok(Some(definition)) => definition,
+            Ok(None) => return unavailable(format!("no auto-task `{name}` is defined here")),
+            Err(error) => return unavailable(format!("auto-task `{name}` does not load: {error}")),
+        };
     if definition.completion.is_none() {
         return unavailable(format!(
             "auto-task `{name}` declares no completion contract, so it has no accepted results"
         ));
     }
-    match runtime.auto_task_completion_history(name) {
+    match crate::app::port::AutomationAutoTask(runtime).auto_task_completion_history(name) {
         AutoTaskAcceptedHistory::Latest(receipt) => AcceptedHistoryFacts {
             last_succeeded_at: Some(receipt.accepted_at),
             unavailable: None,

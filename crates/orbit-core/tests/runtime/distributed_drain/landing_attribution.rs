@@ -340,8 +340,10 @@ fn the_owners_review_batch_names_the_tasks_handoff_landings_delivered() {
             }),
         )
         .expect("consumer");
-    owner.auto_task_toggle(CONSUMER, true).unwrap();
-    let definition = owner.auto_task_show(CONSUMER).unwrap().unwrap();
+    orbit_core::app::auto_task::auto_task_toggle(owner, CONSUMER, true).unwrap();
+    let definition = orbit_core::app::auto_task::auto_task_show(owner, CONSUMER)
+        .unwrap()
+        .unwrap();
     publish_origin(repo);
     let baseline = evaluate_landing(owner, &definition);
     assert!(baseline.state.is_some(), "{baseline:#?}");

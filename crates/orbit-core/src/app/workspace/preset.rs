@@ -545,10 +545,9 @@ pub(super) fn enable_preset_definitions(
     }
     let mut changed = Vec::new();
     for name in &preset.enable_auto_tasks {
-        let before = rt
-            .auto_task_show(name)?
+        let before = crate::app::auto_task::auto_task_show(rt, name)?
             .is_some_and(|definition| definition.enabled);
-        rt.auto_task_toggle(name, true)?;
+        crate::app::auto_task::auto_task_toggle(rt, name, true)?;
         if !before {
             changed.push(name.clone());
         }

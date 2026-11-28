@@ -257,7 +257,7 @@ impl OrbitRuntime {
             target.error = Some(error);
             target
         };
-        let path = match self.auto_task_discovery_path(name) {
+        let path = match crate::app::port::AutomationAutoTask(self).auto_task_discovery_path(name) {
             Ok(Some(path)) => path,
             Ok(None) => return target,
             Err(error) => return unreadable(target, error.to_string()),
@@ -267,11 +267,12 @@ impl OrbitRuntime {
             Ok(bytes) => bytes,
             Err(error) => return unreadable(target, format!("read {}: {error}", path.display())),
         };
-        let definition = match self.validated_auto_task_definition(name) {
-            Ok(Some(definition)) => definition,
-            Ok(None) => return target,
-            Err(error) => return unreadable(target, error.to_string()),
-        };
+        let definition =
+            match crate::app::port::AutomationAutoTask(self).validated_auto_task_definition(name) {
+                Ok(Some(definition)) => definition,
+                Ok(None) => return target,
+                Err(error) => return unreadable(target, error.to_string()),
+            };
         target.resolution = "resolved";
         target.completion = definition.completion.clone().map(|contract| {
             let adapter_grant = match self.script_status(&contract.adapter) {
@@ -279,7 +280,9 @@ impl OrbitRuntime {
                 Ok(None) => "missing".to_string(),
                 Err(_) => "unreadable".to_string(),
             };
-            let accepted_history = match self.auto_task_completion_history(name) {
+            let accepted_history = match crate::app::port::AutomationAutoTask(self)
+                .auto_task_completion_history(name)
+            {
                 AutoTaskAcceptedHistory::Latest(receipt) => {
                     ExplainedAcceptedHistory::Latest { receipt }
                 }

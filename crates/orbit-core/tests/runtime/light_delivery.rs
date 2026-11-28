@@ -166,7 +166,8 @@ fn delivery_state(fixture: &Fixture, consumer: &str) -> Value {
         "receipts": store.read().and_then(|snapshot| snapshot.automation().receipts(consumer, 100)).unwrap(),
         "recoveries": store.read().and_then(|snapshot| snapshot.automation().recoveries(consumer, 100)).unwrap(),
         "waivers": store.read().and_then(|snapshot| snapshot.automation().waivers(consumer, 100)).unwrap(),
-        "definition": fixture.runtime.auto_task_show("preview-review").unwrap(),
+        "definition":
+            orbit_core::app::auto_task::auto_task_show(&fixture.runtime, "preview-review").unwrap(),
     })
 }
 
@@ -217,13 +218,8 @@ fn mapped_delivery_preview(guard_exit: Option<u8>) {
             }),
         )
         .unwrap();
-    fixture
-        .runtime
-        .auto_task_toggle("preview-review", true)
-        .unwrap();
-    let definition = fixture
-        .runtime
-        .auto_task_show("preview-review")
+    orbit_core::app::auto_task::auto_task_toggle(&fixture.runtime, "preview-review", true).unwrap();
+    let definition = orbit_core::app::auto_task::auto_task_show(&fixture.runtime, "preview-review")
         .unwrap()
         .unwrap();
     let evaluate = |dry_run| {

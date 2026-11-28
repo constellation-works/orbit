@@ -2,9 +2,7 @@
 //! Recovery and ticks must retain the unpaid batch across definition edits.
 
 use chrono::{Duration, Utc};
-use orbit_core::application::auto_tasks::scheduler::{
-    SchedulerOptions, run_auto_task_scheduler_at,
-};
+use orbit_core::app::auto_task::{SchedulerOptions, run_auto_task_scheduler_at};
 use orbit_core::application::automation::{consumer_key, evaluate_auto_task};
 use orbit_types::workflow::automation::{
     AcceptedCoverage, AutomationState, BatchState, ExaminationCheck, evidence_template,
@@ -274,7 +272,9 @@ fn archived_claim_reissues_the_same_obligations_as_a_new_task() {
             attempt.reissue.as_ref().unwrap().from_action_id.as_deref(),
             Some(action_id.as_str())
         );
-        let definition = runtime.auto_task_show(CONSUMER).unwrap().unwrap();
+        let definition = orbit_core::app::auto_task::auto_task_show(&runtime, CONSUMER)
+            .unwrap()
+            .unwrap();
         let evaluated = evaluate_auto_task(&runtime, &definition, false, Utc::now())
             .unwrap()
             .state
@@ -329,7 +329,9 @@ fn unminted_retry_recovers_after_a_legacy_task_closed_and_settings_changed() {
             .assert()
             .success();
         let closed = runtime.get_task(&action_id).unwrap();
-        let definition = runtime.auto_task_show(CONSUMER).unwrap().unwrap();
+        let definition = orbit_core::app::auto_task::auto_task_show(&runtime, CONSUMER)
+            .unwrap()
+            .unwrap();
         let before = evaluate_auto_task(&runtime, &definition, false, Utc::now())
             .unwrap()
             .state
@@ -490,7 +492,9 @@ fn scheduler_settles_closed_claims_and_adopts_but_refuses_open_tasks() {
                 ])
                 .assert()
                 .failure();
-            let definition = runtime.auto_task_show(CONSUMER).unwrap().unwrap();
+            let definition = orbit_core::app::auto_task::auto_task_show(&runtime, CONSUMER)
+                .unwrap()
+                .unwrap();
             let diagnostic =
                 evaluate_auto_task(&runtime, &definition, !checkpointed_id, Utc::now()).unwrap();
             assert_eq!(diagnostic.reason, "definition_changed");
@@ -538,7 +542,9 @@ fn scheduler_settles_closed_claims_and_adopts_but_refuses_open_tasks() {
         let preview = fixture.json(&["auto-task", "recover", CONSUMER, "--json"]);
         assert_eq!(preview["refusals"], json!([]));
         assert_eq!(preview["action"]["reissuable"], true);
-        let definition = runtime.auto_task_show(CONSUMER).unwrap().unwrap();
+        let definition = orbit_core::app::auto_task::auto_task_show(&runtime, CONSUMER)
+            .unwrap()
+            .unwrap();
         let resumed =
             evaluate_auto_task(&runtime, &definition, false, now + Duration::minutes(6)).unwrap();
         let resumed_state = resumed.state.unwrap();

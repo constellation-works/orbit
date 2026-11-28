@@ -15,13 +15,13 @@ use orbit_types::workflow::{AutoTaskDefinition, AutoTaskSchedule, AutoTaskTempla
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use crate::OrbitRuntime;
-use crate::application::auto_tasks::delete::{self, AutoTaskDeleteProfile};
-use crate::application::auto_tasks::projection::{self, AutoTaskListingProfile};
-use crate::application::auto_tasks::{
+use super::delete::{self, AutoTaskDeleteProfile};
+use super::projection::{self, AutoTaskListingProfile};
+use super::{
     AutoTaskAddParams, AutoTaskDeleteParams, AutoTaskTemplatePatch, AutoTaskUpdateParams,
     cursor_state_path, cursor_store,
 };
+use crate::OrbitRuntime;
 
 /// A field-scoped template edit: absent fields are unchanged and present
 /// lists replace the stored ones.
@@ -72,9 +72,10 @@ pub(super) fn dispatch(
         AutoTaskVerb::Update => update(runtime, input),
         AutoTaskVerb::Toggle => toggle(runtime, input),
         AutoTaskVerb::Delete => delete(runtime, input),
-        AutoTaskVerb::Restore => {
-            to_json(&runtime.auto_task_restore(&input.required_string("name")?)?)
-        }
+        AutoTaskVerb::Restore => to_json(&super::delete::auto_task_restore(
+            runtime,
+            &input.required_string("name")?,
+        )?),
         AutoTaskVerb::Mint => mint(runtime, input),
         AutoTaskVerb::Recover => recover(runtime, input),
         AutoTaskVerb::Reset => reset(runtime, input),
@@ -110,7 +111,8 @@ fn add(
 
     // Validate before the write, so an ungrantable tool leaves nothing behind.
     let warnings = runtime.validate_required_tools(&template.required_tools)?;
-    let definition = runtime.write_new_auto_task(
+    let definition = super::crud::write_new_auto_task(
+        runtime,
         AutoTaskAddParams {
             name,
             description,
@@ -134,12 +136,17 @@ fn list(runtime: &OrbitRuntime, input: &OperationInput) -> Result<Value, OrbitEr
     let include_inactive_plugins = input
         .optional_bool("include_inactive_plugins")?
         .unwrap_or(false);
-    let array = runtime
-        .auto_task_listing_state(include_inactive_plugins, chrono::Utc::now())?
-        .rows
-        .iter()
-        .map(|row| runtime.project_auto_task_listing_row(row, AutoTaskListingProfile::Tool))
-        .collect::<Result<Vec<Value>, OrbitError>>()?;
+    let array = super::listing::auto_task_listing_state(
+        runtime,
+        include_inactive_plugins,
+        chrono::Utc::now(),
+    )?
+    .rows
+    .iter()
+    .map(|row| {
+        super::projection::project_auto_task_listing_row(runtime, row, AutoTaskListingProfile::Tool)
+    })
+    .collect::<Result<Vec<Value>, OrbitError>>()?;
     Ok(Value::Array(array))
 }
 
@@ -150,20 +157,19 @@ fn show(runtime: &OrbitRuntime, input: &OperationInput) -> Result<Value, OrbitEr
     let name = input.required_string("name")?;
     let definition = existing_definition(runtime, &name)?;
     // A definition listings hide still resolves here, marked inactive.
-    let listed = runtime.listed_auto_task(definition);
+    let listed = super::scheduler::listed_auto_task(runtime, definition);
     let mut value = projection::auto_task_definition_document(
         &listed,
         runtime.auto_task_enabled(&listed.definition),
         listed.skipped_reason.as_deref(),
     )?;
-    let (definition_root, definition_path) = runtime
-        .auto_task_read_source(&name)?
-        .ok_or_else(|| runtime.auto_task_missing(&name, true))?;
+    let (definition_root, definition_path) = super::read::auto_task_read_source(runtime, &name)?
+        .ok_or_else(|| super::read::auto_task_missing(runtime, &name, true))?;
     value["definition_source"] = json!({
         "root": definition_root,
         "path": definition_path,
     });
-    match runtime.auto_task_layering(&name) {
+    match super::setting::auto_task_layering(runtime, &name) {
         Ok(layering) => value["layering"] = json!(layering),
         Err(error) => value["layering_error"] = json!(error.to_string()),
     }
@@ -244,10 +250,10 @@ fn update(runtime: &OrbitRuntime, input: &OperationInput) -> Result<Value, Orbit
             .unwrap_or(false),
     };
     let waived = params.waive_batch.is_some();
-    let definition = runtime.auto_task_update(&name, params)?;
+    let definition = super::crud::auto_task_update(runtime, &name, params)?;
     let mut response = to_json(&definition)?;
     response["effective_enabled"] = json!(runtime.auto_task_enabled(&definition));
-    let mut warnings = runtime.auto_task_update_tool_warnings(&definition, waived)?;
+    let mut warnings = super::crud::auto_task_update_tool_warnings(runtime, &definition, waived)?;
     // An edited crew the review pool replaces would otherwise read as applied.
     warnings.extend(
         crate::application::automation::review_crew_overrides_definition(runtime, &definition),
@@ -266,7 +272,7 @@ fn toggle(runtime: &OrbitRuntime, input: &OperationInput) -> Result<Value, Orbit
             )));
         }
     };
-    let condition = runtime.auto_task_show(&name)?.is_some_and(|definition| {
+    let condition = super::crud::auto_task_show(runtime, &name)?.is_some_and(|definition| {
         matches!(definition.schedule, AutoTaskSchedule::Condition { .. })
     });
     if input.optional_bool("dry_run")?.unwrap_or(false) {
@@ -284,7 +290,7 @@ fn toggle(runtime: &OrbitRuntime, input: &OperationInput) -> Result<Value, Orbit
     let preview = (enabled && condition)
         .then(|| runtime.auto_task_enable_preview(&name))
         .transpose()?;
-    let mut value = to_json(&runtime.auto_task_toggle(&name, enabled)?)?;
+    let mut value = to_json(&super::toggle::auto_task_toggle(runtime, &name, enabled)?)?;
     if let Some(preview) = preview {
         value["enable_preview"] = serde_json::to_value(&preview)
             .map_err(|error| OrbitError::Io(format!("encode enable preview: {error}")))?;
@@ -293,18 +299,21 @@ fn toggle(runtime: &OrbitRuntime, input: &OperationInput) -> Result<Value, Orbit
 }
 
 fn delete(runtime: &OrbitRuntime, input: &OperationInput) -> Result<Value, OrbitError> {
-    let report = runtime.auto_task_delete(AutoTaskDeleteParams {
-        name: input.required_string("name")?,
-        reason: input.optional_string("reason")?,
-        force: input.optional_bool("force")?.unwrap_or(false),
-    })?;
+    let report = super::delete::auto_task_delete(
+        runtime,
+        AutoTaskDeleteParams {
+            name: input.required_string("name")?,
+            reason: input.optional_string("reason")?,
+            force: input.optional_bool("force")?.unwrap_or(false),
+        },
+    )?;
     delete::project_auto_task_delete_receipt(&report, AutoTaskDeleteProfile::Tool)
 }
 
-/// Mint one task from a definition on demand. `OrbitRuntime::auto_task_mint`
+/// Mint one task from a definition on demand. `crud::auto_task_mint`
 /// owns the unconditional, cursor-neutral behavior.
 fn mint(runtime: &OrbitRuntime, input: &OperationInput) -> Result<Value, OrbitError> {
-    let task = runtime.auto_task_mint(&input.required_string("name")?)?;
+    let task = super::crud::auto_task_mint(runtime, &input.required_string("name")?)?;
     crate::adapter::tool_host::json::serialize_task(runtime, &task)
 }
 
@@ -325,7 +334,7 @@ fn recover(runtime: &OrbitRuntime, input: &OperationInput) -> Result<Value, Orbi
         ));
     }
     let definition = if request.mutates() {
-        runtime.require_local_auto_task(&name)?
+        super::crud::require_local_auto_task(runtime, &name)?
     } else {
         existing_definition(runtime, &name)?
     };
@@ -347,7 +356,7 @@ fn reset(runtime: &OrbitRuntime, input: &OperationInput) -> Result<Value, OrbitE
         force: input.optional_bool("force")?.unwrap_or(false),
     };
     let definition = if request.mutates() {
-        runtime.require_local_auto_task(&name)?
+        super::crud::require_local_auto_task(runtime, &name)?
     } else {
         existing_definition(runtime, &name)?
     };
@@ -364,9 +373,8 @@ fn existing_definition(
     runtime: &OrbitRuntime,
     name: &str,
 ) -> Result<AutoTaskDefinition, OrbitError> {
-    runtime
-        .auto_task_show(name)?
-        .ok_or_else(|| runtime.auto_task_missing(name, true))
+    super::crud::auto_task_show(runtime, name)?
+        .ok_or_else(|| super::read::auto_task_missing(runtime, name, true))
 }
 
 fn with_warnings(mut response: Value, warnings: Vec<String>) -> Result<Value, OrbitError> {

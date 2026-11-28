@@ -5,8 +5,8 @@ use orbit_types::task::{TaskArtifact, TaskStatus};
 use orbit_types::workflow::{SWEEP_CURSOR_ARTIFACT, SkipIfUnchanged, SweepCursorSelector};
 
 use crate::OrbitRuntime;
-use crate::application::auto_tasks::change_probe::newest_completed_sweep;
-use crate::application::auto_tasks::{DEFAULT_AUTO_TASK_FILES, render_default_auto_task};
+use crate::app::auto_task::change_probe::newest_completed_sweep;
+use crate::app::auto_task::{DEFAULT_AUTO_TASK_FILES, render_default_auto_task};
 use crate::application::task::{TaskAddParams, TaskUpdateParams};
 
 fn runtime() -> OrbitRuntime {

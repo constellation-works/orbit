@@ -26,7 +26,7 @@ enum BoundCompletion {
 /// an accepted receipt carries the typed result, anything else holds the step.
 /// Runs the adapter, so only the engine's own pass calls this; the admission
 /// and start guards share the read-only observation.
-pub(in crate::application::auto_tasks) fn bind_completion_result(
+pub(in crate::app::auto_task) fn bind_completion_result(
     runtime: &OrbitRuntime,
     step: &StepContext,
     observation: &mut AutoTaskObservation,
@@ -173,7 +173,7 @@ pub(super) fn binding_mismatch(
 
 /// The instructions a contract adds to a task it mints: what the owner will
 /// compare the evidence with. The task and run ids are the worker's own.
-pub(in crate::application::auto_tasks) fn evidence_binding_note(
+pub(in crate::app::auto_task) fn evidence_binding_note(
     runtime: &OrbitRuntime,
     step: &StepContext,
     definition: &AutoTaskDefinition,

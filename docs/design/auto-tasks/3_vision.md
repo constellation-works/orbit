@@ -10,7 +10,7 @@ doc_role: vision
 type: design
 summary: Forward-looking directions for the auto-task primitive — cross-workspace scope, richer templates, and dispatch coupling.
 tags: [auto-tasks]
-paths: ["crates/orbit-core/src/application/auto_tasks/**"]
+paths: ["crates/orbit-core/src/app/auto_task/**"]
 related_features: [auto-tasks, routines]
 related_artifacts: [ORB-10149, ORB-11315, ORB-12237]
 ---

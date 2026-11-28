@@ -191,8 +191,7 @@ pub(crate) const ROUTINE_NAME_PLACEHOLDER: &str = "__ORBIT_ROUTINE_NAME__";
 pub(crate) const OWNER_MACHINE_PLACEHOLDER: &str = "__ORBIT_OWNER_MACHINE__";
 /// The registered base branch a seeded state trigger observes; the same
 /// placeholder the delivery auto-task defaults use.
-pub(crate) const BASE_BRANCH_PLACEHOLDER: &str =
-    crate::application::auto_tasks::BASE_BRANCH_PLACEHOLDER;
+pub(crate) const BASE_BRANCH_PLACEHOLDER: &str = crate::app::auto_task::BASE_BRANCH_PLACEHOLDER;
 
 /// The identity a workspace's default routines are materialized against: the
 /// registered workspace name their names are suffixed with, plus the host

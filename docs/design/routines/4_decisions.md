@@ -215,7 +215,7 @@ Store the supported whole-minute cadence in host-local `~/.orbit/clock.toml`. Na
 ## One host tick evaluates routines and auto-task definitions in-process
 
 **Recorded:** 2026-09-12 · [ORB-12237]
-**Code anchors:** `crates/orbit-core/src/app/routine/sweep/tick.rs`, `crates/orbit-core/src/application/auto_tasks/scheduler.rs::run_auto_task_scheduler_at`, `crates/orbit-cli/src/command/clock/**`
+**Code anchors:** `crates/orbit-core/src/app/routine/sweep/tick.rs`, `crates/orbit-core/src/app/auto_task/scheduler.rs::run_auto_task_scheduler_at`, `crates/orbit-cli/src/command/clock/**`
 
 ### Context
 

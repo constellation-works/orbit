@@ -6,11 +6,11 @@ use orbit_types::workflow::{JobRunTrigger, RoutineTrigger};
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
+use crate::app::auto_task::AutoTaskToggleProfile;
 use crate::app::routine::{
     FireField, RoutineField, checkout_routine_statuses, edit_checkout_routine_trigger,
     toggle_checkout_routine,
 };
-use crate::application::auto_tasks::AutoTaskToggleProfile;
 use crate::application::job::JobCatalogFilter;
 use crate::runtime::audit::run_logs::bounded_redacted_text;
 
@@ -138,13 +138,14 @@ fn auto_task_rows(
     runtime: &OrbitRuntime,
     coordination_refusal: Option<&str>,
 ) -> Result<AutoTaskProjection, OrbitError> {
-    use crate::application::auto_tasks::projection::AutoTaskListingProfile;
-    let listing = runtime.auto_task_listing_state(true, Utc::now())?;
+    use crate::app::auto_task::AutoTaskListingProfile;
+    let listing = crate::app::auto_task::auto_task_listing_state(runtime, true, Utc::now())?;
     let rows = listing
         .rows
         .iter()
         .map(|row| {
-            runtime.project_auto_task_listing_row(
+            crate::app::auto_task::project_auto_task_listing_row(
+                runtime,
                 row,
                 AutoTaskListingProfile::BoundedMcp {
                     coordination_refusal,
@@ -240,9 +241,13 @@ pub(in crate::adapter::tool_host) fn control(
             let profile = AutoTaskToggleProfile::Checked {
                 expected_enabled: boolean(&input, "expected_enabled")?,
             };
-            let d = runtime
-                .auto_task_toggle_command(&name, boolean(&input, "enabled")?, profile)?
-                .into_definition(&name)?;
+            let d = crate::app::auto_task::auto_task_toggle_command(
+                runtime,
+                &name,
+                boolean(&input, "enabled")?,
+                profile,
+            )?
+            .into_definition(&name)?;
             json!({"enabled":d.enabled,
                 "effective_enabled":runtime.auto_task_enabled(&d)})
         }
@@ -252,7 +257,7 @@ pub(in crate::adapter::tool_host) fn control(
                     "mint requires acknowledgement that schedule, enabled and dedupe are ignored",
                 ));
             }
-            let task = runtime.auto_task_mint(&name)?;
+            let task = crate::app::auto_task::auto_task_mint(runtime, &name)?;
             json!({"task_id":task.id})
         }
         ("job", "run") => {

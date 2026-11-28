@@ -3,11 +3,10 @@
 //! Delivery evaluation, condition facts and explain, inspection and the
 //! after-landing consumer read the catalog, validated definitions, their
 //! discovery paths, accepted-result history, open-instance dedupe and the
-//! template-to-task mapping. `auto_tasks` owns all of them, and its scheduler
-//! evaluates delivery and conditions through automation, so a direct call from
-//! here would close a cycle. This port is the way in: `auto_tasks` implements
-//! it on [`OrbitRuntime`](crate::OrbitRuntime), so composing the runtime binds
-//! it.
+//! template-to-task mapping. `app::auto_task` owns all of them, and its
+//! scheduler evaluates delivery and conditions through automation, so a direct
+//! call from here would close a cycle. This port is the way in:
+//! `app::auto_task` implements it and `app::port` binds the adapter.
 
 use std::path::PathBuf;
 
@@ -17,8 +16,8 @@ use orbit_types::workflow::{AutoTaskAcceptedHistory, AutoTaskDefinition};
 use crate::application::task::TaskAddParams;
 
 /// Auto-task catalog, history, dedupe and mint reads automation code calls,
-/// implemented by `auto_tasks`.
-pub(in crate::application) trait AutomationAutoTaskPort {
+/// implemented by `auto_task`.
+pub(crate) trait AutomationAutoTaskPort {
     /// Every auto-task definition a list surface shows by default, in load
     /// order. One whose seeding plugin is off in this workspace, or on the
     /// host, is omitted.

@@ -4,8 +4,8 @@
 
 use std::path::{Path, PathBuf};
 
+use orbit_core::app::auto_task::AutoTaskBody;
 use orbit_core::app::workspace::reconcile_workspace_managed_artifacts;
-use orbit_core::application::auto_tasks::AutoTaskBody;
 use orbit_core::application::task::TaskAddParams;
 use orbit_core::runtime::OrbitRuntime;
 use orbit_engine::Recovery;
@@ -203,7 +203,9 @@ fn upgrade_from_a_pre_family_store_rewrites_every_stored_tool_name() {
     std::fs::write(&managed, pre_family(&shipped)).unwrap();
     track_as_managed(&fixture.workspace, "code-review");
     assert_eq!(
-        runtime.auto_task_layering("code-review").unwrap().body,
+        orbit_core::app::auto_task::auto_task_layering(&runtime, "code-review")
+            .unwrap()
+            .body,
         AutoTaskBody::Managed
     );
     let forked = fixture.auto_task("qa-full-sweep");
@@ -213,10 +215,10 @@ fn upgrade_from_a_pre_family_store_rewrites_every_stored_tool_name() {
         format!("# operator note\n{}", pre_family(&shipped_fork)),
     )
     .unwrap();
-    let forked_fields_before = runtime
-        .auto_task_layering("qa-full-sweep")
-        .unwrap()
-        .forked_fields;
+    let forked_fields_before =
+        orbit_core::app::auto_task::auto_task_layering(&runtime, "qa-full-sweep")
+            .unwrap()
+            .forked_fields;
     std::fs::write(fixture.auto_task("perf-review"), LOCAL_DEFINITION).unwrap();
 
     // Tasks minted before tool families, with a requirement and a grant.
@@ -266,13 +268,16 @@ fn upgrade_from_a_pre_family_store_rewrites_every_stored_tool_name() {
         "the managed body holds family actions"
     );
     assert_eq!(
-        runtime.auto_task_layering("code-review").unwrap().body,
+        orbit_core::app::auto_task::auto_task_layering(&runtime, "code-review")
+            .unwrap()
+            .body,
         AutoTaskBody::Managed,
         "the rename keeps a managed definition managed"
     );
     let fork_after = std::fs::read_to_string(&forked).unwrap();
     assert_eq!(fork_after, format!("# operator note\n{shipped_fork}"));
-    let fork_layering = runtime.auto_task_layering("qa-full-sweep").unwrap();
+    let fork_layering =
+        orbit_core::app::auto_task::auto_task_layering(&runtime, "qa-full-sweep").unwrap();
     assert_eq!(fork_layering.body, AutoTaskBody::Forked);
     assert!(
         fork_layering
@@ -290,8 +295,7 @@ fn upgrade_from_a_pre_family_store_rewrites_every_stored_tool_name() {
         "a workspace-local definition is rewritten in place, comments kept"
     );
     assert_eq!(
-        runtime
-            .auto_task_show("perf-review")
+        orbit_core::app::auto_task::auto_task_show(&runtime, "perf-review")
             .unwrap()
             .unwrap()
             .template
@@ -398,7 +402,7 @@ fn admission_and_mint_rewrite_pre_family_names_they_meet() {
     // Mint: a definition written with operation names is rewritten, and
     // the task it mints holds family actions.
     std::fs::write(fixture.auto_task("perf-review"), LOCAL_DEFINITION).unwrap();
-    let minted = runtime.auto_task_mint("perf-review").unwrap();
+    let minted = orbit_core::app::auto_task::auto_task_mint(&runtime, "perf-review").unwrap();
     assert_eq!(
         minted.required_tools,
         vec!["orbit.task.artifact:put", "orbit.task.show"]

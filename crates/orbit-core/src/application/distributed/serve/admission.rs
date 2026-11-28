@@ -15,7 +15,8 @@ use orbit_types::workflow::JobRunState;
 
 use crate::OrbitRuntime;
 use crate::application::distributed::{
-    DistributedAdmissionPort, DistributedExperimentPort, owner_binary_version,
+    DistributedAdmissionPort, DistributedAutoTaskPort, DistributedExperimentPort,
+    owner_binary_version,
 };
 use crate::application::host_labels;
 use crate::application::task::{PilotAdmissionHold, standing_baseline_hold_from_history};
@@ -112,11 +113,9 @@ impl OrbitRuntime {
             }
             // A task an auto-task job step minted is claimed only while its
             // step still admits it (ORB-20158).
-            if let Some(hold) = crate::application::auto_tasks::job_step::step_bound_admission_hold(
-                self,
-                task,
-                &load_history,
-            ) {
+            if let Some(hold) = crate::app::port::DistributedAutoTask(self)
+                .step_bound_claim_hold(task, &load_history)
+            {
                 admission_holds.insert(task.id.clone(), hold);
                 if let Some(cached) = history_cache.borrow().as_ref() {
                     history_by_task.insert(task.id.clone(), cached.clone());
@@ -244,12 +243,8 @@ impl OrbitRuntime {
                 }
                 // Re-read under the section: the step may have expired or
                 // its definition held since the backlog read.
-                if let Some(hold) =
-                    crate::application::auto_tasks::job_step::step_bound_admission_hold(
-                        self,
-                        task,
-                        &|| Ok(history.to_vec()),
-                    )
+                if let Some(hold) = crate::app::port::DistributedAutoTask(self)
+                    .step_bound_claim_hold(task, &|| Ok(history.to_vec()))
                 {
                     return Ok(Some(hold));
                 }

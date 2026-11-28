@@ -35,8 +35,10 @@ fn definition(workspace: &Workspace) -> orbit_types::workflow::AutoTaskDefinitio
             }),
         )
         .unwrap();
-    workspace.runtime.auto_task_toggle(NAME, true).unwrap();
-    workspace.runtime.auto_task_show(NAME).unwrap().unwrap()
+    orbit_core::app::auto_task::auto_task_toggle(&workspace.runtime, NAME, true).unwrap();
+    orbit_core::app::auto_task::auto_task_show(&workspace.runtime, NAME)
+        .unwrap()
+        .unwrap()
 }
 
 fn state(workspace: &Workspace) -> AutomationState {

@@ -60,15 +60,15 @@ use orbit_config::DEMOTED_DEFAULT_AUTO_TASKS;
 
 use super::artifact_diagnostic;
 use crate::OrbitRuntime;
-use crate::application::auto_tasks::auto_tasks_dir;
+use crate::app::auto_task::auto_tasks_dir;
 
+use crate::app::auto_task::{
+    DEFAULT_AUTO_TASK_FILES, REFERENCE_AUTO_TASK_FILES, render_default_auto_task,
+};
 use crate::app::routine::DEFAULT_ROUTINE_FILES;
 use crate::app::skill::{
     DEFAULT_SKILL_FILES, dangling_client_skill_links, inject_skill_template_tokens,
     skill_link_remediation, skill_link_roots,
-};
-use crate::application::auto_tasks::{
-    DEFAULT_AUTO_TASK_FILES, REFERENCE_AUTO_TASK_FILES, render_default_auto_task,
 };
 use crate::application::job::catalog::DEFAULT_JOB_FILES;
 use crate::application::managed_assets::{

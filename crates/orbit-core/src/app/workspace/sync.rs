@@ -9,16 +9,16 @@ use orbit_common::fs::io::with_exclusive_file_lock;
 use orbit_common::protocol::yaml::parse_auto_task_yaml;
 use serde::Serialize;
 
-use crate::app::routine::RoutineSeedIdentity;
-use crate::app::routine::reconcile_default_routines_for_policy;
-use crate::app::skill::{DEFAULT_SKILL_FILES, inject_skill_template_tokens};
-use crate::application::auto_tasks::demoted::release_demoted_auto_tasks;
-use crate::application::auto_tasks::retired::retire_replaced_auto_tasks;
-use crate::application::auto_tasks::settings::migrate_settings_only_forks;
-use crate::application::auto_tasks::{
+use crate::app::auto_task::migrate_settings_only_forks;
+use crate::app::auto_task::release_demoted_auto_tasks;
+use crate::app::auto_task::retire_replaced_auto_tasks;
+use crate::app::auto_task::{
     DEFAULT_AUTO_TASK_FILES, ENABLED_BY_DEFAULT_AUTO_TASKS, auto_tasks_dir, cursor_state_path,
     render_default_auto_task,
 };
+use crate::app::routine::RoutineSeedIdentity;
+use crate::app::routine::reconcile_default_routines_for_policy;
+use crate::app::skill::{DEFAULT_SKILL_FILES, inject_skill_template_tokens};
 use crate::application::job::DEFAULT_JOB_FILES;
 use crate::application::managed_assets::{
     ManagedAssetAction, ManagedAssetCatalog, ManagedAssetLayout, ManagedAssetOutcome,

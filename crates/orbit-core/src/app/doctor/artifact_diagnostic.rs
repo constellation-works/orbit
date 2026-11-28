@@ -16,13 +16,13 @@ use super::artifact::{
     ManagedCatalog, catalog_auto_task_base_branch, init_command, provenance, read_artifact,
 };
 use crate::OrbitRuntime;
-use crate::app::routine::RETIRED_ROUTINE_FILES;
-use crate::app::routine::{ShippedShape, shipped_shape_of};
-use crate::application::auto_tasks::collect_auto_tasks;
-use crate::application::auto_tasks::settings::{
+use crate::app::auto_task::collect_auto_tasks;
+use crate::app::auto_task::{
     StaleAutoTaskContract, bundled_run_failure_definition, classify_bundled_file,
     stale_run_failure_contract,
 };
+use crate::app::routine::RETIRED_ROUTINE_FILES;
+use crate::app::routine::{ShippedShape, shipped_shape_of};
 use crate::application::managed_assets::{
     ConfinedAssetPath, MANAGED_ASSET_MANIFEST_FILE, ManagedAssetOutcome, ManagedAssetReconcileMode,
     load_managed_asset_manifest, reconcile_managed_assets_in_mode, resolve_confined_asset_path,

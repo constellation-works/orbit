@@ -88,7 +88,7 @@ mod recovery_git;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod codex_side_roots;
 
-use orbit_core::application::auto_tasks::AutoTaskAddParams;
+use orbit_core::app::auto_task::AutoTaskAddParams;
 use orbit_types::task::{TaskPriority, TaskType};
 use orbit_types::workflow::{AutoTaskSchedule, AutoTaskTemplate, DedupePolicy};
 pub(super) use task_support::enter_isolated_child as isolate;

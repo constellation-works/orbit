@@ -1,0 +1,539 @@
+//! Auto-task delete and restore: removing a definition for good, and the
+//! durable opt-out that keeps a deleted shipped default from being reseeded.
+//!
+//! `toggle` pauses a definition and keeps it listed. Delete removes the file,
+//! its scheduler cursor and, for a delivery trigger, the consumer state the
+//! audited reset owns. Deleting a name Orbit ships also records an opt-out in
+//! the managed-asset manifest, so `orbit workspace init --force` and `orbit
+//! workspace sync` leave it absent. `restore` is the one way back for a
+//! shipped default: it writes the shipped content and clears the opt-out.
+
+use std::fmt;
+use std::path::PathBuf;
+
+use chrono::{DateTime, Utc};
+use orbit_common::OrbitError;
+use orbit_common::fs::io::{atomic_write_text, with_exclusive_file_lock};
+use orbit_common::protocol::yaml::parse_auto_task_yaml;
+use orbit_common::security::release::sha256_hex;
+use orbit_store::compose::auto_task::{AutoTaskWriteRepository, cursor_store};
+use orbit_types::telemetry::AuditEventStatus;
+use orbit_types::workflow::{AutoTaskCursor, AutoTaskDefinition};
+use serde::Serialize;
+use serde_json::{Value, json};
+
+use crate::OrbitRuntime;
+use crate::application::automation::{
+    ConsumerTeardown, consumer_teardown_refusals, tear_down_auto_task_consumer,
+};
+use crate::application::managed_assets::{
+    ManagedAssetLayout, ManagedAssetOptOut, record_managed_asset_opt_out, restore_managed_asset,
+};
+use crate::runtime::audit::system::{
+    AuditRunAttribution, SystemAuditEvent, record_system_audit_event,
+};
+
+use super::loader::{auto_tasks_dir, definition_path};
+use super::scheduler::open_auto_task_instances;
+use super::setting::AUTO_TASK_ASSET_KIND as ASSET_KIND;
+use super::state::cursor_state_path;
+use super::{DEFAULT_AUTO_TASK_FILES, render_default_auto_task};
+
+/// Reset reason recorded for a delivery consumer when the delete gave none.
+const DEFAULT_DELETE_REASON: &str = "auto-task definition deleted";
+
+/// Parameters for deleting a definition.
+#[derive(Debug, Clone, Default)]
+pub struct AutoTaskDeleteParams {
+    pub name: String,
+    /// Operator explanation, retained in the audit record.
+    pub reason: Option<String>,
+    /// Delete even while a minted task is open or a delivery action executes.
+    pub force: bool,
+}
+
+/// What one delete removed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct AutoTaskDeleteReport {
+    pub name: String,
+    pub path: PathBuf,
+    /// The name is a shipped default, so the delete recorded an opt-out that
+    /// keeps reseeding from re-creating it.
+    pub opted_out: bool,
+    /// A scheduler cursor existed and was removed.
+    pub cursor_removed: bool,
+    /// Minted tasks still open when `force` overrode the refusal.
+    pub open_tasks: Vec<String>,
+    /// The delivery consumer torn down with the definition.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub consumer: Option<ConsumerTeardown>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    pub deleted_by: String,
+    pub deleted_at: String,
+}
+
+/// Success-receipt contracts over the same completed delete operation.
+#[derive(Debug, Clone, Copy)]
+pub enum AutoTaskDeleteProfile {
+    /// Complete CLI/tool report, omitting absent consumer and reason fields.
+    Tool,
+    /// Bounded dashboard receipt, including a reason even when it is null.
+    Http,
+}
+
+/// A delete refused before anything was removed, stated structurally so a
+/// transport picks its response from the variant, never from message text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AutoTaskDeleteRefusal {
+    /// No definition of this name exists.
+    NotFound {
+        /// The requested definition name.
+        name: String,
+    },
+    /// Minted tasks from the definition are still open and `force` was not set.
+    OpenMintedTasks {
+        /// The requested definition name.
+        name: String,
+        /// Ids of the minted tasks still open.
+        open_tasks: Vec<String>,
+    },
+}
+
+impl AutoTaskDeleteRefusal {
+    /// The refusal as the untyped delete entry point reports it.
+    pub fn message(&self) -> String {
+        match self {
+            Self::NotFound { name } => format!("no such auto-task '{name}'"),
+            Self::OpenMintedTasks { name, open_tasks } => format!(
+                "auto-task '{name}' still has open minted tasks: {}; close them, or pass --force to delete anyway",
+                open_tasks.join(", ")
+            ),
+        }
+    }
+}
+
+impl fmt::Display for AutoTaskDeleteRefusal {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.message())
+    }
+}
+
+impl From<AutoTaskDeleteRefusal> for OrbitError {
+    fn from(refusal: AutoTaskDeleteRefusal) -> Self {
+        OrbitError::InvalidInput(refusal.message())
+    }
+}
+
+/// Why a typed delete failed: a pre-removal refusal, or any other error the
+/// delete raised (including the untyped delivery-consumer teardown refusal).
+#[derive(Debug)]
+pub enum AutoTaskDeleteError {
+    /// The delete was refused before anything was removed.
+    Refusal(AutoTaskDeleteRefusal),
+    /// Any other failure; carries the error the untyped entry point reports.
+    Other(OrbitError),
+}
+
+impl fmt::Display for AutoTaskDeleteError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Refusal(refusal) => fmt::Display::fmt(refusal, formatter),
+            Self::Other(error) => fmt::Display::fmt(error, formatter),
+        }
+    }
+}
+
+impl From<AutoTaskDeleteRefusal> for AutoTaskDeleteError {
+    fn from(refusal: AutoTaskDeleteRefusal) -> Self {
+        Self::Refusal(refusal)
+    }
+}
+
+impl From<OrbitError> for AutoTaskDeleteError {
+    fn from(error: OrbitError) -> Self {
+        Self::Other(error)
+    }
+}
+
+impl From<AutoTaskDeleteError> for OrbitError {
+    fn from(error: AutoTaskDeleteError) -> Self {
+        match error {
+            AutoTaskDeleteError::Refusal(refusal) => refusal.into(),
+            AutoTaskDeleteError::Other(error) => error,
+        }
+    }
+}
+
+/// The locked phase of a delete: it either removed the definition's state or
+/// refused before removing anything.
+enum LockedDelete {
+    Refused(AutoTaskDeleteRefusal),
+    Done((Vec<String>, RemovedState)),
+}
+
+/// The state a delete removed alongside the definition file.
+struct RemovedState {
+    opted_out: bool,
+    cursor_removed: bool,
+    consumer: Option<ConsumerTeardown>,
+}
+
+/// Delete a definition, its scheduler cursor and any delivery consumer
+/// state, and write an audit record.
+///
+/// Refuses while a task minted from the definition is still open, naming
+/// those tasks, unless `force` is set. A delivery consumer is torn down
+/// through the audited reset, so delete refuses whenever that reset would.
+///
+/// A delete that fails leaves the definition, its cursor and the shipped
+/// opt-out as they were. The consumer reset runs last because it cannot be
+/// undone: if releasing a pinned ref fails after it, the reset stays
+/// applied under its own audit record and the next evaluation re-baselines.
+pub fn auto_task_delete(
+    rt: &OrbitRuntime,
+    params: AutoTaskDeleteParams,
+) -> Result<AutoTaskDeleteReport, OrbitError> {
+    Ok(auto_task_delete_command(rt, params)?)
+}
+
+/// [`auto_task_delete`] with its pre-removal refusals stated as
+/// [`AutoTaskDeleteRefusal`] variants. Every other failure is
+/// [`AutoTaskDeleteError::Other`], carrying the error
+/// [`auto_task_delete`] reports for it.
+pub fn auto_task_delete_command(
+    rt: &OrbitRuntime,
+    params: AutoTaskDeleteParams,
+) -> Result<AutoTaskDeleteReport, AutoTaskDeleteError> {
+    rt.ensure_coordination_task_write_permitted()?;
+    let name = params.name.as_str();
+    let path = definition_path(&rt.paths().local_dir, name);
+    let reason = params
+        .reason
+        .as_deref()
+        .map(str::trim)
+        .filter(|reason| !reason.is_empty())
+        .map(ToOwned::to_owned);
+    let actor = rt.actor().resolve_write_label(None, None)?;
+    let now = Utc::now();
+
+    // Scheduler admission, including delivery evaluation, and manual mint
+    // hold this lock across their definition check and task creation.
+    // Check refusals here so a task minted by a preceding pass or an
+    // overlapping manual mint is visible, and finish the delete under it
+    // so no pass observes a definition that is half removed.
+    let locked = cursor_store(&cursor_state_path(&rt.paths().state_dir)).write(|tx| {
+        let mut session = tx.auto_task()?;
+        let Some(definition) = super::crud::find_validated_auto_task(rt, name)? else {
+            return Ok(LockedDelete::Refused(AutoTaskDeleteRefusal::NotFound {
+                name: name.to_string(),
+            }));
+        };
+        let open_tasks = open_auto_task_instances(rt, name)?;
+        if !open_tasks.is_empty() && !params.force {
+            return Ok(LockedDelete::Refused(
+                AutoTaskDeleteRefusal::OpenMintedTasks {
+                    name: name.to_string(),
+                    open_tasks,
+                },
+            ));
+        }
+        let refusals = consumer_teardown_refusals(rt, &definition, params.force, now)?;
+        if !refusals.is_empty() {
+            return Err(OrbitError::InvalidInput(format!(
+                "auto-task '{name}' has delivery consumer state its reset refuses to drop ({}); preview it with `orbit auto-task reset {name}`, or pass --force to abandon an executing action",
+                refusals.join(", ")
+            )));
+        }
+        let original = std::fs::read_to_string(&path)
+            .map_err(|error| OrbitError::Io(format!("read {}: {error}", path.display())))?;
+        std::fs::remove_file(&path).map_err(|error| {
+            OrbitError::Io(format!(
+                "delete auto-task '{name}' at {}: {error}",
+                path.display()
+            ))
+        })?;
+        let removed = remove_definition_state(
+            rt,
+            &mut session,
+            &definition,
+            reason.as_deref().unwrap_or(DEFAULT_DELETE_REASON),
+            params.force,
+            now,
+        )
+        .map_err(|error| restore_after_failure(&path, &original, error))?;
+        // Deleting the definition drops its condition edge memory and
+        // `self` history (§2).
+        if matches!(
+            definition.schedule,
+            orbit_types::workflow::AutoTaskSchedule::Condition { .. }
+        ) {
+            crate::application::automation::condition::forget_condition_state(
+                rt,
+                orbit_automation::condition::ConditionCarrier::AutoTask,
+                name,
+            );
+        }
+        // The definition is gone; a leftover settings entry would only
+        // resurface on a later restore or same-named add, which both
+        // drop it again.
+        if let Err(error) = super::setting::drop_auto_task_settings(rt, name) {
+            tracing::warn!(
+                target: "orbit.core.auto_tasks",
+                auto_task = name,
+                %error,
+                "deleted auto-task kept its settings entry"
+            );
+        }
+        Ok(LockedDelete::Done((open_tasks, removed)))
+    })?;
+    let (open_tasks, removed) = match locked {
+        LockedDelete::Refused(refusal) => return Err(refusal.into()),
+        LockedDelete::Done(done) => done,
+    };
+
+    let report = AutoTaskDeleteReport {
+        name: name.to_string(),
+        path,
+        opted_out: removed.opted_out,
+        cursor_removed: removed.cursor_removed,
+        open_tasks,
+        consumer: removed.consumer,
+        reason,
+        deleted_by: actor,
+        deleted_at: now.to_rfc3339(),
+    };
+    record_auto_task_audit(
+        rt,
+        "delete",
+        name,
+        serde_json::to_value(&report).unwrap_or(Value::Null),
+    );
+    Ok(report)
+}
+
+/// Write a shipped default back with its shipped content and clear the
+/// opt-out a delete recorded for it. Refuses a name Orbit does not ship
+/// and a definition that already exists. The existence check, definition
+/// write and manifest update share the cursor lock with delete and sync.
+/// Settings and manifest updates precede the definition write, so their
+/// failure leaves the name available for retry.
+pub fn auto_task_restore(rt: &OrbitRuntime, name: &str) -> Result<AutoTaskDefinition, OrbitError> {
+    rt.ensure_coordination_task_write_permitted()?;
+    let state_path = cursor_state_path(&rt.paths().state_dir);
+    // Restore does not consume cursor state; take its sidecar without
+    // loading the cursor, as sync and the other definition writers do.
+    with_exclusive_file_lock(&state_path, "auto-task cursor", || {
+        let (_, embedded) = DEFAULT_AUTO_TASK_FILES
+        .iter()
+        .find(|(shipped, _)| *shipped == name)
+        .ok_or_else(|| {
+            OrbitError::InvalidInput(format!(
+                "auto-task '{name}' is not a shipped default; only shipped defaults can be restored"
+            ))
+        })?;
+        // Sync would retire it again on its next pass.
+        if !rt.workspace_seeding_policies()?.auto_tasks.includes(name) {
+            return Err(OrbitError::InvalidInput(format!(
+                "shipped auto-task '{name}' is left out by `seeding.auto_tasks`; add it to \
+                 that policy, then run `orbit workspace sync` to seed it"
+            )));
+        }
+        let path = definition_path(&rt.paths().local_dir, name);
+        let collection = super::crud::validated_auto_tasks(rt, name)?;
+        if path.exists()
+            || collection
+                .definitions
+                .iter()
+                .any(|loaded| loaded.definition.name == name)
+        {
+            return Err(OrbitError::InvalidInput(format!(
+                "auto-task '{name}' already exists; delete it first to restore the shipped content"
+            )));
+        }
+
+        let rendered = render_default_auto_task(embedded, rt.workspace_base_branch());
+        let definition = parse_auto_task_yaml(&rendered)?;
+        let actor = rt.actor().resolve_write_label(None, None)?;
+        // Restore means the shipped definition, without earlier settings.
+        super::setting::drop_auto_task_settings(rt, name)?;
+        restore_managed_asset(
+            &auto_tasks_dir(&rt.paths().local_dir),
+            ASSET_KIND,
+            ManagedAssetLayout::YamlStem,
+            name,
+            sha256_hex(rendered.as_bytes()),
+        )?;
+
+        atomic_write_text(&path, &rendered).map_err(|error| {
+            OrbitError::Io(format!(
+                "restore auto-task '{name}' at {}: {error}",
+                path.display()
+            ))
+        })?;
+        record_auto_task_audit(
+            rt,
+            "restore",
+            name,
+            json!({
+                "name": name,
+                "path": path,
+                "restored_by": actor,
+                "restored_at": Utc::now().to_rfc3339(),
+            }),
+        );
+        Ok(definition)
+    })
+}
+
+/// Persist one definition-lifecycle audit event. The change it records is
+/// already on disk, so a failed audit write is logged, not returned.
+fn record_auto_task_audit(rt: &OrbitRuntime, subcommand: &str, name: &str, payload: Value) {
+    let execution_id_prefix = format!("audit-auto-task-{subcommand}");
+    let tool_name = format!("orbit.auto_task.{subcommand}");
+    let event = SystemAuditEvent {
+        execution_id_prefix: &execution_id_prefix,
+        command: "auto_task",
+        subcommand: Some(subcommand),
+        tool_name: Some(&tool_name),
+        target_type: ASSET_KIND,
+        target_id: Some(name),
+        role: "admin",
+        status: AuditEventStatus::Success,
+        arguments_json: payload.to_string(),
+        error_message: None,
+        workspace_id: None,
+        task_id: None,
+        attribution: AuditRunAttribution::Environment { run_id: None },
+    };
+    if let Err(error) = record_system_audit_event(rt, event) {
+        tracing::error!(
+            target: "orbit.core.auto_tasks",
+            auto_task = name,
+            subcommand,
+            %error,
+            "failed to persist auto-task audit event"
+        );
+    }
+}
+
+/// Project a completed delete without changing lifecycle or audit behavior.
+/// The HTTP profile never serializes the report's forensic fields.
+pub fn project_auto_task_delete_receipt(
+    report: &AutoTaskDeleteReport,
+    profile: AutoTaskDeleteProfile,
+) -> Result<Value, OrbitError> {
+    match profile {
+        AutoTaskDeleteProfile::Tool => serde_json::to_value(report)
+            .map_err(|error| OrbitError::Io(format!("encode auto-task delete report: {error}"))),
+        AutoTaskDeleteProfile::Http => {
+            let mut message = format!("Deleted auto-task {}.", report.name);
+            if report.opted_out {
+                message.push_str(" The shipped default will not be reseeded.");
+            }
+            Ok(json!({
+                "name": report.name,
+                "deleted": true,
+                "opted_out": report.opted_out,
+                "open_tasks": report.open_tasks,
+                "reason": report.reason,
+                "message": message,
+            }))
+        }
+    }
+}
+
+fn is_shipped_default(name: &str) -> bool {
+    DEFAULT_AUTO_TASK_FILES
+        .iter()
+        .any(|(shipped, _)| *shipped == name)
+}
+
+/// Remove what a deleted definition leaves behind, once its file is gone.
+///
+/// The opt-out and the cursor removal can be undone, so they run first and a
+/// later failure puts both back. The audited consumer reset cannot, so it
+/// runs last; only a ref release failing after it leaves that reset applied.
+fn remove_definition_state(
+    runtime: &OrbitRuntime,
+    session: &mut AutoTaskWriteRepository<'_>,
+    definition: &AutoTaskDefinition,
+    reason: &str,
+    force: bool,
+    now: DateTime<Utc>,
+) -> Result<RemovedState, OrbitError> {
+    let name = definition.name.as_str();
+    let opt_out = if is_shipped_default(name) {
+        Some(record_managed_asset_opt_out(
+            &auto_tasks_dir(&runtime.paths().local_dir),
+            ASSET_KIND,
+            ManagedAssetLayout::YamlStem,
+            name,
+        )?)
+    } else {
+        None
+    };
+    let opted_out = opt_out.is_some();
+
+    let cursor = session.state.definitions.remove(name);
+    let cursor_removed = cursor.is_some();
+    if cursor_removed && let Err(error) = session.put() {
+        return Err(revert_opt_out(opt_out, name, error));
+    }
+
+    let consumer =
+        tear_down_auto_task_consumer(runtime, definition, reason, force, now).map_err(|error| {
+            let error = restore_cursor(session, name, cursor, error);
+            revert_opt_out(opt_out, name, error)
+        })?;
+    Ok(RemovedState {
+        opted_out,
+        cursor_removed,
+        consumer,
+    })
+}
+
+/// Put a removed scheduler cursor back after a later step failed.
+fn restore_cursor(
+    session: &mut AutoTaskWriteRepository<'_>,
+    name: &str,
+    cursor: Option<AutoTaskCursor>,
+    error: OrbitError,
+) -> OrbitError {
+    let Some(cursor) = cursor else {
+        return error;
+    };
+    session.state.definitions.insert(name.to_string(), cursor);
+    match session.put() {
+        Ok(()) => error,
+        Err(restore_error) => OrbitError::Io(format!(
+            "{error}; restoring the scheduler cursor of auto-task '{name}' also failed: {restore_error}"
+        )),
+    }
+}
+
+/// Undo a recorded opt-out after a later step failed.
+fn revert_opt_out(
+    opt_out: Option<ManagedAssetOptOut>,
+    name: &str,
+    error: OrbitError,
+) -> OrbitError {
+    match opt_out.map(ManagedAssetOptOut::revert) {
+        Some(Err(revert_error)) => OrbitError::Io(format!(
+            "{error}; reverting the opt-out of auto-task '{name}' also failed: {revert_error}"
+        )),
+        _ => error,
+    }
+}
+
+/// Put the deleted definition back after a later step failed, so a refused
+/// or failed delete leaves the definition in place.
+fn restore_after_failure(path: &std::path::Path, original: &str, error: OrbitError) -> OrbitError {
+    match atomic_write_text(path, original) {
+        Ok(()) => error,
+        Err(restore_error) => OrbitError::Io(format!(
+            "{error}; restoring auto-task definition {} also failed: {restore_error}",
+            path.display()
+        )),
+    }
+}

@@ -1,7 +1,7 @@
 use std::fs;
 
 use chrono::Utc;
-use orbit_core::application::auto_tasks::{SchedulerOptions, run_auto_task_scheduler_at};
+use orbit_core::app::auto_task::{SchedulerOptions, run_auto_task_scheduler_at};
 use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::workflow::AutoTaskSchedule;
 use serde_json::{Value, json};
@@ -120,9 +120,7 @@ fn dashboard_timing_edits_persist_guards_and_refuse_stale_values() {
                                 .clone()
                         } else {
                             serde_json::to_value(
-                                fixture
-                                    .runtime
-                                    .auto_task_show(&name)
+                                orbit_core::app::auto_task::auto_task_show(&fixture.runtime, &name)
                                     .unwrap()
                                     .unwrap()
                                     .schedule,
@@ -243,9 +241,7 @@ fn invalid_nested_timing_edits_audit_denials_and_refuse_operators() {
                 AutoTaskSchedule::cron("* * * * *"),
             );
             let stored_schedule = serde_json::to_value(
-                fixture
-                    .runtime
-                    .auto_task_show("denied-auto")
+                orbit_core::app::auto_task::auto_task_show(&fixture.runtime, "denied-auto")
                     .unwrap()
                     .unwrap()
                     .schedule,
@@ -368,9 +364,7 @@ fn invalid_nested_timing_edits_audit_denials_and_refuse_operators() {
                 "a denied trigger edit must not write"
             );
             let schedule_now = serde_json::to_value(
-                fixture
-                    .runtime
-                    .auto_task_show("denied-auto")
+                orbit_core::app::auto_task::auto_task_show(&fixture.runtime, "denied-auto")
                     .unwrap()
                     .unwrap()
                     .schedule,
@@ -419,9 +413,7 @@ fn invalid_nested_timing_edits_audit_denials_and_refuse_operators() {
             );
             assert_eq!(
                 serde_json::to_value(
-                    fixture
-                        .runtime
-                        .auto_task_show("denied-auto")
+                    orbit_core::app::auto_task::auto_task_show(&fixture.runtime, "denied-auto")
                         .unwrap()
                         .unwrap()
                         .schedule,
@@ -460,9 +452,7 @@ fn dashboard_schedule_edit_reports_missing_and_already_matched_without_writing()
                 AutoTaskSchedule::every_minutes(15),
             );
             let stamp = || {
-                fixture
-                    .runtime
-                    .auto_task_show("matched")
+                orbit_core::app::auto_task::auto_task_show(&fixture.runtime, "matched")
                     .unwrap()
                     .unwrap()
                     .updated_at
@@ -518,9 +508,7 @@ fn weekday_and_modifier_saves_and_misplaced_plus_is_refused() {
             };
             let auto_schedule = || {
                 serde_json::to_value(
-                    fixture
-                        .runtime
-                        .auto_task_show("weekday-auto")
+                    orbit_core::app::auto_task::auto_task_show(&fixture.runtime, "weekday-auto")
                         .unwrap()
                         .unwrap()
                         .schedule,

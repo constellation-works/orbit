@@ -24,7 +24,9 @@ fn consumers(fixture: &Fixture) -> orbit_core::runtime::OrbitRuntime {
     fixture.json(&["auto-task", "toggle", SECOND, "on", "--json"]);
     evaluate_auto_task(
         &runtime,
-        &runtime.auto_task_show(SECOND).unwrap().unwrap(),
+        &orbit_core::app::auto_task::auto_task_show(&runtime, SECOND)
+            .unwrap()
+            .unwrap(),
         false,
         Utc::now(),
     )

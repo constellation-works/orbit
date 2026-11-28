@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::fs;
 
 use chrono::{DateTime, Duration, Utc};
-use orbit_core::application::auto_tasks::AutoTaskAddParams;
+use orbit_core::app::auto_task::AutoTaskAddParams;
 use orbit_core::test_support::fixture_store::contract::{
     RoutineBreakerEvent, RoutineBreakerRecord, RoutineBreakerState, RoutineFireIntentParams,
     RoutineFireState,
@@ -146,9 +146,9 @@ fn automation_lists_bound_inventories_and_full_state_is_explicit_and_scoped() {
             routine.members = Some(members);
             seed(&fixture, &routine);
 
-            fixture
-                .runtime
-                .auto_task_add(AutoTaskAddParams {
+            orbit_core::app::auto_task::auto_task_add(
+                &fixture.runtime,
+                AutoTaskAddParams {
                     name: "review".into(),
                     description: "delivery diagnostic fixture".into(),
                     schedule: serde_json::from_value::<AutoTaskSchedule>(
@@ -172,8 +172,9 @@ fn automation_lists_bound_inventories_and_full_state_is_explicit_and_scoped() {
                         status: TaskStatus::Backlog,
                     },
                     dedupe: DedupePolicy::SkipIfOpen,
-                })
-                .unwrap();
+                },
+            )
+            .unwrap();
             let mut auto_task = state(&fixture, "auto-task", "review");
             for i in 0..1000 {
                 let commit = format!("{i:040x}");

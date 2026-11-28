@@ -7,7 +7,7 @@ use orbit_types::task::Task;
 use orbit_types::tool::is_tool_family_operation;
 
 use crate::OrbitRuntime;
-use crate::application::auto_tasks::cursor_state_path;
+use crate::app::auto_task::cursor_state_path;
 
 use super::auto_task_catalog::heal_auto_task_catalog;
 use super::plugin_manifest::{run_once, run_plugin_manifest_migration_once};

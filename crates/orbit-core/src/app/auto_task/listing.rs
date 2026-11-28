@@ -33,7 +33,7 @@ pub enum AutoTaskSkip {
 pub struct AutoTaskListingRow {
     pub listed: ListedAutoTask,
     /// The enabled state the scheduler acts on, which every listing filters
-    /// and labels by ([`OrbitRuntime::auto_task_enabled`]).
+    /// and labels by (`OrbitRuntime::auto_task_enabled`).
     pub effective_enabled: bool,
     /// Why it never fires here, if it does not.
     pub skip: Option<AutoTaskSkip>,
@@ -79,104 +79,102 @@ pub struct AutoTaskListing {
     pub load_errors: Vec<AutoTaskLoadError>,
 }
 
-impl OrbitRuntime {
-    /// The listing every auto-task list surface renders. A definition whose
-    /// seeding plugin is off is omitted unless `include_inactive_plugins`
-    /// asks for it. A discovery pass in which nothing loaded but a file failed
-    /// is an error, as for [`OrbitRuntime::auto_task_list`].
-    pub fn auto_task_listing_state(
-        &self,
-        include_inactive_plugins: bool,
-        now: DateTime<Utc>,
-    ) -> Result<AutoTaskListing, OrbitError> {
-        let collection = self.collect_readable_auto_tasks();
-        require_loaded(&collection)?;
-        Ok(self.listing_from(collection, include_inactive_plugins, now))
-    }
+/// The listing every auto-task list surface renders. A definition whose
+/// seeding plugin is off is omitted unless `include_inactive_plugins`
+/// asks for it. A discovery pass in which nothing loaded but a file failed
+/// is an error, as for [`auto_task_list`](super::crud::auto_task_list).
+pub fn auto_task_listing_state(
+    rt: &OrbitRuntime,
+    include_inactive_plugins: bool,
+    now: DateTime<Utc>,
+) -> Result<AutoTaskListing, OrbitError> {
+    let collection = super::read::collect_readable_auto_tasks(rt);
+    require_loaded(&collection)?;
+    Ok(listing_from(rt, collection, include_inactive_plugins, now))
+}
 
-    /// The same listing for a surface that shows load errors itself (the
-    /// dashboard panel): nothing that failed to load fails the listing.
-    pub fn auto_task_listing_state_lenient(
-        &self,
-        include_inactive_plugins: bool,
-        now: DateTime<Utc>,
-    ) -> AutoTaskListing {
-        let collection = self.collect_readable_auto_tasks();
-        self.listing_from(collection, include_inactive_plugins, now)
-    }
+/// The same listing for a surface that shows load errors itself (the
+/// dashboard panel): nothing that failed to load fails the listing.
+pub fn auto_task_listing_state_lenient(
+    rt: &OrbitRuntime,
+    include_inactive_plugins: bool,
+    now: DateTime<Utc>,
+) -> AutoTaskListing {
+    let collection = super::read::collect_readable_auto_tasks(rt);
+    listing_from(rt, collection, include_inactive_plugins, now)
+}
 
-    fn listing_from(
-        &self,
-        collection: AutoTaskCollection,
-        include_inactive_plugins: bool,
-        now: DateTime<Utc>,
-    ) -> AutoTaskListing {
-        let cursors = cursor_store(&cursor_state_path(&self.paths().state_dir))
-            .read()
-            .auto_task()
-            .get();
-        let cursor_state_error = cursors.as_ref().err().map(ToString::to_string);
-        let listed = collection
-            .definitions
-            .into_iter()
-            .map(|loaded| self.listed_auto_task(loaded.definition))
-            .collect::<Vec<_>>();
-        let inactive_plugin_count = listed
-            .iter()
-            .filter(|listed| listed.inactive_plugin.is_some())
-            .count();
-        let rows = listed
-            .into_iter()
-            .filter(|listed| is_listed(listed.inactive_plugin.is_some(), include_inactive_plugins))
-            .map(|listed| {
-                let cursor = cursors
-                    .as_ref()
-                    .ok()
-                    .and_then(|state| state.definitions.get(&listed.definition.name))
-                    .cloned();
-                self.listing_row(listed, cursor, cursor_state_error.is_some(), now)
-            })
-            .collect();
-        AutoTaskListing {
-            rows,
-            inactive_plugin_count,
-            cursor_state_error,
-            load_errors: collection.errors,
-        }
+fn listing_from(
+    rt: &OrbitRuntime,
+    collection: AutoTaskCollection,
+    include_inactive_plugins: bool,
+    now: DateTime<Utc>,
+) -> AutoTaskListing {
+    let cursors = cursor_store(&cursor_state_path(&rt.paths().state_dir))
+        .read()
+        .auto_task()
+        .get();
+    let cursor_state_error = cursors.as_ref().err().map(ToString::to_string);
+    let listed = collection
+        .definitions
+        .into_iter()
+        .map(|loaded| super::scheduler::listed_auto_task(rt, loaded.definition))
+        .collect::<Vec<_>>();
+    let inactive_plugin_count = listed
+        .iter()
+        .filter(|listed| listed.inactive_plugin.is_some())
+        .count();
+    let rows = listed
+        .into_iter()
+        .filter(|listed| is_listed(listed.inactive_plugin.is_some(), include_inactive_plugins))
+        .map(|listed| {
+            let cursor = cursors
+                .as_ref()
+                .ok()
+                .and_then(|state| state.definitions.get(&listed.definition.name))
+                .cloned();
+            listing_row(rt, listed, cursor, cursor_state_error.is_some(), now)
+        })
+        .collect();
+    AutoTaskListing {
+        rows,
+        inactive_plugin_count,
+        cursor_state_error,
+        load_errors: collection.errors,
     }
+}
 
-    fn listing_row(
-        &self,
-        listed: ListedAutoTask,
-        cursor: Option<AutoTaskCursor>,
-        cursor_state_unavailable: bool,
-        now: DateTime<Utc>,
-    ) -> AutoTaskListingRow {
-        let effective_enabled = self.auto_task_enabled(&listed.definition);
-        let (skip, skipped_reason) = match &listed.skipped_reason {
-            Some(reason) => (Some(AutoTaskSkip::PluginInactive), Some(reason.clone())),
-            None => match delivery_ownership_refusal(self, &listed.definition) {
-                Some(refusal) => (Some(AutoTaskSkip::NotOwnedHere), Some(refusal.reason())),
-                None => (None, None),
-            },
-        };
-        let (schedule_state, next_slot) = schedule_state(
-            &listed.definition.schedule,
-            effective_enabled,
-            skip == Some(AutoTaskSkip::NotOwnedHere),
-            cursor.as_ref(),
-            cursor_state_unavailable,
-            now,
-        );
-        AutoTaskListingRow {
-            listed,
-            effective_enabled,
-            skip,
-            skipped_reason,
-            cursor,
-            schedule_state,
-            next_slot,
-        }
+fn listing_row(
+    rt: &OrbitRuntime,
+    listed: ListedAutoTask,
+    cursor: Option<AutoTaskCursor>,
+    cursor_state_unavailable: bool,
+    now: DateTime<Utc>,
+) -> AutoTaskListingRow {
+    let effective_enabled = rt.auto_task_enabled(&listed.definition);
+    let (skip, skipped_reason) = match &listed.skipped_reason {
+        Some(reason) => (Some(AutoTaskSkip::PluginInactive), Some(reason.clone())),
+        None => match delivery_ownership_refusal(rt, &listed.definition) {
+            Some(refusal) => (Some(AutoTaskSkip::NotOwnedHere), Some(refusal.reason())),
+            None => (None, None),
+        },
+    };
+    let (schedule_state, next_slot) = schedule_state(
+        &listed.definition.schedule,
+        effective_enabled,
+        skip == Some(AutoTaskSkip::NotOwnedHere),
+        cursor.as_ref(),
+        cursor_state_unavailable,
+        now,
+    );
+    AutoTaskListingRow {
+        listed,
+        effective_enabled,
+        skip,
+        skipped_reason,
+        cursor,
+        schedule_state,
+        next_slot,
     }
 }
 

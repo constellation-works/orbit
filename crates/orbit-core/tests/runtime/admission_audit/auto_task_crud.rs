@@ -34,12 +34,12 @@ template:
 }
 
 fn assert_lookup_refused(runtime: &OrbitRuntime, name: &str) {
-    let shown = runtime.auto_task_show(name);
+    let shown = orbit_core::app::auto_task::auto_task_show(runtime, name);
     assert!(
         matches!(shown, Err(OrbitError::InvalidInput(_))),
         "show {name:?} must refuse the lookup before accepting it, got {shown:?}"
     );
-    let minted = runtime.auto_task_mint(name);
+    let minted = orbit_core::app::auto_task::auto_task_mint(runtime, name);
     assert!(
         matches!(minted, Err(OrbitError::InvalidInput(_))),
         "mint {name:?} must refuse the lookup before creating a task, got {minted:?}"
@@ -75,8 +75,7 @@ fn doc_duties_mint_drops_missing_contributing_anchor() {
     )
     .expect("materialize shipped doc-duties definition");
 
-    let task = runtime
-        .auto_task_mint("doc-duties")
+    let task = orbit_core::app::auto_task::auto_task_mint(&runtime, "doc-duties")
         .expect("mint shipped doc-duties task");
     assert_eq!(
         task.context_files,
@@ -94,7 +93,7 @@ fn implementation_mints_enter_proposed_including_legacy_workspace_forks() {
         return;
     }
 
-    use orbit_core::application::auto_tasks::{AutoTaskTemplatePatch, AutoTaskUpdateParams};
+    use orbit_core::app::auto_task::{AutoTaskTemplatePatch, AutoTaskUpdateParams};
     use orbit_types::task::TaskStatus;
     use orbit_types::workflow::AutoTaskDefinition;
 
@@ -129,8 +128,7 @@ fn implementation_mints_enter_proposed_including_legacy_workspace_forks() {
         } else {
             TaskStatus::Proposed
         };
-        let task = runtime
-            .auto_task_mint(&definition.name)
+        let task = orbit_core::app::auto_task::auto_task_mint(&runtime, &definition.name)
             .expect("mint shipped definition");
         assert_eq!(
             task.status, expected,
@@ -152,29 +150,27 @@ fn implementation_mints_enter_proposed_including_legacy_workspace_forks() {
 
         // A persisted workspace fork from an older binary keeps backlog in
         // its body. Minting must still send implementation work to the pilot.
-        runtime
-            .auto_task_update(
-                &definition.name,
-                AutoTaskUpdateParams {
-                    template: Some(AutoTaskTemplatePatch {
-                        status: Some(TaskStatus::Backlog),
-                        ..Default::default()
-                    }),
+        orbit_core::app::auto_task::auto_task_update(
+            &runtime,
+            &definition.name,
+            AutoTaskUpdateParams {
+                template: Some(AutoTaskTemplatePatch {
+                    status: Some(TaskStatus::Backlog),
                     ..Default::default()
-                },
-            )
-            .expect("fork with legacy backlog status");
+                }),
+                ..Default::default()
+            },
+        )
+        .expect("fork with legacy backlog status");
         assert_eq!(
-            runtime
-                .auto_task_show(&definition.name)
+            orbit_core::app::auto_task::auto_task_show(&runtime, &definition.name)
                 .expect("show fork")
                 .expect("fork exists")
                 .template
                 .status,
             TaskStatus::Backlog
         );
-        let forked = runtime
-            .auto_task_mint(&definition.name)
+        let forked = orbit_core::app::auto_task::auto_task_mint(&runtime, &definition.name)
             .expect("mint workspace fork");
         assert_eq!(
             forked.status,
@@ -189,8 +185,7 @@ fn implementation_mints_enter_proposed_including_legacy_workspace_forks() {
             forked.status
         );
         assert!(
-            runtime
-                .open_auto_task_instance(&definition)
+            orbit_core::app::auto_task::open_auto_task_instance(&runtime, &definition)
                 .expect("open mint lookup")
                 .is_some()
         );
@@ -214,8 +209,8 @@ fn implementation_mints_enter_proposed_including_legacy_workspace_forks() {
         let mut params = interval_params(name, 60);
         params.template.tags = tags;
         params.template.status = status;
-        runtime.auto_task_add(params).expect("custom definition");
-        let task = runtime.auto_task_mint(name).expect("custom mint");
+        orbit_core::app::auto_task::auto_task_add(&runtime, params).expect("custom definition");
+        let task = orbit_core::app::auto_task::auto_task_mint(&runtime, name).expect("custom mint");
         assert_eq!(task.status, status, "status override for {name}");
         if name == "normalized-no-diff" {
             assert!(task.tags.iter().any(|tag| tag == "no-diff-expected"));
@@ -257,24 +252,18 @@ fn show_and_mint_reject_absolute_and_traversal_lookups() {
 
     let params = interval_params("chore", 60);
     assert_eq!(params.dedupe, DedupePolicy::SkipIfOpen);
-    runtime
-        .auto_task_add(params)
-        .expect("add in-scope definition");
-    runtime
-        .auto_task_toggle("chore", false)
+    orbit_core::app::auto_task::auto_task_add(&runtime, params).expect("add in-scope definition");
+    orbit_core::app::auto_task::auto_task_toggle(&runtime, "chore", false)
         .expect("disable definition");
-    let shown = runtime
-        .auto_task_show("chore")
+    let shown = orbit_core::app::auto_task::auto_task_show(&runtime, "chore")
         .expect("show regular definition")
         .expect("regular definition is present");
     assert_eq!(shown.name, "chore");
     assert!(!shown.enabled);
 
-    let first = runtime
-        .auto_task_mint("chore")
+    let first = orbit_core::app::auto_task::auto_task_mint(&runtime, "chore")
         .expect("mint disabled definition");
-    let second = runtime
-        .auto_task_mint("chore")
+    let second = orbit_core::app::auto_task::auto_task_mint(&runtime, "chore")
         .expect("mint again while an instance is open");
     assert_ne!(first.id, second.id);
     assert!(first.tags.contains(&auto_task_tag("chore")));
@@ -290,8 +279,7 @@ fn show_and_mint_refuse_symlinked_definition_file() {
     use std::os::unix::fs::symlink;
 
     let runtime = runtime();
-    runtime
-        .auto_task_add(interval_params("local", 60))
+    orbit_core::app::auto_task::auto_task_add(&runtime, interval_params("local", 60))
         .expect("add regular definition");
     let outside =
         tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).expect("symlink target root");
@@ -302,15 +290,12 @@ fn show_and_mint_refuse_symlinked_definition_file() {
     )
     .expect("definition symlink");
 
-    let shown = runtime
-        .auto_task_show("local")
+    let shown = orbit_core::app::auto_task::auto_task_show(&runtime, "local")
         .expect("show regular sibling")
         .expect("regular sibling is present");
     assert_eq!(shown.name, "local");
     assert_lookup_refused(&runtime, "linked");
-    runtime
-        .auto_task_mint("local")
-        .expect("mint regular sibling");
+    orbit_core::app::auto_task::auto_task_mint(&runtime, "local").expect("mint regular sibling");
     assert_eq!(task_count(&runtime), 1);
     assert_lookup_refused(&runtime, "linked");
     assert_eq!(task_count(&runtime), 1);
@@ -337,7 +322,7 @@ fn show_and_mint_refuse_symlinked_auto_tasks_directory() {
     symlink(&outside_definitions, &definitions).expect("directory symlink");
 
     assert_lookup_refused(&runtime, "escaped");
-    let missing = runtime.auto_task_show("missing");
+    let missing = orbit_core::app::auto_task::auto_task_show(&runtime, "missing");
     assert!(
         matches!(missing, Err(OrbitError::InvalidInput(_))),
         "a symlinked auto_tasks directory is refused before the lookup reads it, got {missing:?}"
