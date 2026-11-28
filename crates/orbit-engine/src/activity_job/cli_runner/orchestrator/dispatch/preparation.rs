@@ -54,6 +54,7 @@ pub(super) struct PreparedCliDispatch<'a> {
     pub(super) notice_posting_instruction: Option<&'a str>,
     pub(super) tool_ctx: ToolContext,
     pub(super) declared_worktree_pair: Option<DeclaredWorktreePair>,
+    pub(super) bound_claim: bool,
     pub(super) source_checkout: SourceCheckout,
     pub(super) experiment_overlays: Vec<ExperimentActivityOverlay>,
     pub(super) experiment_records: Vec<ExperimentOverlayRecord>,
@@ -199,8 +200,13 @@ pub(crate) fn dispatch_cli_invocation(
     let task_ids = task_ids_from_input(input);
     let task_id = task_id_from_input(input);
     require_conflict_recovery_target(activity_name, &task_ids, input, run_id)?;
+    // A worker binding constrains every agent step, including recovery hooks.
+    // An input claim flag can also narrow the tools a step receives.
+    let worker = host.worker_invocation();
+    let claimed = worker.is_some() || input.get("claimed").and_then(Value::as_bool) == Some(true);
+    let bound_claim = worker.is_some_and(|worker| worker.bound_run_id == run_id);
     let mut grant =
-        resolve_activity_tool_grant(host, spec, run_id, activity_name, input, &task_ids)?;
+        resolve_activity_tool_grant(host, spec, run_id, activity_name, claimed, &task_ids)?;
     // A live experiment arm's tool delta applies after the grant, so the
     // audit row below and the child's policy envelope carry the treatment.
     let experiment_overlays =
@@ -210,7 +216,7 @@ pub(crate) fn dispatch_cli_invocation(
         &mut grant,
         &experiment_overlays,
         activity_name,
-        input,
+        claimed,
         &task_ids,
     )?;
     let ActivityToolGrant {
@@ -279,6 +285,7 @@ pub(crate) fn dispatch_cli_invocation(
             notice_posting_instruction,
             tool_ctx,
             declared_worktree_pair,
+            bound_claim,
             source_checkout,
             experiment_overlays,
             experiment_records,

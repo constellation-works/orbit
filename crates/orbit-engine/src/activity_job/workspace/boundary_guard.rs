@@ -46,6 +46,7 @@ impl WorktreeBoundaryGuard {
         registered_primary_root: Option<&Path>,
         declared_pair: Option<&DeclaredWorktreePair>,
         primary_base_branch: &str,
+        confined_claim: bool,
     ) -> Result<Option<Self>, DispatchError> {
         let WorktreeDispatch {
             input,
@@ -218,6 +219,8 @@ impl WorktreeBoundaryGuard {
             assigned_before,
             primary_before,
             primary_baseline,
+            claimed_paths: confined_claim
+                .then(|| super::claimed_primary_move::task_paths(task_ctx)),
             rebase_recovery: None,
             activity: String::new(),
             audit: None,
@@ -239,103 +242,12 @@ impl WorktreeBoundaryGuard {
         self
     }
 
-    /// Compare both monitored checkouts after the provider reaches any
-    /// terminal outcome. A stationary primary delta is benign only for
-    /// `.orbit/` record-store dirt or Orbit's root-level generation records
-    /// that do not intersect paths this run changed. A primary move is benign
-    /// only onto `workflow.base_branch` at
-    /// or ahead of that branch's tip at capture (see [`PrimaryBaseline`]):
-    /// linked worktrees retain their own HEAD, and the later fetched-base
-    /// rebase is the authority for candidate-versus-target integration.
-    /// Primary source edits, overlapping record-store dirt, primary rewrites,
-    /// moves anywhere but onto the base branch, and unapproved history changes
-    /// in the assigned worktree remain typed, fail-closed violations. The guard does not clean or copy either
-    /// checkout. Only the host's continuation of an explicitly admitted
-    /// stopped rebase permits assigned history changes: one that finishes it,
-    /// or one that stops again on a later pick of that same rebase.
-    pub(crate) fn verify_after_provider(
-        self,
-        host: &(
-             impl HostEnvironment
-             + Recovery
-             + ReviewGate
-             + RunLifecycle
-             + RuntimeHostProcessEnvironment
-             + ?Sized
-         ),
-        recovery_succeeded: bool,
-        recovery_step_id: Option<&str>,
-        task_ids: &[String],
-    ) -> Result<(), DispatchError> {
-        let completion = if self.rebase_recovery.is_some() && recovery_succeeded {
-            let step_id = recovery_step_id.ok_or_else(|| {
-                DispatchError::CliInvocationPermanent(
-                    "conflict recovery is missing its failed step identity".to_string(),
-                )
-            })?;
-            Some((
-                step_id,
-                self.complete_rebase_recovery(host, step_id, task_ids)?,
-            ))
-        } else {
-            None
-        };
-        match completion {
-            Some((step_id, RebaseContinuation::Completed(output))) => {
-                self.verify()?;
-                host.checkpoint_rebase_recovery(&self.run_id, step_id, &output)?;
-            }
-            // Certified like a completion; the retry settles it [ORB-14668].
-            Some((step_id, RebaseContinuation::Absorbed(output))) => {
-                self.verify_checkouts(&self.process_env, HostContinuation::Absorbed)?;
-                host.checkpoint_rebase_recovery(&self.run_id, step_id, &output)?;
-            }
-            // Nothing is certified until a later round finishes the rebase.
-            Some((_, RebaseContinuation::StoppedAgain)) => {
-                self.verify_checkouts(&self.process_env, HostContinuation::StoppedAgain)?;
-            }
-            None => {
-                self.verify()?;
-                self.widen_for_agent_changes(host, task_ids)?;
-            }
-        }
-        Ok(())
-    }
-
-    /// Widen the task's selectors to cover every path an implementer or
-    /// recovery agent changed: agents may change any path the work requires,
-    /// and the guard is the host's exact record of which agent changed what.
-    /// Host-owned `.orbit/` paths (scratch included) are never delivery, and
-    /// gitignored output never appears in the fingerprint. A conflict
-    /// recovery widens from its host continuation instead.
-    fn widen_for_agent_changes(
-        &self,
-        host: &(impl RunLifecycle + RuntimeHostProcessEnvironment + ?Sized),
-        task_ids: &[String],
-    ) -> Result<(), DispatchError> {
-        let Some(step) = ContextWideningStep::for_activity(&self.activity) else {
-            return Ok(());
-        };
-        let after = git_fingerprint(&host.process_env(), &self.assigned_root)?;
-        let paths = changed_paths(
-            &host.process_env(),
-            &self.assigned_root,
-            &self.assigned_before,
-            &after,
+    pub(crate) fn verify(&self, provider_succeeded: bool) -> Result<(), DispatchError> {
+        self.verify_checkouts(
+            &self.process_env,
+            HostContinuation::Finished,
+            provider_succeeded,
         )
-        .into_iter()
-        .filter(|path| !is_host_owned_path(path))
-        .filter(|path| {
-            // A pre-existing untracked file the agent removed leaves
-            // nothing to deliver; a removed tracked file is a change.
-            after
-                .path_states
-                .get(path)
-                .is_none_or(|state| state.worktree_present || state.index_entry_sha256.is_some())
-        })
-        .collect::<Vec<_>>();
-        self.widen_task(host, task_ids, step, &paths);
-        Ok(())
     }
 
     /// Record `paths` on the agent's task. Best-effort: delivery widens any
@@ -379,8 +291,40 @@ impl WorktreeBoundaryGuard {
         }
     }
 
-    pub(crate) fn verify(&self) -> Result<(), DispatchError> {
-        self.verify_checkouts(&self.process_env, HostContinuation::Finished)
+    /// Widen the task's selectors to cover every path an implementer or
+    /// recovery agent changed: agents may change any path the work requires,
+    /// and the guard is the host's exact record of which agent changed what.
+    /// Host-owned `.orbit/` paths (scratch included) are never delivery, and
+    /// gitignored output never appears in the fingerprint. A conflict
+    /// recovery widens from its host continuation instead.
+    fn widen_for_agent_changes(
+        &self,
+        host: &(impl RunLifecycle + RuntimeHostProcessEnvironment + ?Sized),
+        task_ids: &[String],
+    ) -> Result<(), DispatchError> {
+        let Some(step) = ContextWideningStep::for_activity(&self.activity) else {
+            return Ok(());
+        };
+        let after = git_fingerprint(&host.process_env(), &self.assigned_root)?;
+        let paths = changed_paths(
+            &host.process_env(),
+            &self.assigned_root,
+            &self.assigned_before,
+            &after,
+        )
+        .into_iter()
+        .filter(|path| !is_host_owned_path(path))
+        .filter(|path| {
+            // A pre-existing untracked file the agent removed leaves
+            // nothing to deliver; a removed tracked file is a change.
+            after
+                .path_states
+                .get(path)
+                .is_none_or(|state| state.worktree_present || state.index_entry_sha256.is_some())
+        })
+        .collect::<Vec<_>>();
+        self.widen_task(host, task_ids, step, &paths);
+        Ok(())
     }
 
     /// [`Self::verify`], where `continuation` also admits the HEAD the host's
@@ -391,6 +335,7 @@ impl WorktreeBoundaryGuard {
         &self,
         process_env: &orbit_common::Env,
         continuation: HostContinuation,
+        allow_primary_hold: bool,
     ) -> Result<(), DispatchError> {
         let assigned_after = git_fingerprint(process_env, &self.assigned_root)?;
         let primary_after = git_fingerprint(process_env, &self.primary_root)?;
@@ -414,7 +359,7 @@ impl WorktreeBoundaryGuard {
         // rebase checkpoint reconciles, not a boundary violation.
         let primary_dirt_paths = primary_dirt_mutations(&self.primary_before, &primary_after);
         let run_path_index = run_changed_paths.iter().collect::<BTreeSet<_>>();
-        let conflicting_paths = primary_dirt_paths
+        let mut conflicting_paths = primary_dirt_paths
             .iter()
             .filter(|path| run_path_index.contains(path))
             .cloned()
@@ -422,7 +367,7 @@ impl WorktreeBoundaryGuard {
 
         if assigned_history_changed && !self.host_moved_head(continuation, &assigned_after)? {
             // Only the checkpointed conflict-recovery leaf may finish a rebase.
-            return Err(self.integrity_error(
+            return Err(self.checkout_stop(
                 process_env,
                 IntegrityEvidence {
                     code: "worktree_content_conflict",
@@ -480,22 +425,47 @@ impl WorktreeBoundaryGuard {
             return Ok(());
         }
 
-        Err(self.integrity_error(
+        let mut code = "primary_checkout_drift";
+        let mut reason = self.primary_baseline.drift_reason(&self.primary_before);
+        if allow_primary_hold
+            && assigned_after == self.assigned_before
+            && let Some(overlaps) = self.claimed_primary_move_conflicts(
+                process_env,
+                &primary_after,
+                &primary_dirt_paths,
+            )
+        {
+            conflicting_paths.extend(overlaps);
+            conflicting_paths.sort_unstable();
+            conflicting_paths.dedup();
+            if conflicting_paths.is_empty()
+                && primary_dirt_paths
+                    .iter()
+                    .all(|path| is_benign_stationary_primary_path(path))
+            {
+                code = orbit_types::workflow::CLAIMED_PRIMARY_CHECKOUT_MOVED_ERROR_CODE;
+                reason = "the primary moved to another commit without touching the \
+                          assigned candidate or task paths"
+                    .to_string();
+            }
+        }
+
+        Err(self.checkout_stop(
             process_env,
             IntegrityEvidence {
-                code: "primary_checkout_drift",
+                code,
                 assigned_after: &assigned_after,
                 primary_after: &primary_after,
                 reported_paths: &primary_changed_paths,
                 primary_changed_paths: &primary_changed_paths,
                 primary_dirt_paths: &primary_dirt_paths,
                 conflicting_paths: &conflicting_paths,
-                reason: &self.primary_baseline.drift_reason(&self.primary_before),
+                reason: &reason,
             },
         ))
     }
 
-    fn integrity_error(
+    fn checkout_stop(
         &self,
         process_env: &orbit_common::Env,
         evidence: IntegrityEvidence<'_>,
@@ -557,9 +527,11 @@ impl WorktreeBoundaryGuard {
             "recovery": recovery,
             "automatic_reconciliation": false,
         });
-        DispatchError::WorktreeIntegrity {
-            code,
-            diagnostic: diagnostic.to_string(),
+        let diagnostic = diagnostic.to_string();
+        if code == orbit_types::workflow::CLAIMED_PRIMARY_CHECKOUT_MOVED_ERROR_CODE {
+            DispatchError::ClaimedPrimaryCheckoutMoved { diagnostic }
+        } else {
+            DispatchError::WorktreeIntegrity { code, diagnostic }
         }
     }
 
@@ -578,6 +550,69 @@ impl WorktreeBoundaryGuard {
             HostContinuation::StoppedAgain => self.stopped_authorized_rebase(&self.process_env),
             HostContinuation::Absorbed => self.absorbed_authorized_rebase(after),
         }
+    }
+
+    /// Compare both monitored checkouts after the provider reaches any
+    /// terminal outcome. A stationary primary delta is benign only for
+    /// `.orbit/` record-store dirt or Orbit's root-level generation records
+    /// that do not intersect paths this run changed. A primary move is benign
+    /// only onto `workflow.base_branch` at
+    /// or ahead of that branch's tip at capture (see [`PrimaryBaseline`]):
+    /// linked worktrees retain their own HEAD, and the later fetched-base
+    /// rebase is the authority for candidate-versus-target integration.
+    /// A confined claimed run can hold on an otherwise inadmissible primary
+    /// commit move when its assigned checkout is intact and the paths are
+    /// disjoint. Other drift and unauthorized assigned history changes fail
+    /// closed. Only the host's continuation of an explicitly admitted
+    /// stopped rebase permits assigned history changes: one that finishes it,
+    /// or one that stops again on a later pick of that same rebase.
+    pub(crate) fn verify_after_provider(
+        self,
+        host: &(
+             impl HostEnvironment
+             + Recovery
+             + ReviewGate
+             + RunLifecycle
+             + RuntimeHostProcessEnvironment
+             + ?Sized
+         ),
+        recovery_succeeded: bool,
+        recovery_step_id: Option<&str>,
+        task_ids: &[String],
+    ) -> Result<(), DispatchError> {
+        let completion = if self.rebase_recovery.is_some() && recovery_succeeded {
+            let step_id = recovery_step_id.ok_or_else(|| {
+                DispatchError::CliInvocationPermanent(
+                    "conflict recovery is missing its failed step identity".to_string(),
+                )
+            })?;
+            Some((
+                step_id,
+                self.complete_rebase_recovery(host, step_id, task_ids)?,
+            ))
+        } else {
+            None
+        };
+        match completion {
+            Some((step_id, RebaseContinuation::Completed(output))) => {
+                self.verify(false)?;
+                host.checkpoint_rebase_recovery(&self.run_id, step_id, &output)?;
+            }
+            // Certified like a completion; the retry settles it [ORB-14668].
+            Some((step_id, RebaseContinuation::Absorbed(output))) => {
+                self.verify_checkouts(&self.process_env, HostContinuation::Absorbed, false)?;
+                host.checkpoint_rebase_recovery(&self.run_id, step_id, &output)?;
+            }
+            // Nothing is certified until a later round finishes the rebase.
+            Some((_, RebaseContinuation::StoppedAgain)) => {
+                self.verify_checkouts(&self.process_env, HostContinuation::StoppedAgain, false)?;
+            }
+            None => {
+                self.verify(recovery_succeeded)?;
+                self.widen_for_agent_changes(host, task_ids)?;
+            }
+        }
+        Ok(())
     }
 }
 

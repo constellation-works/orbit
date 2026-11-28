@@ -26,7 +26,7 @@ pub(super) enum RecoveryDispatchError {
         phase: &'static str,
         message: String,
     },
-    FootprintUnavailable(DispatchError),
+    Held(DispatchError),
 }
 
 /// Ask the host for this invocation's decision slot and name it in the
@@ -238,9 +238,10 @@ pub(super) fn dispatch_recovery(
                 recovery_model,
             })
         }
-        Err(error @ DispatchError::FootprintUnavailable(_)) => {
-            Err(RecoveryDispatchError::FootprintUnavailable(error))
-        }
+        Err(
+            error @ (DispatchError::FootprintUnavailable(_)
+            | DispatchError::ClaimedPrimaryCheckoutMoved { .. }),
+        ) => Err(RecoveryDispatchError::Held(error)),
         Err(error) => Err(fail("dispatch", error.to_string())),
     }
 }

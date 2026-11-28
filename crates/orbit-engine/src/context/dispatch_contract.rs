@@ -309,6 +309,11 @@ pub enum DispatchError {
         diagnostic: String,
     },
 
+    /// A confined claimed leaf's primary checkout moved disjointly while the
+    /// assigned checkout stayed intact. End the run held for a later admission.
+    #[error("The primary checkout moved during execution. The claimed run is held for retry.")]
+    ClaimedPrimaryCheckoutMoved { diagnostic: String },
+
     /// A deterministic VCS action proved that it stopped on actual unmerged
     /// index entries and supplied the pinned base evidence needed for one
     /// bounded repair. This bypasses ordinary retry: the configured conflict
@@ -399,20 +404,23 @@ pub enum DispatchError {
 impl DispatchError {
     /// Structured failure detail, independently redacted before persistence.
     pub fn error_diagnostic(&self) -> Option<Value> {
-        match self {
-            Self::WorktreeIntegrity { code, diagnostic } => {
-                let mut value = serde_json::from_str::<Value>(diagnostic)
-                    .unwrap_or_else(|_| serde_json::json!({"reason": diagnostic}));
-                if !value.is_object() {
-                    value = serde_json::json!({"reason": value});
-                }
-                if let Some(object) = value.as_object_mut() {
-                    object.insert("code".into(), serde_json::json!(code));
-                }
-                Some(orbit_common::security::redaction::redact_all_json(value))
-            }
-            _ => None,
+        let (code, diagnostic) = match self {
+            Self::WorktreeIntegrity { code, diagnostic } => (*code, diagnostic),
+            Self::ClaimedPrimaryCheckoutMoved { diagnostic } => (
+                orbit_types::workflow::CLAIMED_PRIMARY_CHECKOUT_MOVED_ERROR_CODE,
+                diagnostic,
+            ),
+            _ => return None,
+        };
+        let mut value = serde_json::from_str::<Value>(diagnostic)
+            .unwrap_or_else(|_| serde_json::json!({"reason": diagnostic}));
+        if !value.is_object() {
+            value = serde_json::json!({"reason": value});
         }
+        if let Some(object) = value.as_object_mut() {
+            object.insert("code".into(), serde_json::json!(code));
+        }
+        Some(orbit_common::security::redaction::redact_all_json(value))
     }
 
     /// A [`DispatchError::DeterministicActionFailed`] for `action`.
@@ -443,6 +451,7 @@ impl DispatchError {
                 | DispatchError::ImageInputUnavailable { .. }
                 | DispatchError::GitTimeout { .. }
                 | DispatchError::WorktreeIntegrity { .. }
+                | DispatchError::ClaimedPrimaryCheckoutMoved { .. }
                 | DispatchError::RecoverableVcsConflict(_)
                 | DispatchError::TaskCompletionLiveRun { .. }
                 | DispatchError::DeterministicActionRefused { .. }
@@ -471,6 +480,9 @@ impl DispatchError {
         let text = || self.to_string();
         match self {
             DispatchError::WorktreeIntegrity { code, .. } => code,
+            DispatchError::ClaimedPrimaryCheckoutMoved { .. } => {
+                wf::CLAIMED_PRIMARY_CHECKOUT_MOVED_ERROR_CODE
+            }
             DispatchError::ScriptRefused { code, .. } => code,
             DispatchError::ScriptOutputFiles { code, .. } => code,
             DispatchError::ScriptOutputInvalid { .. } => {
@@ -513,6 +525,9 @@ impl DispatchError {
             }
             DispatchError::FootprintUnavailable(_) => {
                 Some(orbit_types::workflow::StepFailureCode::FootprintUnavailable)
+            }
+            DispatchError::ClaimedPrimaryCheckoutMoved { .. } => {
+                Some(orbit_types::workflow::StepFailureCode::ClaimedPrimaryCheckoutMoved)
             }
             _ => None,
         }

@@ -1139,6 +1139,7 @@ No separate narrative body survives; the title, date, and [ORB-10471] task refer
 **Recorded:** 2026-09-13 · [ORB-12443]
 **Supersedes in part:** [Primary fast-forward acceptance is decided by interference with the run, not primary dirty-state byte-identity](#primary-fast-forward-acceptance-is-decided-by-interference-with-the-run-not-primary-dirty-state-byte-identity)
 **Amended in part by:** [Stationary primary source edits stay a worktree-boundary failure](#stationary-primary-source-edits-stay-a-worktree-boundary-failure)
+**Amended in part by:** [Claimed runs hold on disjoint primary commit moves](#claimed-runs-hold-on-disjoint-primary-commit-moves)
 **Paths:** `crates/orbit-engine/src/activity_job/workspace.rs`, `crates/orbit-engine/src/activity_job/cli_runner/tests/orchestrator.rs`, `docs/design/activity-job/*`
 
 **Context.** Managed implementations repeatedly completed successfully in their assigned worktrees and then failed `primary_checkout_drift` because unrelated processes changed tracked, deleted, or untracked source paths in the primary checkout while its HEAD remained stationary. The guard's before/after fingerprints established that primary state changed during the invocation, but did not establish who changed it. Restricting acceptance to `.orbit/` paths or to dirt disjoint from the candidate treated pathname class and overlap as writer attribution. It also confused local primary state with the fetched remote target that delivery actually integrates.
@@ -1172,6 +1173,18 @@ The stationary-acceptance paragraph above is amended by [ORB-13933](#stationary-
 - Concurrent `.orbit/` record-store dirt that does not touch the run's paths still does not fail delivery.
 - Concurrent primary source edits during an unconfined provider are indistinguishable from an escape and fail closed. Sandbox confinement remains a separate control; this guard does not treat it as proof of authorship.
 - Fast-forward acceptance is unchanged.
+
+---
+
+## Claimed runs hold on disjoint primary commit moves
+
+**Recorded:** 2026-11-28 · [ORB-29907] · Operator decision on [ORB-29926]
+
+**Context.** A shared primary can move off the admitted base-branch route while a claimed provider runs in its assigned checkout. This produced failed delivery runs even when the assigned candidate was intact.
+
+**Decision.** After the ordinary primary allowances, a successfully completed provider in a host-bound claim with an effective OS sandbox can stop on `claimed_primary_checkout_moved`. Its assigned fingerprint must still match the captured fingerprint. The primary's HEAD must move to another commit, its dirt delta may contain only Orbit-owned records, and verified primary changes must be disjoint from the task's path selectors and the assigned checkout's committed and dirty candidate paths. The host's sandbox protects primary Git metadata. A bare fallback, overlapping paths, a primary source edit or unverifiable disjointness keeps the integrity failure.
+
+**Lifecycle.** The executor ends the claimed run held, skips retries within that run and skips recovery and the failure handoff. Claim settlement releases it as transient for later admission. The checkout diagnostic still records the observed paths and preserves any dirty assigned candidate. A separately detected post-run failure takes precedence over the hold. Ordinary base fast-forward acceptance and the host's authorized rebase continuation keep their existing behavior.
 
 ---
 

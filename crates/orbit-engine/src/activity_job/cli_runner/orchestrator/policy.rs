@@ -2,6 +2,7 @@
 //! receives, including claimed-mode tool denial and live experiment arms'
 //! tool deltas.
 
+use crate::context::{Recovery, ResolvedActivityTools};
 use orbit_common::env_vars;
 use orbit_common::security::child_env::{
     ACTIVITY_DEADLINE_ENV, ACTIVITY_MCP_TOOLSETS_ENV, ACTIVITY_NAME_ENV, ACTIVITY_TOOL_POLICY_ENV,
@@ -17,9 +18,6 @@ use orbit_types::workflow::{
     ExperimentOverlayRecord, PR_CONFLICT_RECOVERY_ACTIVITY, STEP_FAILURE_RECOVERY_ACTIVITY,
     TASK_PILOT_ACTIVITY, tool_allowed, tools_allowed_by_disallow_list,
 };
-use serde_json::Value;
-
-use crate::context::{Recovery, ResolvedActivityTools, RunLifecycle};
 
 use super::super::super::dispatcher::DispatchError;
 
@@ -127,21 +125,6 @@ pub fn activity_tool_policy_env(
     ]
 }
 
-/// Whether this invocation runs inside a claimed leaf.
-///
-/// The trusted fact is the host's worker binding: only the process a claim is
-/// bound to carries one, and it is the same for every agent step that leaf
-/// runs, including the recovery hooks the executor dispatches for a failed
-/// step, whose own input schema has no `claimed` field and which no pipeline
-/// input reaches. `claimed: true` in the step input (the claimed pipelines
-/// pass it to `agent_implement`, whose prompt also reads it) is honored too.
-/// Either signal only ever removes tools, so an input that sets it outside a
-/// claim narrows that run, and no input can lift the binding's guard.
-pub(super) fn claimed_mode(host: &(impl RunLifecycle + ?Sized), input: &Value) -> bool {
-    host.worker_invocation().is_some()
-        || input.get("claimed").and_then(Value::as_bool) == Some(true)
-}
-
 /// The activity's deny list, extended with [`CLAIMED_MODE_DENIED_TOOLS`] in
 /// claimed mode. An allowlisted activity keeps `None` here and has the same
 /// tools removed from its resolved allowlist instead.
@@ -164,15 +147,14 @@ pub(super) fn claimed_tool_disallow_list(
 /// [`CLAIMED_MODE_DENIED_TOOLS`] in claimed mode. The deny list the child
 /// enforces drops the operator-granted names the host lifted.
 pub(super) fn resolve_activity_tool_grant(
-    host: &(impl Recovery + RunLifecycle + ?Sized),
+    host: &(impl Recovery + ?Sized),
     spec: &AgentLoopSpec,
     run_id: &str,
     activity_name: &str,
-    input: &Value,
+    claimed: bool,
     task_ids: &[String],
 ) -> Result<ActivityToolGrant, DispatchError> {
     let tool_policy = spec.tool_policy_mode();
-    let claimed = claimed_mode(host, input);
     let mut tool_disallow_list =
         claimed_tool_disallow_list(spec.tool_disallow_list.as_deref(), claimed);
     let mut activity_tools = match tool_disallow_list.as_deref() {
@@ -318,14 +300,13 @@ fn lift_granted_denials(
 /// claimed-mode denial.
 /// Returns what each arm's dispatch actually received.
 pub(super) fn apply_experiment_tool_overlays(
-    host: &(impl Recovery + RunLifecycle + ?Sized),
+    host: &(impl Recovery + ?Sized),
     grant: &mut ActivityToolGrant,
     overlays: &[ExperimentActivityOverlay],
     activity_name: &str,
-    input: &Value,
+    claimed: bool,
     task_ids: &[String],
 ) -> Result<Vec<ExperimentOverlayRecord>, DispatchError> {
-    let claimed = claimed_mode(host, input);
     let mut records = Vec::with_capacity(overlays.len());
     for overlay in overlays {
         let callable_before = grant.activity_tools.effective_tools.clone();

@@ -66,8 +66,9 @@ const MAX_EVIDENCE_BYTES: usize = 4 * 1024;
 /// This is the exclusion list the step boundary applies before
 /// [`agent_blocker_from_declared_failure`]: the typed step codes
 /// (`owner_route_unavailable`, `owner_signoff_required`,
-/// `footprint_unavailable`), the provider classes (`provider_unavailable`,
-/// `provider_limit`, `provider_capacity`, `provider_refusal`), the
+/// `footprint_unavailable`, `claimed_primary_checkout_moved`), the provider
+/// classes (`provider_unavailable`, `provider_limit`, `provider_capacity`,
+/// `provider_refusal`), the
 /// validation-environment pair, the baseline-red and forge holds,
 /// `transient_failure` and `stalled`, the image-input codes, the held-run
 /// codes, the synthesized CLI terminal codes, `task_blocked_by_agent` and
@@ -81,6 +82,7 @@ const RESERVED_DECLARED_FAILURE_CODES: &[&str] = &[
     super::state::OWNER_ROUTE_UNAVAILABLE_ERROR_CODE,
     super::state::OWNER_SIGNOFF_REQUIRED_ERROR_CODE,
     super::state::FOOTPRINT_UNAVAILABLE_ERROR_CODE,
+    super::state::CLAIMED_PRIMARY_CHECKOUT_MOVED_ERROR_CODE,
     super::MUSE_MODEL_ACCESS_REFUSED_ERROR_CODE,
     super::state::PROVIDER_UNAVAILABLE_ERROR_CODE,
     super::state::PROVIDER_LIMIT_ERROR_CODE,

@@ -29,9 +29,10 @@ use super::agent_blocker::{TASK_BLOCKED_BY_AGENT_ERROR_CODE, is_task_blocked_by_
 use super::baseline::{BASELINE_RED_ERROR_CODE, is_baseline_red_failure};
 use super::provider_hold::{ProviderFailureClass, ProviderLimitFailure, failed_provider};
 use super::state::{
-    FOOTPRINT_UNAVAILABLE_ERROR_CODE, OWNER_SIGNOFF_REQUIRED_ERROR_CODE,
-    PROVIDER_CAPACITY_ERROR_CODE, PROVIDER_LIMIT_ERROR_CODE, PROVIDER_UNAVAILABLE_ERROR_CODE,
-    is_footprint_unavailable, is_owner_signoff_required, is_provider_limit,
+    CLAIMED_PRIMARY_CHECKOUT_MOVED_ERROR_CODE, FOOTPRINT_UNAVAILABLE_ERROR_CODE,
+    OWNER_SIGNOFF_REQUIRED_ERROR_CODE, PROVIDER_CAPACITY_ERROR_CODE, PROVIDER_LIMIT_ERROR_CODE,
+    PROVIDER_UNAVAILABLE_ERROR_CODE, is_footprint_unavailable, is_owner_signoff_required,
+    is_provider_limit,
 };
 use crate::workflow::review::REVIEW_LANDING_DECISION_PENDING;
 
@@ -106,6 +107,9 @@ pub enum HeldFailure {
     /// published candidate was not judged; the task returns to admission
     /// and a later run retries once the locks clear.
     FootprintUnavailable,
+    /// A confined claimed leaf observed a primary commit move disjoint from
+    /// its unchanged assigned checkout. The owner can admit another attempt.
+    ClaimedPrimaryCheckoutMoved,
 }
 
 impl HeldFailure {
@@ -153,12 +157,15 @@ impl HeldFailure {
         })
     }
 
-    /// [`Self::of`] for a claimed leaf, which a provider usage limit holds
-    /// too: its owner keeps the task and the drain stops that provider until
-    /// the reset, so nothing about the work failed.
+    /// [`Self::of`] for a claimed leaf, which can also hold on a disjoint
+    /// primary checkout move or a provider usage limit.
     #[must_use]
     pub fn of_claimed_leaf(error_code: Option<&str>, message: Option<&str>) -> Option<Self> {
         Self::of(error_code, message)
+            .or_else(|| {
+                (error_code == Some(CLAIMED_PRIMARY_CHECKOUT_MOVED_ERROR_CODE))
+                    .then_some(Self::ClaimedPrimaryCheckoutMoved)
+            })
             .or_else(|| is_provider_limit(error_code, message).then_some(Self::ProviderLimit))
     }
 
@@ -175,6 +182,7 @@ impl HeldFailure {
             Self::ProviderUnavailable => PROVIDER_UNAVAILABLE_ERROR_CODE,
             Self::DeliveryRefused(refusal) => refusal.error_code(),
             Self::FootprintUnavailable => FOOTPRINT_UNAVAILABLE_ERROR_CODE,
+            Self::ClaimedPrimaryCheckoutMoved => CLAIMED_PRIMARY_CHECKOUT_MOVED_ERROR_CODE,
         }
     }
 

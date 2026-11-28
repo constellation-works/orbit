@@ -21,6 +21,10 @@
 mod absorbed_candidate;
 #[cfg(unix)]
 mod auto_fix_conflict;
+
+#[cfg(target_os = "linux")]
+mod claimed_primary_move;
+
 #[cfg(unix)]
 mod conflict_adoption;
 #[cfg(unix)]
@@ -576,6 +580,8 @@ impl PreparedRebase {
 #[derive(Default)]
 struct LifecycleHost {
     worker: Option<orbit_types::tool::WorkerInvocation>,
+    sandbox: Option<orbit_engine::ResolvedSandbox>,
+    primary_branch_at_agent_launch: Option<String>,
     gate_source: Option<orbit_types::workflow::ValidationGateSource>,
     reclaim_patterns: Option<Vec<String>>,
     repo: PathBuf,
@@ -680,6 +686,8 @@ impl LifecycleHost {
         }
         Self {
             worker: self.worker.clone(),
+            sandbox: self.sandbox.clone(),
+            primary_branch_at_agent_launch: self.primary_branch_at_agent_launch.clone(),
             gate_source: self.gate_source,
             reclaim_patterns: self.reclaim_patterns.clone(),
             repo: self.repo.clone(),
@@ -922,6 +930,15 @@ impl LifecycleHost {
 
 impl_test_host! {
     impl Dispatch for LifecycleHost {
+        fn resolve_executor_sandbox(
+            &self,
+            _provider: &str,
+            _fs_profile: Option<&str>,
+            _cwd: Option<&Path>,
+        ) -> Result<Option<orbit_engine::ResolvedSandbox>, DispatchError> {
+            Ok(self.sandbox.clone())
+        }
+
         fn task_context_for_agent_input(
             &self,
             _run_id: &str,
@@ -941,6 +958,7 @@ impl_test_host! {
                 "id": task.id,
                 "status": task.status.cli_name(),
                 "terminal": orbit_types::task::refuses_implementer_writes(task.status),
+                "context_files": task.context_files,
             })))
         }
 
@@ -1239,6 +1257,20 @@ impl_test_host! {
 
 impl_test_host! {
     impl Recovery for LifecycleHost {
+        fn begin_agent_execution(
+            &self,
+            _run_id: &str,
+            _activity_id: &str,
+            _provider: &str,
+            _model: Option<&str>,
+            _identity: &orbit_types::telemetry::AgentExecutionIdentity,
+        ) -> Result<Option<i64>, OrbitError> {
+            if let Some(branch) = &self.primary_branch_at_agent_launch {
+                git(&self.repo, &["checkout", "--quiet", branch]);
+            }
+            Ok(None)
+        }
+
         /// Reserves the next attempt for a run's step as the runtime's recovery
         /// authority does: an incomplete scope is refused and each reservation
         /// supersedes the earlier ones.
