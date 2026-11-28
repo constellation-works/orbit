@@ -6,7 +6,8 @@ import {
   el, forecastView, forecastCard, pinnedInfoHint, forecastMoreSection, reportsReviewMode,
 } from './forecast-shared.js';
 import {
-  forecastBaselineFigures, forecastBoundedGap, forecastCount, forecastUnavailableInfo, hasUnsupportedReturnTail, num, quantilePair, recordedPoolsContainGaps,
+  forecastBaselineFigures, forecastBoundedGap, forecastCount, forecastUnavailableInfo, formatForecastHours, formatForecastQuantileRange, formatForecastTokens, formatForecastUsd,
+  hasUnsupportedReturnTail, num, quantilePair, recordedPoolsContainGaps,
   regressionGapReasonPhrase, regressionHistoryIsAbsent,
 } from './forecast-summary.js';
 import * as forecastSummary from './forecast-summary.js';
@@ -180,6 +181,28 @@ export function otherChecksClearText() {
   return open ? `${clear} other check${clear === 1 ? "" : "s"} clear` : `All ${total} checks clear`;
 }
 
+// Full totals withheld with no unavailable object: the schedulable subset names
+// the tasks that cannot be scheduled, and any figures it holds are labelled as a
+// subset estimate. A gap with no named reason reads unknown, never as standing totals.
+function withheldTotalsSentence(forecast) {
+  if (num(forecast.tasks) === 0) return null;
+  const subset = forecast.schedulable_subset;
+  const excluded = subset && typeof subset === "object" ? forecastCount(subset.of) - forecastCount(subset.tasks) : 0;
+  if (excluded > 0) {
+    const lead = `Full totals are withheld because ${excluded} task${excluded === 1 ? "" : "s"} cannot be scheduled.`;
+    const figures = [
+      quantilePair(subset.time_to_drain_hours) ? `drain ${formatForecastQuantileRange(subset.time_to_drain_hours, formatForecastHours)}` : null,
+      quantilePair(subset.usd) ? `cost ${formatForecastQuantileRange(subset.usd, formatForecastUsd)}` : null,
+      quantilePair(subset.tokens) ? `tokens ${formatForecastQuantileRange(subset.tokens, formatForecastTokens)}` : null,
+    ].filter(Boolean);
+    if (!figures.length) return lead;
+    return `${lead} The ${subset.tasks} schedulable task${subset.tasks === 1 ? "" : "s"} have a subset estimate, not a full total: ${figures.join(", ")} (p50 – p90).`;
+  }
+  if (hasUnsupportedReturnTail(forecast, forecastView.payload.coverage)) return "A blocked task has an unsupported return tail, so full totals are withheld.";
+  if (forecastCount(forecastView.payload.coverage?.no_history) > 0) return "Some tasks have no delivery history, so full totals are unknown.";
+  return "The full totals are unknown: the forecast did not report why.";
+}
+
 // One sentence: where the figures stand and why, from the live reasons.
 function gapsSentence() {
   const forecast = forecastView.payload.forecast || {};
@@ -189,12 +212,14 @@ function gapsSentence() {
       ? `${info.label}, so totals show the baseline only.`
       : `${info.label}, so there is no forecast.`;
   }
-  if (!quantilePair(forecast.time_to_drain_hours) && hasUnsupportedReturnTail(forecast, forecastView.payload.coverage)) {
-    return "A blocked task has an unsupported return tail, so full totals are withheld.";
-  }
   const open = openCoverageCount();
   const approved = proposedForecastUnavailable();
-  if (approved) return `The current backlog's totals stand. With proposed work approved: ${approved.label}.`;
+  const approvedClause = approved ? `With proposed work approved: ${approved.label}.` : "";
+  if (!quantilePair(forecast.time_to_drain_hours)) {
+    const withheld = withheldTotalsSentence(forecast);
+    if (withheld) return [withheld, approvedClause].filter(Boolean).join(" ");
+  }
+  if (approved) return `The current backlog's totals stand. ${approvedClause}`;
   if (!open) return gapsClearNote();
   return `The totals stand, with ${open} coverage check${open === 1 ? "" : "s"} reporting gaps.`;
 }
