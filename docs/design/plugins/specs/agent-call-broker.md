@@ -146,8 +146,8 @@ agent sandbox (bwrap / sandbox-exec)            host: run-pipeline-worker proces
 
 **Rule.** Inside an agent sandbox that has a broker, a plugin tool call is never run in-process.
 The nested `orbit` sends it to the broker, and the broker is the only party that reads the
-plugin's secrets or spawns its backend. Built-in `orbit.*` tools are unchanged and still run in
-the nested `orbit`.
+plugin's secrets or spawns its backend. Built-in tools run in the nested `orbit` unless their
+operation has a host route described below.
 
 **Host-credentialed reads.** One exception among built-ins is a closed list of read-only
 GitHub tools: `github.auth.status`, `github.pr.list`, `github.run.list`, `github.run.view` and
@@ -159,6 +159,12 @@ worktree. Their output is the tool's own bounded, redacted projection; no token,
 credential enters the sandbox. Forwarding a `GH_TOKEN` into the sandbox was rejected: the
 agent and every command it runs could read it, and it would bypass the tools' redaction.
 Nothing that changes GitHub is on the list.
+
+**Managed notice writes.** Nested CLI and MCP calls forward `orbit.notice.post` and
+`orbit.notice.close` to the activity's broker. The broker checks its activity policy and
+passes the job-run and task binding from the dispatch record to the notice handler.
+Claimed workers use their owner route. If a managed invocation has no trusted binding
+available, the write is refused. See [notice authority](../../fleet-notices/specs/notice-authority.md).
 
 **A resident cycle's ship.** A resident cycle's `orbit.workflow` action `ship` is brokered for a similar
 reason: started inside the cycle's read-only sandbox, the leaf's worker could neither write its
@@ -202,7 +208,7 @@ right and the open pull request. The broker carries no other `orbit.task.update`
 
 `orbit.workflow` action `refresh`, which updates a delivery pull request's branch, needs the same host credentials and is forwarded on the same terms.
 
-**Claimed-owner calls.** The last built-ins the broker carries are a claimed worker's
+**Claimed-owner calls.** The broker also carries a claimed worker's
 owner calls (`CLAIMED_OWNER_TOOLS`): `orbit.task.show`, `orbit.search`, `orbit.task.list`,
 `orbit.task.add`, `orbit.friction` action `add`, `orbit.task.artifact` action `get`, `orbit.task.artifact` action `put`,
 `orbit.notice.post`, `orbit.notice.show` and `orbit.notice.close`. A claimed leaf's

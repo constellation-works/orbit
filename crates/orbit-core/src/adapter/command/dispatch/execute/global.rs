@@ -11,11 +11,11 @@ use orbit_tools::{ToolContext, ToolExecutionKind};
 use orbit_types::tool::ToolSessionContext;
 use serde_json::Value;
 
+use crate::adapter::command::dispatch::audit::managed_run_context;
 use crate::app::plugin::{FileIdentity, FileStamp};
 use crate::application::store_opener::StoreOpener;
 use crate::runtime::tool_exec::{check_activity_tool_policy, check_tool_active};
 
-use super::super::audit::{activity_binding_from_env, managed_run_context};
 use super::super::callback::{
     enforce_plugin_callback_allowlist_from_root, read_activity_tool_policy_from_env,
     read_proc_allowed_programs_from_env, read_proc_disallowed_programs_from_env,
@@ -294,7 +294,6 @@ pub(in crate::adapter::command) fn execute_global_plugin_dispatch(
         } else {
             None
         },
-        activity_binding: activity_binding_from_env(env),
         ..Default::default()
     };
     execute_tool_dispatch_with_audit_store(

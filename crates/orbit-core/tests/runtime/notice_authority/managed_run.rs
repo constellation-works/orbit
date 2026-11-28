@@ -211,141 +211,6 @@ fn dispatched_agent_implement_env(
     env
 }
 
-pub(super) fn managed_pipeline_run_posts_and_closes_notices_as_agent() {
-    let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
-    let runtime = runtime_at(root.path());
-    let task = add_task(&runtime, "Managed pipeline task");
-    let other_task = add_task(&runtime, "Other task in workspace");
-    let run_id = insert_run(
-        &runtime,
-        "task_pr_pipeline",
-        Some(json!({"task_ids": [task]})),
-    );
-
-    #[cfg(unix)]
-    let cli_env = dispatched_agent_implement_env(
-        &runtime,
-        root.path(),
-        &run_id,
-        Some(&task),
-        json!({"task_id": task, "workspace_path": root.path().join("repo")}),
-        &[],
-    );
-    #[cfg(not(unix))]
-    let cli_env = managed_pipeline_env(&run_id, Some(&task));
-
-    // Local `orbit tool run` path (transport: Local, no worker binding).
-    let posted = call_with_env(
-        &runtime,
-        &cli_env,
-        "orbit.notice.post",
-        json!({
-            "kind": "incident",
-            "title": "Shared test fixture broken",
-            "linked_task": task
-        }),
-        ToolEntryPoint::Cli,
-        local_cli_session(&runtime),
-    )
-    .expect("managed CLI run must post as an Agent for its own task");
-    assert_eq!(posted["outcome"], "created");
-    assert_eq!(posted["notice"]["author"]["class"], "agent");
-    assert_eq!(posted["notice"]["author"]["task_id"], task);
-    assert_eq!(posted["notice"]["author"]["run_id"], run_id);
-    let cli_notice_id = posted["notice"]["id"].as_str().unwrap().to_string();
-
-    // Agent restrictions remain enforced on the local managed run.
-    refused(
-        call_with_env(
-            &runtime,
-            &cli_env,
-            "orbit.notice.post",
-            json!({
-                "kind": "incident",
-                "title": "Global attempt",
-                "scope": "global",
-                "linked_task": task
-            }),
-            ToolEntryPoint::Cli,
-            local_cli_session(&runtime),
-        ),
-        "notice_scope_refused",
-    );
-    refused(
-        call_with_env(
-            &runtime,
-            &cli_env,
-            "orbit.notice.post",
-            json!({
-                "kind": "maintenance",
-                "title": "Maintenance attempt",
-                "linked_task": task
-            }),
-            ToolEntryPoint::Cli,
-            local_cli_session(&runtime),
-        ),
-        "notice_kind_refused",
-    );
-
-    // Managed run may close its own task's notice.
-    let closed = call_with_env(
-        &runtime,
-        &cli_env,
-        "orbit.notice.close",
-        json!({"id": cli_notice_id, "reason": "cleared"}),
-        ToolEntryPoint::Cli,
-        local_cli_session(&runtime),
-    )
-    .expect("managed run may close its own notice");
-    assert_eq!(closed["notice"]["status"], "closed");
-    assert_eq!(closed["notice"]["closed"]["by"]["class"], "agent");
-    assert_eq!(closed["notice"]["closed"]["by"]["task_id"], task);
-
-    // Managed MCP session path (Agent capability, no worker binding).
-    let mcp_env = managed_pipeline_env(&run_id, Some(&task));
-    let mcp_posted = call_with_env(
-        &runtime,
-        &mcp_env,
-        "orbit.notice.post",
-        json!({
-            "kind": "info",
-            "title": "Managed MCP post",
-            "evidence": [{"type": "run", "value": run_id}]
-        }),
-        ToolEntryPoint::Mcp,
-        session(McpCapability::Agent),
-    )
-    .expect("managed MCP run must post as an Agent for its own task");
-    assert_eq!(mcp_posted["notice"]["author"]["class"], "agent");
-    assert_eq!(mcp_posted["notice"]["author"]["task_id"], task);
-    assert_eq!(mcp_posted["notice"]["author"]["run_id"], run_id);
-
-    // A singular-`task_id` recovery pipeline run (`blocked_task_recovery_pipeline`)
-    // also resolves as an Agent poster for its bound task.
-    let recovery_run = insert_run(
-        &runtime,
-        "blocked_task_recovery_pipeline",
-        Some(json!({"task_id": other_task})),
-    );
-    let recovery_env = managed_pipeline_env(&recovery_run, Some(&other_task));
-    let recovery_posted = call_with_env(
-        &runtime,
-        &recovery_env,
-        "orbit.notice.post",
-        json!({
-            "kind": "info",
-            "title": "Recovery run report",
-            "linked_task": other_task
-        }),
-        ToolEntryPoint::Cli,
-        local_cli_session(&runtime),
-    )
-    .expect("singular task_id managed run must post as an Agent");
-    assert_eq!(recovery_posted["notice"]["author"]["class"], "agent");
-    assert_eq!(recovery_posted["notice"]["author"]["task_id"], other_task);
-    assert_eq!(recovery_posted["notice"]["author"]["run_id"], recovery_run);
-}
-
 pub(super) fn managed_run_notice_authority_preserves_fail_closed_rejections() {
     let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let global = root.path().join("home/.orbit");
@@ -517,16 +382,24 @@ pub(super) fn managed_run_notice_authority_preserves_fail_closed_rejections() {
             "notice_poster_unidentified",
         );
     }
-    // The resident run still posts for its own mandate (with or without ORBIT_TASK_ID).
-    let resident_posted = call_with_env(
+    refused(
+        call_with_env(
+            &home,
+            &managed_pipeline_env(&resident_run, None),
+            "orbit.notice.post",
+            json!({"kind": "warn", "title": "Unattested resident"}),
+            ToolEntryPoint::Mcp,
+            session(McpCapability::Agent),
+        ),
+        "notice_poster_unidentified",
+    );
+    let resident_posted = call_with_activity(
         &home,
-        &managed_pipeline_env(&resident_run, None),
         "orbit.notice.post",
         json!({"kind": "warn", "title": "Mandate A needs operator"}),
-        ToolEntryPoint::Mcp,
-        session(McpCapability::Agent),
+        activity(&resident_run, None),
     )
-    .expect("resident run posts for its own mandate");
+    .expect("the attested resident run resolves its own mandate");
     assert_eq!(resident_posted["notice"]["author"]["class"], "agent");
     assert_eq!(resident_posted["notice"]["author"]["task_id"], mandate_a);
     assert_eq!(resident_posted["notice"]["author"]["run_id"], resident_run);
@@ -548,76 +421,35 @@ pub(super) fn managed_run_notice_authority_preserves_fail_closed_rejections() {
         "notice_poster_unidentified",
     );
 
-    // 7. A request-supplied orchestrator cannot override a managed binding
-    //    (whether valid or invalid).
-    let valid_env = managed_pipeline_env(&valid_run, Some(&task));
-    refused(
-        call_with_env(
-            &home,
-            &valid_env,
-            "orbit.notice.post",
-            json!({
-                "kind": "incident",
-                "title": "Orchestrator scope override attempt",
-                "scope": "global",
-                "linked_task": task,
-                "orchestrator": "sol"
-            }),
-            ToolEntryPoint::Cli,
-            local_cli_session(&home),
-        ),
-        "notice_scope_refused",
-    );
-    refused(
-        call_with_env(
-            &home,
-            &valid_env,
-            "orbit.notice.post",
-            json!({
-                "kind": "maintenance",
-                "title": "Orchestrator kind override attempt",
-                "linked_task": task,
-                "orchestrator": "sol"
-            }),
-            ToolEntryPoint::Mcp,
-            session(McpCapability::Agent),
-        ),
-        "notice_kind_refused",
-    );
-    let kept_agent = call_with_env(
-        &home,
-        &valid_env,
-        "orbit.notice.post",
-        json!({
-            "kind": "info",
-            "title": "Managed run ignores orchestrator field",
-            "linked_task": task,
-            "orchestrator": "sol"
-        }),
-        ToolEntryPoint::Cli,
-        local_cli_session(&home),
-    )
-    .expect("managed run stays an Agent even when input passes orchestrator");
-    assert_eq!(kept_agent["notice"]["author"]["class"], "agent");
-    assert_eq!(kept_agent["notice"]["author"]["task_id"], task);
-    assert_eq!(kept_agent["notice"]["author"]["run_id"], valid_run);
-
-    // An invalid managed run binding also must not fall through to orchestrator.
-    refused(
-        call_with_env(
-            &home,
-            &managed_pipeline_env(&sibling_run, Some(&task)),
-            "orbit.notice.post",
-            json!({
-                "kind": "info",
-                "title": "Invalid binding must not fall through",
-                "orchestrator": "sol"
-            }),
-            ToolEntryPoint::Mcp,
-            session(McpCapability::Agent),
-        ),
-        "notice_poster_unidentified",
-    );
+    // A managed call without a host binding cannot fall back to an operator
+    // session or to orchestrator attribution in the request.
+    for (entry, caller) in [
+        (ToolEntryPoint::Cli, local_cli_session(&home)),
+        (ToolEntryPoint::Mcp, session(McpCapability::Agent)),
+        (ToolEntryPoint::Mcp, session(McpCapability::Operator)),
+    ] {
+        for env in [
+            managed_pipeline_env(&valid_run, Some(&task)),
+            Env::from_vars([("ORBIT_MANAGED_RUN_CONTEXT", "1")]),
+        ] {
+            refused(
+                call_with_env(
+                    &home,
+                    &env,
+                    "orbit.notice.post",
+                    json!({
+                        "kind": "info",
+                        "title": "Unattested activity",
+                        "linked_task": task,
+                        "orchestrator": "sol"
+                    }),
+                    entry,
+                    caller.clone(),
+                ),
+                "notice_poster_unidentified",
+            );
+        }
+    }
 
     // Ensure the fixture config's configured crew ("sol") really works when unbound.
     let unbound_orch = call_with_env(
@@ -638,98 +470,6 @@ pub(super) fn managed_run_notice_authority_preserves_fail_closed_rejections() {
 }
 
 #[cfg(unix)]
-pub(super) fn bundled_activity_notice_uses_selected_task_and_refuses_ambiguity() {
-    let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
-    let runtime = runtime_at(root.path());
-    let first = add_task(&runtime, "First bundled task");
-    let active = add_task(&runtime, "Active bundled task");
-    let run = insert_run(
-        &runtime,
-        "task_pr_pipeline",
-        Some(json!({"task_ids": [first, active]})),
-    );
-    let env = dispatched_agent_implement_env(
-        &runtime,
-        root.path(),
-        &run,
-        Some(&active),
-        json!({
-            "task_ids": [first, active],
-            "task_id": active,
-            "workspace_path": root.path().join("repo")
-        }),
-        &[],
-    );
-    let post = |env: &Env, title: &str| {
-        call_with_env(
-            &runtime,
-            env,
-            "orbit.notice.post",
-            json!({"kind": "info", "title": title, "linked_task": active}),
-            ToolEntryPoint::Cli,
-            local_cli_session(&runtime),
-        )
-    };
-    let notice = post(&env, "Selected activity").unwrap();
-    assert_eq!(notice["notice"]["author"]["task_id"], active);
-    let id = notice["notice"]["id"].as_str().unwrap();
-    let mismatched = Env::from_vars([
-        ("ORBIT_MANAGED_RUN_CONTEXT", "1"),
-        ("ORBIT_RUN_ID", run.as_str()),
-        ("ORBIT_TASK_ID", first.as_str()),
-        ("ORBIT_ACTIVE_TASK_ID", active.as_str()),
-    ]);
-    refused(
-        post(&mismatched, "Wrong task"),
-        "notice_poster_unidentified",
-    );
-    refused(
-        call_with_env(
-            &runtime,
-            &mismatched,
-            "orbit.notice.close",
-            json!({"id": id, "reason": "cleared"}),
-            ToolEntryPoint::Cli,
-            local_cli_session(&runtime),
-        ),
-        "notice_poster_unidentified",
-    );
-    let ambiguous = dispatched_agent_implement_env(
-        &runtime,
-        root.path(),
-        &run,
-        None,
-        json!({"task_ids": [first, active], "workspace_path": root.path().join("repo")}),
-        &[],
-    );
-    refused(
-        post(&ambiguous, "Ambiguous activity"),
-        "notice_poster_unidentified",
-    );
-    refused(
-        call_with_env(
-            &runtime,
-            &ambiguous,
-            "orbit.notice.close",
-            json!({"id": id, "reason": "cleared"}),
-            ToolEntryPoint::Cli,
-            local_cli_session(&runtime),
-        ),
-        "notice_poster_unidentified",
-    );
-    let closed = call_with_env(
-        &runtime,
-        &env,
-        "orbit.notice.close",
-        json!({"id": id, "reason": "cleared"}),
-        ToolEntryPoint::Cli,
-        local_cli_session(&runtime),
-    )
-    .unwrap();
-    assert_eq!(closed["notice"]["closed"]["by"]["task_id"], active);
-}
-
-#[cfg(unix)]
 pub(super) fn ambiguous_bundle_dispatch_drops_inherited_task_identity() {
     crate::scenarios::require_isolated_mutable_fixture(
         "ambiguous_bundle_dispatch_drops_inherited_task_identity",
@@ -743,25 +483,11 @@ pub(super) fn ambiguous_bundle_dispatch_drops_inherited_task_identity() {
         "task_pr_pipeline",
         Some(json!({"task_ids": [first, second]})),
     );
-    let selected = dispatched_agent_implement_env(
+    let notice = call_with_activity(
         &runtime,
-        root.path(),
-        &run,
-        Some(&second),
-        json!({
-            "task_ids": [first, second],
-            "task_id": second,
-            "workspace_path": root.path().join("repo")
-        }),
-        &[],
-    );
-    let notice = call_with_env(
-        &runtime,
-        &selected,
         "orbit.notice.post",
         json!({"kind": "info", "title": "Selected bundled activity", "linked_task": second}),
-        ToolEntryPoint::Cli,
-        local_cli_session(&runtime),
+        activity(&run, Some(&second)),
     )
     .unwrap();
     let id = notice["notice"]["id"].as_str().unwrap();
@@ -909,29 +635,35 @@ pub(super) fn managed_notice_mutations_follow_the_host_attested_activity() {
         }
     }
 
-    // Conflicting dispatch metadata attests no task: the CLI route refuses too.
+    // Even matching metadata for a real run and task cannot post, corroborate
+    // or close through the nested CLI or MCP adapter.
+    let matching = managed_pipeline_env(&run, Some(&selected));
     let conflicting = Env::from_vars([
         ("ORBIT_MANAGED_RUN_CONTEXT", "1"),
         ("ORBIT_RUN_ID", run.as_str()),
         ("ORBIT_TASK_ID", first.as_str()),
         ("ORBIT_ACTIVE_TASK_ID", selected.as_str()),
     ]);
-    for (tool, input) in [
-        ("orbit.notice.post", post.clone()),
-        ("orbit.notice.close", json!({"id": id, "reason": "cleared"})),
-    ] {
-        refused(
-            call_with_env(
-                &runtime,
-                &conflicting,
-                tool,
-                input,
-                ToolEntryPoint::Cli,
-                local_cli_session(&runtime),
-            ),
-            "notice_poster_unidentified",
-        );
-        assert_eq!(notice_state(&runtime, &id), before, "conflicting {tool}");
+    for env in [&matching, &conflicting] {
+        for (entry, caller) in [
+            (ToolEntryPoint::Cli, local_cli_session(&runtime)),
+            (ToolEntryPoint::Mcp, session(McpCapability::Agent)),
+        ] {
+            for (tool, input) in [
+                ("orbit.notice.post", post.clone()),
+                ("orbit.notice.close", json!({"id": id, "reason": "cleared"})),
+                (
+                    "orbit.notice.close",
+                    json!({"dedupe_key": "bundle-fixture", "reason": "cleared"}),
+                ),
+            ] {
+                refused(
+                    call_with_env(&runtime, env, tool, input, entry, caller.clone()),
+                    "notice_poster_unidentified",
+                );
+                assert_eq!(notice_state(&runtime, &id), before, "{entry:?} {tool}");
+            }
+        }
     }
 
     // Another member's attested activity is a valid poster, but not the

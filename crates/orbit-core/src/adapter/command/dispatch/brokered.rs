@@ -1,8 +1,8 @@
 //! The host side of a run's plugin broker: execute one authenticated request
 //! — a plugin tool, one of the read-only `github.*` built-ins that need the
 //! host's `gh` credentials, one of a claimed worker's owner calls that need
-//! the claim's owner route, a resident cycle's ship or re-pilot whose
-//! worker must not start inside the cycle's sandbox, its requeue, a resident cycle's
+//! the claim's owner route, a managed activity's notice write, a resident cycle's ship
+//! or re-pilot whose worker must start outside the cycle's sandbox, its requeue, a resident cycle's
 //! decision raise whose lock that sandbox mounts read-only, or a resident
 //! cycle's landing or move to `done` that reads the forge — through the audited
 //! dispatch, under the run's authority
@@ -19,10 +19,10 @@ use crate::app::resident;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use orbit_common::OrbitError;
 use orbit_common::governance::decision::DecisionVerb;
 use orbit_common::governance::task::TaskVerb;
 use orbit_common::governance::workflow::WorkflowVerb;
+use orbit_common::{NoticeRefusalCode, OrbitError};
 use orbit_engine::PluginBrokerRun;
 use orbit_tools::{ActivityBinding, OrbitBuiltinAction, ToolContext};
 use orbit_types::tool::{McpCapability, ToolSessionContext, is_claimed_owner_tool};
@@ -290,10 +290,13 @@ impl BrokerDispatch for RunDispatch {
                 audit,
                 |input| {
                     checked?;
+                    let notice_write = super::is_notice_mutation(&tool);
                     // A claimed worker's owner calls reach the owner over
                     // the claim's route, which the sandbox cannot open; the
                     // broker carries exactly the closed allowlist of them.
-                    if is_claimed_owner_tool(&tool) {
+                    if is_claimed_owner_tool(&tool)
+                        && (!notice_write || self.runtime.run().claim_owner().is_some())
+                    {
                         self.runtime.ensure_tool_agent_facing(&tool)?;
                         self.refuse_outside_activity_policy(&tool)?;
                         if let Some(policy) = &run.tool_deny_policy
@@ -373,15 +376,18 @@ impl BrokerDispatch for RunDispatch {
                             CapabilityEnforcement::McpSessionOnly,
                         );
                     }
-                    // A built-in tool is answered by the nested `orbit`
-                    // itself; the broker exists to run plugin backends and
-                    // the closed set of reads that need the host's `gh`
-                    // credentials.
+                    if notice_write && run.job_run_id.is_none() {
+                        return Err(OrbitError::notice_refused(
+                            NoticeRefusalCode::PosterUnidentified,
+                            "this activity has no host-attested job run",
+                        ));
+                    }
                     if self.runtime.tool_registry().plugin_binding(&tool).is_none()
                         && !is_host_credentialed_read(&tool)
+                        && !notice_write
                     {
                         return Err(OrbitError::PolicyDenied(format!(
-                            "the plugin broker runs plugin tools, the read-only github.* tools, \
+                            "the plugin broker runs plugin tools, the read-only github.* tools, managed notice writes, \
                              a claimed worker's owner calls and a \
                              resident cycle's approved host-side actions \
                              only; '{tool}' is none of these"

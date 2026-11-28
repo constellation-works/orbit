@@ -37,7 +37,7 @@ operation uses (`CallerEnvelope`, `crates/orbit-common/src/governance/authorizat
 | Class | Resolved when | Recorded `author` |
 |---|---|---|
 | `operator` | the caller holds the `Operator` capability and is not bound to a managed run (interactive CLI, an `orbit mcp serve --operator` session, the dashboard's operator session) | `class: operator`, `machine_id` |
-| `agent` | the caller is bound to a managed run: a validated worker binding (`WorkerInvocation`) or a run-stamped tool context naming a task. The bound task is the only task it may act for | `class: agent`, the bound `task_id` and `run_id`, the run's crew and model |
+| `agent` | the caller has a validated worker binding (`WorkerInvocation`) or a host-attested activity binding. The bound task is the only task it may act for | `class: agent`, the bound `task_id` and `run_id`, the run's crew and model |
 | `orchestrator` | an `Agent`-capability session **not** bound to a managed run that carries orchestrator attribution: `orbit mcp serve --orchestrator <crew>`, or a per-call `orchestrator` naming a configured crew | `class: orchestrator`, `crew`, `model` |
 | refused | anything else: an unbound agent session without orchestrator attribution, an unknown caller | — (`notice_poster_unidentified`) |
 
@@ -45,6 +45,14 @@ Order matters: a run-bound session is `agent` even if it also carries orchestrat
 Managed worker sessions have `Operator` removed when the binding is installed; an unbound session
 with `Operator` capability resolves as `operator` before orchestrator attribution. The `by` field
 of the original direction is this `author.class`; the input has no field that sets it.
+
+Nested CLI and MCP notice mutations use the run's peer-authenticated broker. The broker
+checks the activity's tool policy and supplies its own job-run and task binding. A resident
+cycle may resolve its single mandate from an attested run alone. Worker calls use the
+validated owner route. Managed invocations without one of these trusted associations
+refuse the write. This includes unsandboxed nested calls without a validated worker binding.
+Process metadata can identify a managed route for refusal or routing. The host binding
+decides the run and task that may act.
 
 **Honest limit.** Orchestrator attribution is self-declared today ([ORB-11313] made it
 attribution, not a grant). So `orchestrator` is "an unmanaged agent session that says which crew
