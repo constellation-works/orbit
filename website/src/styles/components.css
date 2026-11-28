@@ -236,6 +236,16 @@
 }
 
 /* ------------------------------------------------------------------------
+   Previous/Next pagination. Starlight's default title size sits above the
+   site scale and outweighs the page's own h2; cap it at the h2 token
+   (DESIGN.md §3.2). The extra element in the selector outranks Starlight's
+   scoped rule regardless of stylesheet order.
+   ------------------------------------------------------------------------ */
+.pagination-links a .link-title {
+  font-size: var(--orbit-text-h2);
+}
+
+/* ------------------------------------------------------------------------
    Changelog. The Markdown is transformed at build time into release
    disclosures. Its own H1 duplicates the page title; the source stays frozen.
    ------------------------------------------------------------------------ */
@@ -313,7 +323,7 @@
   border-bottom: 0;
   border-radius: var(--orbit-radius) var(--orbit-radius) 0 0;
   color: var(--orbit-caution-text);
-  font-size: var(--orbit-text-body);
+  font-size: var(--orbit-text-lede);
   margin-top: var(--orbit-space-5);
   padding: var(--orbit-space-3) var(--orbit-space-4) var(--orbit-space-1);
 }
@@ -328,7 +338,7 @@
 }
 
 .orbit-release-body > h3[id^='highlights'] {
-  font-size: var(--orbit-text-body);
+  font-size: var(--orbit-text-lede);
   margin-top: var(--orbit-space-5);
 }
 

@@ -342,7 +342,7 @@
 
 .orbit-landing :is(.orbit-steps, .orbit-fact) h3 {
   color: var(--orbit-text);
-  font-size: var(--orbit-text-body);
+  font-size: var(--orbit-text-lede);
   font-weight: 600;
   line-height: 1.5;
 }
