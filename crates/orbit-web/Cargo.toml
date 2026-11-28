@@ -39,6 +39,8 @@ orbit-core = { path = "../orbit-core" }
 orbit-registry = { path = "../orbit-registry" }
 serde.workspace = true
 serde_json.workspace = true
+# Plugin page frame policy: one script-src hash per script written.
+sha2.workspace = true
 rustls.workspace = true
 tokio-rustls.workspace = true
 # Framed lease reads, timeouts and the SSH browser-credential transport.

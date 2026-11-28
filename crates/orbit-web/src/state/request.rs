@@ -258,6 +258,12 @@ impl PluginPanelWs {
             .get_or_compute(&self.runtime, key, ttl, read)
             .await
     }
+
+    /// Identity of the selected runtime, so page calls share an execution
+    /// only within one workspace runtime.
+    pub(crate) fn runtime_identity(&self) -> usize {
+        Arc::as_ptr(&self.runtime) as usize
+    }
 }
 
 impl FromRequestParts<DashboardState> for PluginPanelWs {

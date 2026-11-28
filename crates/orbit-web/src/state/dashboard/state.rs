@@ -77,6 +77,9 @@ pub(in crate::state) struct StateInner {
     /// Per-server single-flight TTL memo for audited plugin panel reads.
     /// Keyed by `(namespace, panel)`.
     plugin_panels: RuntimeMemo<(String, String)>,
+    /// Per-server plugin page documents and the page-call executions in
+    /// flight, with each page's bound on them.
+    plugin_pages: Arc<crate::plugin_page::PageServing>,
     /// Per-server memo for `/api/diagnostics/errors`, keyed by time range and
     /// bounded row limit. Collapses overlapping Errors-tab polls into one scan.
     diagnostics_errors: RuntimeMemo<(String, usize)>,
@@ -268,6 +271,7 @@ impl DashboardState {
                 cost: RuntimeMemo::new("managed-execution cost"),
                 routines: RuntimeMemo::new("routine health"),
                 plugin_panels: RuntimeMemo::new("plugin panel execution"),
+                plugin_pages: Arc::default(),
                 diagnostics_errors: RuntimeMemo::new("diagnostics errors aggregation"),
                 diagnostics_friction: RuntimeMemo::new("diagnostics friction aggregation"),
                 metrics_trends: RuntimeMemo::new("metrics trends aggregation"),
@@ -390,6 +394,11 @@ impl DashboardState {
     /// Process-local plugin panel memo shared by every dashboard tab.
     pub(crate) fn plugin_panel_memo(&self) -> &RuntimeMemo<(String, String)> {
         &self.inner.plugin_panels
+    }
+
+    /// Process-local plugin page documents and page-call executions.
+    pub(crate) fn plugin_pages(&self) -> &Arc<crate::plugin_page::PageServing> {
+        &self.inner.plugin_pages
     }
 
     /// Process-local codebase analytics scan cache for this server instance.

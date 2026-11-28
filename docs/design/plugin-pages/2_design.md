@@ -19,7 +19,8 @@ related_artifacts: [ORB-29504]
 The operator approved this design on 2026-11-27 ([ORB-29504]). The page contract in sections 1
 and 2 was revised after it was measured in two browser engines ([ORB-29532]), and the operator
 approved the revision the same day ([ORB-29573]).
-Section 1, the manifest, is built ([ORB-29534]). The rest describes what the later builds
+Section 1, the manifest, is built ([ORB-29534]), and so are the two routes of section 2 and
+the call route and kit of section 3 ([ORB-29536]). The rest describes what the later builds
 make true. The problem, the goal and the build tasks are in the
 [overview](./1_overview.md). The plugin manifest,
 grants and tool dispatch it builds on are the [plugin standard](../plugins/1_scope.md)'s.
@@ -95,7 +96,11 @@ form-action 'none'; base-uri 'none'; frame-ancestors 'self'
 ```
 
 `script-src` lists one hash per script Orbit wrote, computed from the bytes it wrote. The
-policy is therefore fixed by the bundle and the kit version.
+policy is therefore fixed by the bundle and the kit version. The document is written once
+per bundle digest from the bytes the plugin load hashed and served from memory, as
+`text/html; charset=utf-8` with `nosniff` and `no-store`. An unknown page, a page whose
+files fail their checks or digest, and a plugin that is inactive or disabled for the
+workspace each answer 404 with the reason.
 
 What that gives:
 
@@ -123,15 +128,22 @@ The page talks to the dashboard by `postMessage`, and the dashboard talks to the
 page    →  dashboard   {v: 1, id, call: "mail_log", input: {limit: 50, with: "0-chief"}}
 dashboard →  server    POST /api/plugins/<ns>/pages/<page>/call
 dashboard →  page      {v: 1, id, ok: true, output: …}   or   {v: 1, id, ok: false, error: {code, message}}
+dashboard →  page      {v: 1, init: {theme, host, workspace, operator, query}}
+page    →  dashboard   {v: 1, query: "…"}
 ```
+
+The call route takes `{tool, input}` and answers with a panel read's body (`output`, plus
+`truncated` and `diagnostic` over the cap). A refused tool is a 403 `tool_refused`, input
+that does not fit the schema a 400 `input_invalid`, and a call over the bound a 429 `busy`;
+none of them runs anything.
 
 - **The server decides.** It checks that the page declares the tool, that the tool belongs to
   the plugin and is `read_only`, and that the input fits the tool's schema. Then it runs the
   call through the audited tool dispatch, which is what a panel read does today, plus input.
   The dashboard script is a relay and is not trusted to filter.
-- **Calls are bounded.** Identical calls in flight share one execution. A page has a small
-  number of executions at once, and one over the bound is refused with `busy`. Output is
-  capped as a panel's is.
+- **Calls are bounded.** Identical calls in flight share one execution. A page has at most
+  four executions at once in a workspace, and one over the bound is refused with `busy`.
+  Output is capped as a panel's is.
 - **The dashboard tells the page where it is.** On load it sends the theme, the host, the
   workspace and whether the session is an operator's. A workspace or host change reloads the
   frame.
@@ -271,6 +283,7 @@ whose manifest has pages lists them in the consent prompt.
 - [ORB-14679] — added `/api/on/<host>/…` forwarding to another host's dashboard API.
 - [ORB-29504] — this design.
 - [ORB-29534] — built the manifest key, validation, the bundle digest and the listings.
+- [ORB-29536] — built the document and call routes and the kit.
 - [ORB-29532] — measured the initial frame policy in Chromium and WebKit, then validated the one-document policy in Chromium, WebKit and Firefox.
 - [ORB-29573] — revised the page contract to one document after that measurement.
 

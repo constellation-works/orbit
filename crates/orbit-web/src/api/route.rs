@@ -375,6 +375,17 @@ pub(crate) fn router(state: crate::state::DashboardState) -> Router<crate::state
             "/plugins/{namespace}/panels/{panel}",
             get(plugins::read_panel),
         )
+        // A plugin page as one document under its frame policy, and the
+        // declared read-only tool calls it makes [plugin-pages §2–§3]. No
+        // route serves a single page file or the kit.
+        .route(
+            "/plugins/{namespace}/pages/{page}/",
+            get(plugins::read_page),
+        )
+        .route(
+            "/plugins/{namespace}/pages/{page}/call",
+            post(plugins::call_page),
+        )
         .layer(middleware::map_response(json_client_error))
         .layer(middleware::from_fn_with_state(
             remote_access,

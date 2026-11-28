@@ -102,6 +102,10 @@ mod pagination;
 #[path = "http_api/permalink.rs"]
 mod permalink;
 
+#[path = "http_api/plugin_page.rs"]
+#[cfg(unix)]
+mod plugin_page;
+
 #[path = "http_api/plugins.rs"]
 #[cfg(unix)]
 mod plugins;
