@@ -75,8 +75,9 @@ asks for it. Keep the brief's evidence artifacts and execution summary.
   in `make ci-fast` and full CI. The command uses the same bounded pool, names
   failing guards, returns a nonzero status on failure, and prints per-guard and
   total wall times. This early check does not replace any required delivery gate.
-  For a diff, run it and fix its findings even when `make ci-fast` is reserved for
-  pipeline final validation. Run `cargo fmt --all -- --check` in Rust workspaces,
+  For a diff, run it and fix its findings even when `make ci-guards` or
+  `make ci-fast` is reserved for pipeline final validation. Run
+  `cargo fmt --all -- --check` in Rust workspaces,
   including test targets. Include changed test files when applying rustfmt fixes,
   and check them explicitly with `rustfmt --check --edition <edition> <path> ...`
   using their crate's edition; do not limit formatting to production files.

@@ -394,11 +394,17 @@ spec:
       envelope. It is absent when empty and is not an `orbit.task.show` field.
       When it is present, the pipeline runs each listed command itself,
       outside the agent sandbox, on the final
-      committed candidate. For a diff, do not run a listed command whole or
-      defer it: run focused checks (tests, formatter, linter for what you
+      committed candidate. For a diff, do not run a listed heavy command whole
+      as a blanket gate (`make ci`, `make ci-fast`, `make ci-test-affected`,
+      or another full-workspace suite) and do not defer a listed command:
+      run focused checks (tests, formatter, linter for what you
       changed) that show each criterion, plus every workspace-required check
-      the list does not name, and record each listed command as `not_run`
-      (pipeline final validation), never as passed. A clean no-op or
+      the list does not name. Still run any listed command the workspace guide
+      names as a pre-handoff check for a diff (such as `make ci-guards`) and
+      fix its findings before handoff; the pipeline still runs every listed
+      command on the committed candidate. Record each listed command as `not_run`
+      (pipeline final validation), never as passed — a pre-handoff run of the
+      same command does not count as final validation. A clean no-op or
       already-landed handoff skips pipeline validation, so there you run and
       record every required check. Without the field, you own every check.
     - Before handing off a diff, also run the pre-handoff checks the
