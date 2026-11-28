@@ -862,6 +862,70 @@ fn newer_creation_grant_reaches_partition_and_ungranted_missing_path_stays_gap()
     verify_pipeline_delivers_current_creation_selectors(&workspace, &pipeline_task, &expected);
 }
 
+/// A bounded migration: verified existing sources the change deletes or edits
+/// plus exact granted destinations. Retaining the grants is additive to the
+/// pilot's own selection of the existing lock footprint, not a substitute.
+fn migration_footprint_keeps_existing_targets_beside_granted_creations() {
+    let workspace = Workspace::new();
+    let old_scope = "file:docs/old/1_scope.md";
+    let old_design = "file:docs/old/2_design.md";
+    let read_only = "file:docs/reference.md";
+    workspace.commit("docs/old/1_scope.md", "# scope\n");
+    workspace.commit("docs/old/2_design.md", "# design\n");
+    workspace.commit("docs/reference.md", "# reference\n");
+    let task = workspace.scoped_task(
+        "migration",
+        &[
+            old_scope, old_design, read_only, NEW_MODULE, NEW_TEST, NEW_DIR,
+        ],
+        true,
+    );
+    let creations = owned(&[NEW_MODULE, NEW_TEST, NEW_DIR]);
+    let prepared = workspace.prepare(&[&task.id]);
+    assert_eq!(
+        prepared["partitions"][0]["context_creation_selectors"][&task.id],
+        json!(sorted(creations.clone())),
+        "{prepared}"
+    );
+
+    // The pilot selects both the existing changes and the granted targets,
+    // omitting only the read-only reference: the stored footprint holds both
+    // sets and the deliberate omission stands.
+    let applied = workspace.apply_one(
+        &prepared,
+        &task.context_files,
+        &[old_scope, old_design, NEW_MODULE, NEW_TEST, NEW_DIR],
+    );
+    assert_eq!(outcome(&applied)["outcome"], "applied", "{applied}");
+    assert!(
+        applied["tasks"][0]
+            .get("context_creation_retained")
+            .is_none()
+    );
+    let stored = workspace.runtime.get_task(&task.id).unwrap();
+    assert_eq!(
+        sorted(stored.context_files.clone()),
+        sorted(owned(&[
+            old_scope, old_design, NEW_MODULE, NEW_TEST, NEW_DIR
+        ]))
+    );
+
+    // A pilot that returns only the creation targets is not rejected: apply
+    // keeps the grants and the existing selectors it omitted stay omitted, so
+    // the instructions must have the pilot select the existing changes.
+    let prepared = workspace.prepare(&[&task.id]);
+    let creations_only = workspace.apply_one(&prepared, &stored.context_files, &[NEW_MODULE]);
+    assert_eq!(
+        outcome(&creations_only)["outcome"],
+        "applied",
+        "{creations_only}"
+    );
+    assert_eq!(
+        sorted(workspace.runtime.get_task(&task.id).unwrap().context_files),
+        sorted(creations)
+    );
+}
+
 // Related boundary scenarios share the isolated table fixture.
 crate::scenario_table!(
     declared_creation_targets_survive_prepare_apply_restart_and_replay_scenarios,
@@ -873,5 +937,6 @@ crate::scenario_table!(
     creation_grant_changed_after_preparation_supersedes_the_write,
     revoke_and_same_scope_reauthorization_supersedes_an_older_preparation,
     benign_comment_and_artifact_writes_preserve_preparation,
-    newer_creation_grant_reaches_partition_and_ungranted_missing_path_stays_gap
+    newer_creation_grant_reaches_partition_and_ungranted_missing_path_stays_gap,
+    migration_footprint_keeps_existing_targets_beside_granted_creations
 );
