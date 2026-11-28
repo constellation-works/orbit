@@ -1,5 +1,5 @@
 # Superseded `task_pilot` default, kept as a provenance shape only — see
-# `SUPERSEDED_ROUTINE_TEMPLATES` in `application/routines/seed.rs`.
+# `SUPERSEDED_ROUTINE_TEMPLATES` in `app/routine/seed.rs`.
 schemaVersion: 1
 name: __ORBIT_ROUTINE_NAME__
 description: >

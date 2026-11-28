@@ -2,7 +2,7 @@
 # dreaming routine; the job it targeted, `crew_memory_dream_pipeline`, still
 # ships. Kept as a provenance shape only, so `orbit workspace sync` can tell an
 # Orbit-seeded copy from an operator-authored one — see
-# `RETIRED_ROUTINE_FILES` in `application/routines/seed.rs`.
+# `RETIRED_ROUTINE_FILES` in `app/routine/seed.rs`.
 schemaVersion: 1
 name: __ORBIT_ROUTINE_NAME__
 description: >
