@@ -14,6 +14,23 @@ fn diagnostic_workspace(name: &str) -> TestWorkspace {
     TestWorkspace::new(name, TaskSeed::new("")).with_child_log_filter(CHILD_LOG_FILTER)
 }
 
+/// `run readiness` samples live host CPU, I/O, memory and disk pressure, and
+/// the throttle those samples close lowers its free slots. With the throttle
+/// off, no live pressure sample reaches the snapshot, so two invocations do not
+/// differ with the host load between them.
+fn pin_readiness_to_fixture(workspace: &TestWorkspace) {
+    workspace.run(
+        &[
+            "config",
+            "set",
+            "workflow.resource_throttle.enabled",
+            "false",
+            "--global",
+        ],
+        "disable the live resource throttle",
+    );
+}
+
 #[test]
 fn task_description_keeps_fitting_tokens_and_wide_graphemes() {
     use unicode_width::UnicodeWidthStr;
@@ -71,6 +88,7 @@ fn task_description_keeps_fitting_tokens_and_wide_graphemes() {
 #[test]
 fn diagnostic_prose_wraps_on_terminals_and_preserves_pipe_and_json() {
     let workspace = diagnostic_workspace("diagnostic-prose");
+    pin_readiness_to_fixture(&workspace);
     let timestamp = regex::Regex::new(r"\d{4}-\d\d-\d\dT[0-9:.]+(?:Z|[+-]\d\d:\d\d)").unwrap();
     let normalize = |text: &str| {
         timestamp
@@ -160,6 +178,7 @@ fn diagnostic_prose_wraps_on_terminals_and_preserves_pipe_and_json() {
 #[test]
 fn task_show_prose_wraps_on_terminals_and_preserves_pipe_and_json() {
     let workspace = TestWorkspace::new("task-show-prose", TaskSeed::new(""));
+    pin_readiness_to_fixture(&workspace);
     let mut seed = workspace.task_seed("Wrapped task show");
     seed.description = "A scratch task for review with a long description that should wrap nicely at narrow widths and so every reader can see the complete sentence and its continuation across a range of terminal widths without losing the last words.\nA second paragraph keeps its own explicit line break.".into();
     seed.acceptance_criteria = vec![
