@@ -20,6 +20,8 @@
 //!   dashboard's dialog sends back; nothing runs.
 //! * `POST /api/plugins/<ns>/pages/<page>/actions/run` — run that action
 //!   once, with the confirmation, after the operator confirmed it.
+//! * `POST /api/plugins/<ns>/pages/<page>/actions/cancel` — release a
+//!   confirmation the operator did not use; nothing runs.
 //!
 //! A panel source is always a `read_only` tool: the manifest cannot declare
 //! a panel over a mutating one (`orbit plugin validate` refuses it, naming
@@ -39,7 +41,9 @@ use axum::extract::{Path, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Json, Response};
 use orbit_common::OrbitError;
-use orbit_common::governance::authorization::{DASHBOARD_PLUGIN_DISABLE, DASHBOARD_PLUGIN_ENABLE};
+use orbit_common::governance::authorization::{
+    DASHBOARD_PLUGIN_DISABLE, DASHBOARD_PLUGIN_ENABLE, DASHBOARD_PLUGIN_PAGE_ACTION,
+};
 use orbit_core::Core;
 use orbit_core::app::plugin::{
     Command, DashboardScope, DashboardToggle, Outcome, PageActionRun, exec,
@@ -47,7 +51,7 @@ use orbit_core::app::plugin::{
 use orbit_core::app::plugin::{PluginSummary, PluginSummaryJsonProfile, plugin_summary_json};
 use serde_json::{Value, json};
 
-use super::routines::{action_capability, authorization_denied};
+use super::routines::{action_capability, authorization_denied, authorized_caller};
 use super::{blocking, not_found, validate_id};
 use crate::plugin_page::{ActionBinding, CallRefused, ConfirmationRefused};
 use crate::state::{DashboardState, PluginPanelWs, WsCore};
@@ -461,6 +465,49 @@ pub(super) async fn confirm_page_action(
             OrbitError::Execution(format!("action confirmation: {message}")),
         ),
     }
+}
+
+/// Release a confirmation the operator did not use (Cancel, Escape, a frame
+/// that went away, or another dialog already open), so the slot is free at
+/// once. Idempotent: a token that is unknown, spent, expired or issued for
+/// another request answers `released: false`. Nothing runs and no audit row
+/// is written, as for the check that issued it.
+pub(super) async fn cancel_page_action(
+    State(state): State<DashboardState>,
+    workspace: PluginPanelWs,
+    Path((namespace, page)): Path<(String, String)>,
+    Json(body): Json<Value>,
+) -> Response {
+    for (label, value) in [("plugin", &namespace), ("page", &page)] {
+        if let Err(message) = validate_id(value) {
+            return super::bad_request(format!("{label} {message}"));
+        }
+    }
+    if let Err(denial) = authorized_caller(&DASHBOARD_PLUGIN_PAGE_ACTION, state.operator_session())
+    {
+        return authorization_denied(denial);
+    }
+    let (tool, input) = match action_request(&body) {
+        Ok(request) => request,
+        Err(response) => return *response,
+    };
+    let released = body
+        .get("confirmation")
+        .and_then(Value::as_str)
+        .filter(|token| !token.is_empty())
+        .is_some_and(|token| {
+            state.plugin_pages().release_confirmation(
+                token,
+                &ActionBinding {
+                    runtime: workspace.runtime_identity(),
+                    namespace,
+                    page,
+                    tool,
+                    input,
+                },
+            )
+        });
+    Json(json!({"released": released})).into_response()
 }
 
 pub(super) async fn run_page_action(

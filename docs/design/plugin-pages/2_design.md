@@ -105,6 +105,7 @@ bytes served are the bytes that were hashed.
 | `POST /api/plugins/<ns>/pages/<page>/call` | Runs one tool the page declares, with input |
 | `POST /api/plugins/<ns>/pages/<page>/actions/confirm` | Checks one action and issues its one-time confirmation; runs nothing |
 | `POST /api/plugins/<ns>/pages/<page>/actions/run` | Spends the confirmation and runs the action once |
+| `POST /api/plugins/<ns>/pages/<page>/actions/cancel` | Releases a confirmation the operator did not use; runs nothing |
 
 **Orbit writes the document.** In order: the kit's stylesheet and each style, each in a
 `style` element; the markup; the kit's script and each script, each in a `script` element.
@@ -229,7 +230,12 @@ established outside the page ([decision](./4_decisions.md#plugin-code-acts-only-
    the rest of the document, the frame included, inert, so the page cannot draw over it,
    dismiss it or confirm it. Run is armed only after the dialog has been visible for
    800 ms, and only a trusted click confirms; Cancel, Escape and the frame unloading cancel.
-   One action dialog is open at a time, and a page asking again meanwhile gets `busy`.
+   One action waits for the operator at a time, from its check to the operator's answer,
+   and a page asking again meanwhile gets `busy` before it can take a confirmation. A
+   confirmation the operator did not use (Cancel, Escape, the frame unloading or changing)
+   is released at once by `.../actions/cancel`, sent with the same `{tool, input,
+   confirmation}`; it frees the slot only for the request it was issued for, answers
+   `released: false` for any other, and runs nothing.
 3. On Run, the dashboard sends `{tool, input, confirmation}` to `.../actions/run`. The
    server spends the confirmation first, whatever the request turns out to be, then
    requires the operator session again, refuses a missing, unknown, used, expired or

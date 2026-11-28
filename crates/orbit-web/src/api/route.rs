@@ -404,6 +404,11 @@ pub(crate) fn router(state: crate::state::DashboardState) -> Router<crate::state
             "/plugins/{namespace}/pages/{page}/actions/run",
             post(plugins::run_page_action),
         )
+        // The dashboard releases a confirmation its operator did not use.
+        .route(
+            "/plugins/{namespace}/pages/{page}/actions/cancel",
+            post(plugins::cancel_page_action),
+        )
         .layer(middleware::map_response(json_client_error))
         .layer(middleware::from_fn_with_state(
             remote_access,

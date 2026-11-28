@@ -19,6 +19,9 @@ const WS: &str = "workspace=ws_http_fixture";
 
 const NS: &str = "acts";
 
+/// Unused confirmations the server holds at once.
+const CONFIRMATION_SLOTS: u64 = 32;
+
 const WITH_ACTIONS: &str = "        actions: [mutate]\n";
 
 /// A backend that records each run in `<control>/calls` and echoes its
@@ -127,6 +130,14 @@ fn run(server: &Server, body: Value) -> reqwest::blocking::Response {
         &format!("/api/plugins/{NS}/pages/overview/actions/run?{WS}"),
         body,
     )
+}
+
+fn cancel(server: &Server, body: Value) -> Value {
+    json_ok(server.send(
+        "POST",
+        &format!("/api/plugins/{NS}/pages/overview/actions/cancel?{WS}"),
+        body,
+    ))
 }
 
 fn confirmation(server: &Server, input: Value) -> String {
@@ -328,6 +339,83 @@ fn an_action_runs_once_only_with_a_confirmation_for_its_exact_input() {
                 "a call to an action through `call`",
             );
             assert_eq!(run_count(&control), 2, "only the read ran");
+        },
+    );
+}
+
+#[test]
+fn a_cancelled_or_abandoned_confirmation_frees_its_slot_and_runs_nothing() {
+    isolated(
+        "plugin_page_action::a_cancelled_or_abandoned_confirmation_frees_its_slot_and_runs_nothing",
+        || {
+            let fixture = Fixture::new();
+            let control = install(&fixture);
+            let server = fixture.server(true);
+
+            // Abandoned confirmations fill every slot; the next check is busy.
+            let tokens: Vec<String> = (0..CONFIRMATION_SLOTS)
+                .map(|value| confirmation(&server, json!({"value": value})))
+                .collect();
+            refused(
+                confirm(&server, "mutate", json!({"value": 99})),
+                429,
+                "busy",
+                "every slot held",
+            );
+
+            // A release for another input frees nothing.
+            let released = cancel(
+                &server,
+                json!({"tool": "mutate", "input": {"value": 99}, "confirmation": tokens[0]}),
+            );
+            assert_eq!(released["released"], false, "{released}");
+            refused(
+                confirm(&server, "mutate", json!({"value": 99})),
+                429,
+                "busy",
+                "a release for another input",
+            );
+
+            // Releasing one frees exactly one slot at once, and only once.
+            let body = json!({"tool": "mutate", "input": {"value": 0}, "confirmation": tokens[0]});
+            assert_eq!(cancel(&server, body.clone())["released"], true);
+            assert_eq!(
+                cancel(&server, body.clone())["released"],
+                false,
+                "a second release is a no-op"
+            );
+            let fresh = confirmation(&server, json!({"value": 99}));
+            refused(
+                confirm(&server, "mutate", json!({"value": 98})),
+                429,
+                "busy",
+                "the freed slot is taken again",
+            );
+
+            // The released confirmation no longer runs anything.
+            refused(
+                run(&server, body),
+                403,
+                "confirmation_refused",
+                "a released confirmation",
+            );
+            assert_eq!(run_count(&control), 0, "a cancel runs nothing");
+
+            // Releasing the rest leaves room, and a valid action still runs.
+            for (value, token) in tokens.iter().enumerate().skip(1) {
+                let released = cancel(
+                    &server,
+                    json!({"tool": "mutate", "input": {"value": value}, "confirmation": token}),
+                );
+                assert_eq!(released["released"], true, "{released}");
+            }
+            json_ok(run(
+                &server,
+                json!({"tool": "mutate", "input": {"value": 99}, "confirmation": fresh}),
+            ));
+            assert_eq!(run_count(&control), 1, "only the confirmed action ran");
+            let later = confirmation(&server, json!({"value": 7}));
+            assert!(!later.is_empty());
         },
     );
 }

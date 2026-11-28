@@ -43,9 +43,13 @@ const BRIDGE_VERSION = 1;
 // click the page timed to land where the button appears confirms nothing.
 const ACTION_ARM_MS = 800;
 
-// The open action dialog's settle function, or null. One action at a time:
-// a page asking again while one is open is answered `busy`.
+// The open action dialog's settle function, or null.
 let openActionDialog = null;
+
+// True from the moment an action is accepted until the operator has answered
+// it, server check included. One action waits at a time: a page asking again
+// meanwhile is answered `busy` before it can take server confirmation state.
+let actionAwaitingOperator = false;
 
 // Remembered route while Plugins is open or revisited in the same workspace:
 // `{ namespace, page, query }` or null when Installed is selected.
@@ -651,35 +655,19 @@ function replyError(frame, id, code, message) {
 }
 
 async function relayAction(frame, meta, id, tool, input) {
-  if (openActionDialog) {
+  if (actionAwaitingOperator) {
     replyError(frame, id, "busy", "another action is waiting for the operator");
     return;
   }
   const base = `/api/plugins/${encodeURIComponent(meta.namespace)}/pages/${encodeURIComponent(meta.page)}/actions`;
   const body = { tool, input: input === undefined ? {} : input };
-  let checked;
-  try {
-    checked = await requestJson(`${base}/confirm`, "POST", body, meta.visit);
-  } catch (error) {
-    replyError(frame, id, error?.code || "action_refused", error?.message || "the action was refused");
-    return;
-  }
-  if (frame !== activeFrame || !frame.isConnected) return;
-  if (openActionDialog) {
-    replyError(frame, id, "busy", "another action is waiting for the operator");
-    return;
-  }
-  const confirmed = await confirmPageAction(checked);
-  if (!confirmed) {
-    replyError(frame, id, "cancelled", "the operator cancelled the action");
-    return;
-  }
-  if (frame !== activeFrame || !frame.isConnected) return;
+  const confirmation = await awaitOperator(frame, meta, id, base, body);
+  if (!confirmation) return;
   try {
     const payload = await requestJson(
       `${base}/run`,
       "POST",
-      { ...body, confirmation: checked.confirmation },
+      { ...body, confirmation },
       meta.visit,
     );
     const reply = { id, ok: true, output: payload?.output };
@@ -688,6 +676,48 @@ async function relayAction(frame, meta, id, tool, input) {
     replyToFrame(frame, reply);
   } catch (error) {
     replyError(frame, id, error?.code || "call_failed", error?.message || "the action failed");
+  }
+}
+
+// Check the action with the server, then wait for the operator's answer in
+// the dashboard's dialog. Returns the confirmation to run with, or null when
+// nothing may run: the check refused, the operator cancelled, or the frame went
+// away. A confirmation issued but not returned is released on the server, so
+// an abandoned action never holds one of its few slots until expiry.
+async function awaitOperator(frame, meta, id, base, body) {
+  actionAwaitingOperator = true;
+  let issued = null;
+  let confirmed = false;
+  try {
+    let checked;
+    try {
+      checked = await requestJson(`${base}/confirm`, "POST", body, meta.visit);
+    } catch (error) {
+      replyError(frame, id, error?.code || "action_refused", error?.message || "the action was refused");
+      return null;
+    }
+    issued = checked.confirmation;
+    if (frame !== activeFrame || !frame.isConnected) return null;
+    if (!(await confirmPageAction(checked))) {
+      replyError(frame, id, "cancelled", "the operator cancelled the action");
+      return null;
+    }
+    if (frame !== activeFrame || !frame.isConnected) return null;
+    confirmed = true;
+    return issued;
+  } finally {
+    actionAwaitingOperator = false;
+    // The run spends a confirmed one; every other is given back.
+    if (issued && !confirmed) await releaseConfirmation(base, body, issued, meta.visit);
+  }
+}
+
+// Best effort: a release that fails leaves the confirmation to expire.
+async function releaseConfirmation(base, body, confirmation, visit) {
+  try {
+    await requestJson(`${base}/cancel`, "POST", { ...body, confirmation }, visit);
+  } catch {
+    // The server drops it at its own expiry.
   }
 }
 

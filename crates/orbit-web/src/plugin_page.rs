@@ -260,6 +260,27 @@ impl PageServing {
         Ok(token)
     }
 
+    /// Release an issued confirmation the operator did not use, so its slot
+    /// is free at once instead of at expiry. Only the confirmation's own
+    /// binding releases it, and releasing runs nothing. `true` when a slot
+    /// was freed; an unknown, spent, expired or differently bound token
+    /// frees nothing.
+    pub(crate) fn release_confirmation(&self, token: &str, binding: &ActionBinding) -> bool {
+        let mut confirmations = self
+            .confirmations
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if confirmations
+            .get(token)
+            .is_some_and(|held| held.binding == *binding)
+        {
+            confirmations.remove(token);
+            true
+        } else {
+            false
+        }
+    }
+
     /// Spend `token` for `binding`. The token is gone after this call
     /// whatever it answers, so it is never good twice. `Err` names why it
     /// does not confirm this request.
