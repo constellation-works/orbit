@@ -571,7 +571,8 @@ spec:
       the diff is partial; complete the task (a compiling subset is not
       done).
     - `conflict`: resolve the markers in `conflicting_paths` against the new
-      base.
+      base; when a binary or unmarked conflict names preserved side paths under
+      `.orbit/tmp/`, inspect those saved versions and write the resolved file.
     - `validation`: fix the `output` of the failing `command`.
     - `review`: address the findings in the review settlement comment or,
       when `interrupted_review` is set, in its `findings`. If
