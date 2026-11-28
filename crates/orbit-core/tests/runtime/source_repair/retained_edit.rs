@@ -405,11 +405,7 @@ fn adoption_refuses_a_git_link_beyond_the_status_limit() {
     assert_eq!(git(&checkout, &["status", "--porcelain"]), dirty);
 }
 
-/// A binary retained edit conflicting with a newer integration version leaves
-/// both versions recoverable in the same-PR successor (without leaving
-/// unmerged index entries that would block `git_commit`), while the original
-/// retained checkout stays intact.
-fn retained_binary_conflict_preserves_both_sides_in_successor() {
+fn before_landing_retained_fixture() -> (Fixture, PathBuf) {
     let (mut f, checkout, _) = escalated_completion_fixture();
     let config = f.repo.join(".orbit/config.toml");
     let policy = std::fs::read_to_string(&config)
@@ -428,6 +424,15 @@ fn retained_binary_conflict_preserves_both_sides_in_successor() {
             },
         )
         .unwrap();
+    (f, checkout)
+}
+
+/// A binary retained edit conflicting with a newer integration version leaves
+/// both versions recoverable in the same-PR successor (without leaving
+/// unmerged index entries that would block `git_commit`), while the original
+/// retained checkout stays intact.
+fn retained_binary_conflict_preserves_both_sides_in_successor() {
+    let (f, checkout) = before_landing_retained_fixture();
 
     // Advance the integration branch with a binary file while the retained
     // checkout independently adds conflicting binary bytes for the same path.
@@ -583,10 +588,172 @@ fn retained_binary_conflict_preserves_both_sides_in_successor() {
     );
 }
 
+/// A retained `-merge` symlink conflict whose integration link targets a
+/// directory preserves both exact symlink target blobs in the same-PR
+/// successor without following the symlink (`EISDIR`), clears unmerged index
+/// entries, and keeps the original retained checkout intact.
+fn retained_symlink_conflict_to_directory_preserves_both_sides_in_successor() {
+    let (f, checkout) = before_landing_retained_fixture();
+
+    let integration_target = "target-integration";
+    let retained_target = "target-retained";
+    git(&f.repo, &["checkout", "-q", "main"]);
+    std::fs::create_dir_all(f.repo.join(integration_target)).unwrap();
+    std::fs::write(f.repo.join(integration_target).join("keep.txt"), "dir\n").unwrap();
+    std::fs::write(f.repo.join(".gitattributes"), "fixture-link -merge\n").unwrap();
+    std::os::unix::fs::symlink(integration_target, f.repo.join("fixture-link")).unwrap();
+    git(
+        &f.repo,
+        &["add", integration_target, ".gitattributes", "fixture-link"],
+    );
+    git(&f.repo, &["commit", "-qm", "advance integration symlink"]);
+    git(&f.repo, &["push", "-q", "origin", "HEAD:main"]);
+
+    std::os::unix::fs::symlink(retained_target, checkout.join("fixture-link")).unwrap();
+    git(&checkout, &["add", "fixture-link"]);
+    let dirty = git(&checkout, &["status", "--porcelain"]);
+
+    let inspection = adopting_inspection(&f).unwrap();
+    assert_eq!(
+        inspection["binding"]["retained_patch"]["paths"],
+        json!(["fixture-link"])
+    );
+
+    let mut input = f.submit(inspection["binding"].clone());
+    input["source_repair"]["policy_digest"] = inspection["policy_digest"].clone();
+    input["source_repair"]["unmet_acceptance"] =
+        json!("Required help-entrypoint check failed; retained symlink edit must be carried.");
+    let result = f
+        .runtime
+        .run_tool_as_human("orbit.workflow.run.resume", input)
+        .unwrap();
+    let id = result["run_id"].as_str().unwrap().to_string();
+    f.wait(&id);
+    f.start_actions(&id);
+
+    let setup = f.action(
+        "worktree_setup",
+        json!({"run_id":id,"job_run_id":id,"task_ids":[f.task],"base":"main","base_sync":"remote"}),
+    );
+    let successor = PathBuf::from(setup["workspace_path"].as_str().unwrap());
+    let resumed = f.action(
+        "candidate_resume",
+        json!({
+            "job_run_id": id,
+            "task_ids": [f.task],
+            "workspace_path": successor,
+            "base_sha": setup["base_sha"]
+        }),
+    );
+    assert_eq!(resumed["outcome"], "resumed_repaired", "{resumed}");
+    assert_eq!(resumed["repair"]["trigger"], "conflict", "{resumed}");
+    assert_eq!(
+        resumed["repair"]["conflicting_paths"],
+        json!(["fixture-link"]),
+        "{resumed}"
+    );
+    let sides = resumed["repair"]["retained_conflict_sides"]
+        .as_array()
+        .unwrap();
+    assert_eq!(sides.len(), 1, "{resumed}");
+    assert_eq!(sides[0]["path"], "fixture-link");
+    let retained_side = sides[0]["retained_path"].as_str().unwrap();
+    let current_side = sides[0]["current_path"].as_str().unwrap();
+    assert!(
+        resumed["repair"]["output"]
+            .as_str()
+            .unwrap()
+            .contains(retained_side),
+        "{resumed}"
+    );
+    assert!(
+        git(&successor, &["diff", "--name-only", "--diff-filter=U"]).is_empty(),
+        "unmerged index entries must be cleared after saving conflict sides"
+    );
+    assert!(
+        std::fs::symlink_metadata(successor.join("fixture-link"))
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert_eq!(
+        std::fs::read_link(successor.join("fixture-link")).unwrap(),
+        PathBuf::from(integration_target)
+    );
+    assert_eq!(
+        std::fs::read(successor.join(current_side)).unwrap(),
+        integration_target.as_bytes()
+    );
+    assert_eq!(
+        std::fs::read(successor.join(retained_side)).unwrap(),
+        retained_target.as_bytes()
+    );
+
+    // Confirm same-PR handoff succeeds when the conflict is resolved.
+    let resolved_note = format!(
+        "resolved from {}",
+        std::fs::read_to_string(successor.join(retained_side)).unwrap()
+    );
+    let mut source_body = std::fs::read_to_string(successor.join("source.txt")).unwrap();
+    source_body.push_str(&resolved_note);
+    source_body.push('\n');
+    std::fs::write(successor.join("source.txt"), source_body).unwrap();
+
+    f.action(
+        "git_commit",
+        json!({
+            "job_run_id": id,
+            "scope": "all",
+            "workspace_path": successor,
+            "base_sha": setup["base_sha"],
+            "base_ref": setup["base_ref"]
+        }),
+    );
+    let pr_input = json!({
+        "job_run_id": id,
+        "completed_task_ids": [f.task],
+        "workspace_path": successor,
+        "head": f.branch,
+        "branch": f.branch,
+        "base": "main",
+        "base_ref": setup["base_ref"],
+        "base_sha": setup["base_sha"]
+    });
+    let prepared = f.action("pr_prepare", pr_input.clone());
+    let mut rebase_input = pr_input.clone();
+    for (key, value) in prepared.as_object().unwrap() {
+        rebase_input[key] = value.clone();
+    }
+    f.action("git_rebase", rebase_input);
+    let validated = f.action("candidate_validate", pr_input.clone());
+    assert_eq!(validated["decision"], "passed");
+    f.action("git_push", pr_input.clone());
+    let head = git(&successor, &["rev-parse", "HEAD"]);
+    let mut answer: Value = serde_json::from_slice(&std::fs::read(&f.answer).unwrap()).unwrap();
+    answer["headRefOid"] = json!(head);
+    std::fs::write(&f.answer, answer.to_string()).unwrap();
+    let opened = f.action("pr_open", pr_input);
+    assert_eq!(opened["pr_number"], "17");
+    assert_eq!(opened["pr_reused"], true);
+    assert_eq!(
+        git(&f.repo, &["show", &format!("{head}:fixture-link")]),
+        integration_target
+    );
+
+    // The original retained checkout stays intact.
+    assert_eq!(git(&checkout, &["status", "--porcelain"]), dirty);
+    assert_eq!(git(&checkout, &["rev-parse", "HEAD"]), f.head);
+    assert_eq!(
+        std::fs::read_link(checkout.join("fixture-link")).unwrap(),
+        PathBuf::from(retained_target)
+    );
+}
+
 crate::scenario_table!(
     retained_edit_scenarios,
     retained_final_recovery_edits_reach_a_fresh_same_pr_repair,
     retained_binary_conflict_preserves_both_sides_in_successor,
+    retained_symlink_conflict_to_directory_preserves_both_sides_in_successor,
     non_utf8_patch_is_reconstructable_from_the_inspection,
     adoption_refuses_a_clean_checkout,
     adoption_refuses_a_staged_git_link,
