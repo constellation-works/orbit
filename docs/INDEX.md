@@ -36,6 +36,7 @@ Stances Orbit holds across features, with the reason and the cost, one page each
 | [Optimistic Merging](./principles/optimistic-merging.md) | Optimistic Merging: Orbit's preferred delivery mode. Merge fast, review after landing, keep the queue draining |
 | [Pilot Before Promote](./principles/pilot-before-promote.md) | Pilot before promote: a task is checked against the current code before it enters the backlog, and the pilot holds it when the brief contradicts the tree |
 | [Orbit Positioning](./principles/positioning.md) | Orbit Positioning |
+| [Refuse, Not Degrade](./principles/refuse-not-degrade.md) | Refuse, not degrade: when Orbit cannot verify a fact a step depends on, it refuses with a remediation hint and does not substitute a weaker path |
 
 ### Lessons
 

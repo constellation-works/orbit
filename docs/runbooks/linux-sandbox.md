@@ -266,7 +266,7 @@ privileges, an incompatible `--bind-fd` feature, a custom-profile conflict,
 and kernel/container denial have different remedies. Correct the reported
 cause, then run `orbit init --host-prerequisites-only` and recheck doctor. Do not disable
 `kernel.apparmor_restrict_unprivileged_userns` globally or enable
-`allow_fallback`; both weaken or bypass the fail-closed boundary.
+`allow_fallback`; both weaken or bypass the boundary that [refuse, not degrade](../principles/refuse-not-degrade.md) keeps.
 
 Other distributions need the same two conditions: a Bubblewrap with both `--bind-fd` and
 `--ro-bind-fd` (the host's `/usr/bin/bwrap` or the bundled one) and permission for an
