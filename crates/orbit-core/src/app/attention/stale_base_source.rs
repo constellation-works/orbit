@@ -7,13 +7,14 @@ use chrono::{DateTime, Duration, Utc};
 use orbit_common::OrbitError;
 use orbit_common::governance::attention::cursor;
 use orbit_engine::BaseSyncMode;
-use orbit_store::contract::{JobRunInputTextFilter, JobRunStepTargetQuery};
+use orbit_store::contract::{JobRunInputTextFilter, JobRunStepTargetCursor, JobRunStepTargetQuery};
 use orbit_types::tool::{AttentionItem, AttentionKind, AttentionNext, AttentionSeverity};
 use orbit_types::workflow::{
     DELIVERY_LEAF_JOBS, JobRun, JobRunState, JobRunStep, JobTargetType,
     TASK_CLAIMED_LOCAL_PIPELINE_JOB, Trailer, TrailerKey, WORKTREE_SETUP_STEP_ID,
 };
 use serde_json::json;
+use std::collections::BTreeSet;
 use std::time::Instant;
 
 const KIND: AttentionKind = AttentionKind::DeliveryStaleBase;
@@ -21,6 +22,8 @@ const KIND: AttentionKind = AttentionKind::DeliveryStaleBase;
 const OWNER_ONLY_COMMIT_LIMIT: usize = 20;
 
 const STALE_BASE_HOLD_QUERY_LIMIT: usize = 128;
+
+const STALE_BASE_HOLD_SCAN_BUDGET: usize = 1024;
 
 const STALE_BASE_CLEAR_QUERY_LIMIT: usize = 64;
 
@@ -38,6 +41,12 @@ struct ObservationFailure {
     branch: String,
     checkout: Option<String>,
     message: String,
+}
+
+struct ScanOutcome {
+    item: Option<AttentionItem>,
+    observation_failures: Vec<ObservationFailure>,
+    incomplete_coverage: bool,
 }
 
 // The setup error is the durable evidence of the precise branch and checkout.
@@ -426,60 +435,99 @@ pub(super) fn read(
         return;
     }
     let start = Instant::now();
-    let result: Result<(Option<AttentionItem>, Vec<ObservationFailure>), OrbitError> = (|| {
-        let mut held_runs = context
-            .runtime
-            .stores()
-            .jobs()
-            .list_job_runs_with_step_target(&JobRunStepTargetQuery {
-                job_ids: DELIVERY_LEAF_JOBS
-                    .iter()
-                    .map(|job| (*job).to_owned())
-                    .collect(),
+    let result: Result<ScanOutcome, OrbitError> = (|| {
+        let jobs = context.runtime.stores().jobs();
+        let delivery_jobs: Vec<String> = DELIVERY_LEAF_JOBS
+            .iter()
+            .map(|job| (*job).to_owned())
+            .collect();
+        let mut cursor: Option<JobRunStepTargetCursor> = None;
+        let mut scanned = 0usize;
+        let mut seen = BTreeSet::new();
+        let mut observation_failures = Vec::new();
+        loop {
+            if start.elapsed().as_secs() >= super::ATTENTION_SOURCE_TIMEOUT_SECONDS {
+                return Ok(ScanOutcome {
+                    item: None,
+                    observation_failures,
+                    incomplete_coverage: false,
+                });
+            }
+            let remaining = STALE_BASE_HOLD_SCAN_BUDGET.saturating_sub(scanned);
+            if remaining == 0 {
+                return Ok(ScanOutcome {
+                    item: None,
+                    observation_failures,
+                    incomplete_coverage: true,
+                });
+            }
+            let page = jobs.list_job_runs_with_step_target_page(&JobRunStepTargetQuery {
+                job_ids: delivery_jobs.clone(),
                 state: Some(JobRunState::Held),
                 step_target_id: WORKTREE_SETUP_STEP_ID.into(),
                 step_target_type: Some(JobTargetType::Activity),
                 step_exclude_state: Some(JobRunState::Success),
                 step_require_error_message: true,
                 input_keys: Some(&[]),
-                limit: Some(STALE_BASE_HOLD_QUERY_LIMIT),
+                cursor: cursor.take(),
+                limit: Some(STALE_BASE_HOLD_QUERY_LIMIT.min(remaining)),
                 ..Default::default()
             })?;
-        retain_local_host_runs(&mut held_runs, &context.host.machine_id);
-        // Inspect the newest hold per base. A resolved newer base must not
-        // hide an older, still-held base in the same workspace.
-        held_runs.sort_by_key(|run| std::cmp::Reverse(run.recency_at()));
-        let mut seen = std::collections::BTreeSet::new();
-        let mut observation_failures = Vec::new();
-        for run in &held_runs {
-            let Some(hold) = hold(run) else {
-                continue;
-            };
-            if !seen.insert(hold.branch) {
-                continue;
-            }
-            if !has_admitted_local_setup_after_hold(context, &hold)? {
-                match observe(context, run, hold.branch, hold.checkout) {
-                    Ok(Some((item, tracked_error))) => {
-                        if let Some(message) = tracked_error {
-                            observation_failures.push(ObservationFailure {
-                                branch: hold.branch.to_owned(),
-                                checkout: hold.checkout.map(str::to_owned),
-                                message,
+            scanned += page.scanned_rows;
+            let mut held_runs = page.runs;
+            retain_local_host_runs(&mut held_runs, &context.host.machine_id);
+            // Inspect the newest hold per base. A resolved newer base must not
+            // hide an older, still-held base in the same workspace.
+            held_runs.sort_by_key(|run| std::cmp::Reverse(run.recency_at()));
+            for run in &held_runs {
+                if start.elapsed().as_secs() >= super::ATTENTION_SOURCE_TIMEOUT_SECONDS {
+                    return Ok(ScanOutcome {
+                        item: None,
+                        observation_failures,
+                        incomplete_coverage: false,
+                    });
+                }
+                let Some(hold) = hold(run) else {
+                    continue;
+                };
+                if !seen.insert(hold.branch.to_owned()) {
+                    continue;
+                }
+                if !has_admitted_local_setup_after_hold(context, &hold)? {
+                    match observe(context, run, hold.branch, hold.checkout) {
+                        Ok(Some((item, tracked_error))) => {
+                            if let Some(message) = tracked_error {
+                                observation_failures.push(ObservationFailure {
+                                    branch: hold.branch.to_owned(),
+                                    checkout: hold.checkout.map(str::to_owned),
+                                    message,
+                                });
+                            }
+                            return Ok(ScanOutcome {
+                                item: Some(item),
+                                observation_failures,
+                                incomplete_coverage: false,
                             });
                         }
-                        return Ok((Some(item), observation_failures));
+                        Ok(None) => {}
+                        Err(error) => observation_failures.push(ObservationFailure {
+                            branch: hold.branch.to_owned(),
+                            checkout: hold.checkout.map(str::to_owned),
+                            message: error.to_string(),
+                        }),
                     }
-                    Ok(None) => {}
-                    Err(error) => observation_failures.push(ObservationFailure {
-                        branch: hold.branch.to_owned(),
-                        checkout: hold.checkout.map(str::to_owned),
-                        message: error.to_string(),
-                    }),
                 }
             }
+            let Some(next_cursor) = page.next_cursor else {
+                break;
+            };
+            cursor = Some(next_cursor);
         }
-        Ok((None, observation_failures))
+        Ok(ScanOutcome {
+            item: None,
+            observation_failures,
+            incomplete_coverage: false,
+        })
     })();
     candidates
         .timings
@@ -494,8 +542,8 @@ pub(super) fn read(
         return;
     }
     match result {
-        Ok((item, observation_failures)) => {
-            for failure in observation_failures {
+        Ok(outcome) => {
+            for failure in outcome.observation_failures {
                 let checkout = failure
                     .checkout
                     .map(|path| format!(" at recorded checkout '{path}'"))
@@ -512,7 +560,17 @@ pub(super) fn read(
                 degraded.subject = Some(failure.branch);
                 candidates.degraded.push(degraded);
             }
-            if let Some(item) = item {
+            if outcome.incomplete_coverage {
+                candidates.degraded.push(workspace_degraded(
+                    context.workspace,
+                    KIND.as_str(),
+                    "source_unavailable",
+                    format!(
+                        "Stale-base hold scan budget ({STALE_BASE_HOLD_SCAN_BUDGET} runs) exhausted; older held bases may be unobserved"
+                    ),
+                ));
+            }
+            if let Some(item) = outcome.item {
                 candidates.items.push(item);
             }
         }

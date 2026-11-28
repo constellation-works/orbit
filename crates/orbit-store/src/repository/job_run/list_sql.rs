@@ -393,9 +393,19 @@ pub(super) fn job_run_step_target_sql(
         };
         conditions.push(predicate);
     }
+    if let Some(cursor) = &query.cursor {
+        let recency_expr = "COALESCE(r.finished_at, r.started_at, r.created_at)";
+        let recency_param = params.len() + 1;
+        params.push(Box::new(cursor.recency_raw.clone()));
+        let run_id_param = params.len() + 1;
+        params.push(Box::new(cursor.run_id.clone()));
+        conditions.push(format!(
+            "{recency_expr} <= ?{recency_param} AND ({recency_expr} < ?{recency_param} OR r.run_id > ?{run_id_param})"
+        ));
+    }
     let indexed_by = if query.state.is_some() {
         " INDEXED BY idx_job_runs_ws_state_recency"
-    } else if query.recency_since.is_some() {
+    } else if query.recency_since.is_some() || query.cursor.is_some() {
         " INDEXED BY idx_job_runs_ws_recency"
     } else {
         ""
