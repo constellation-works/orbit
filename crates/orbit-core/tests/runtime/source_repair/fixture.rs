@@ -179,6 +179,17 @@ impl Fixture {
     pub(super) fn new() -> Self {
         Self::with_policy("none")
     }
+
+    pub(super) fn build_with_command(
+        timing: &str,
+        agent: bool,
+        number: &str,
+        refs: Vec<ExternalRef>,
+        command: &str,
+    ) -> Self {
+        Self::build_shaped(timing, agent, number, refs, command, false)
+    }
+
     pub(super) fn with_policy(timing: &str) -> Self {
         Self::build(timing, false, "17", Vec::new())
     }
@@ -223,15 +234,6 @@ impl Fixture {
             Vec::new(),
             "test ! -f qa-inventory.txt || test -f qa-fixed.txt",
         )
-    }
-    fn build_with_command(
-        timing: &str,
-        agent: bool,
-        number: &str,
-        refs: Vec<ExternalRef>,
-        command: &str,
-    ) -> Self {
-        Self::build_shaped(timing, agent, number, refs, command, false)
     }
     fn build_shaped(
         timing: &str,
@@ -585,7 +587,15 @@ impl Fixture {
         let mut job: Value =
             serde_yaml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         let steps = job["spec"]["steps"].as_array_mut().unwrap();
-        let offset = if landing { 6 } else { 4 };
+        let offset = if landing {
+            steps
+                .iter()
+                .position(|step| step["id"] == "pr_open")
+                .unwrap()
+                + 1
+        } else {
+            steps.iter().position(|step| step["id"] == "push").unwrap()
+        };
         steps.insert(
             offset,
             json!({"id":settle,"target":"activity:review_gate_settle"}),

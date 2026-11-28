@@ -2159,7 +2159,13 @@ be the task's latest owner-local single-task execution. Orbit requires
 successful host publication checkpoints and verifies the existing open,
 unmerged PR against the published branch head. A missing publication
 checkpoint, a discarded candidate or an unexplained head change refuses
-repair. The new attempt adopts the PR branch and reapplies the authenticated
+repair. If a validation retry advanced the synchronized head, Orbit verifies
+the repair commit's parent, task and run trailers, the host's failed
+validation at the parent, and successful validation receipts for the exact
+repair commit. Any later reviewer correction still needs its own settlement
+and validation. Inspection leaves open decisions in place.
+
+The new attempt adopts the PR branch and reapplies the authenticated
 candidate to the current base for fresh implementation, validation and
 configured review. It uses the PR's shared repair budget and stops for review.
 

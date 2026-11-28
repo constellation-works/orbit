@@ -300,16 +300,24 @@ impl OrbitRuntime {
         };
         let pushed = field(push, "local_sha")?;
         let synced = field(sync, "head_sha")?;
+        let base_sha = field(sync, "base_sha")?;
+        let implementation = publication::ValidationEvidence {
+            runtime: self,
+            run_id: owner_id,
+            task_id,
+            base: base_sha,
+            branch,
+        }
+        .implementation_head(job, state, &checkpoint, (synced, pushed))?;
         let head = publication::published_head(
             job,
             state,
             &checkpoint,
             source.state,
-            (sync, push),
+            (implementation, base_sha, push),
             branch,
             &self.paths().repo_root,
         )?;
-        let base_sha = field(sync, "base_sha")?;
         let base_branch = field(sync, "base")?;
         let number = match pr {
             Some(pr) => field(pr, "pr_number")?,
