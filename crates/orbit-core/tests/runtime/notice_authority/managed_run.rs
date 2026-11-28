@@ -729,6 +729,9 @@ pub(super) fn bundled_activity_notice_uses_selected_task_and_refuses_ambiguity()
 
 #[cfg(unix)]
 pub(super) fn ambiguous_bundle_dispatch_drops_inherited_task_identity() {
+    crate::scenarios::require_isolated_mutable_fixture(
+        "ambiguous_bundle_dispatch_drops_inherited_task_identity",
+    );
     let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let runtime = runtime_at(root.path());
     let first = add_task(&runtime, "First inherited bundled task");

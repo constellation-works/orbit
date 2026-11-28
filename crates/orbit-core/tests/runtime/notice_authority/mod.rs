@@ -8,6 +8,8 @@ mod posting;
 
 use std::path::Path;
 
+#[cfg(unix)]
+use managed_run::ambiguous_bundle_dispatch_drops_inherited_task_identity;
 use managed_run::{
     managed_pipeline_run_posts_and_closes_notices_as_agent,
     managed_run_notice_authority_preserves_fail_closed_rejections,
@@ -1396,8 +1398,10 @@ fn bundled_activity_notice_uses_selected_task_and_refuses_ambiguity() {
     managed_run::bundled_activity_notice_uses_selected_task_and_refuses_ambiguity();
 }
 
+// Mutates the process environment for the provider dispatch, so it runs only in
+// this table's re-executed child, never in the parallel libtest parent.
 #[cfg(unix)]
-#[test]
-fn ambiguous_bundle_dispatch_drops_inherited_task_identity() {
-    managed_run::ambiguous_bundle_dispatch_drops_inherited_task_identity();
-}
+crate::scenario_table!(
+    ambiguous_bundle_dispatch,
+    ambiguous_bundle_dispatch_drops_inherited_task_identity,
+);
